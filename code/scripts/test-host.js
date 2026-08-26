@@ -7,6 +7,7 @@
 const { parseWorkflow } = require('../shared/workflow-parser')
 const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
+const { expandLoopTasks } = require('../plugins/workflow-host/tools.js')
 
 let pass = 0
 let fail = 0
@@ -149,6 +150,52 @@ check('hydrate 恢复 workflow', snap2.workflow === 'wf-x')
 check('hydrate 恢复 task 状态', snap2.tasks[0].status === 'DONE')
 check('hydrate 恢复阶段', snap2.stage === 'COMPLETED')
 
-console.log('')
-console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
-process.exit(fail > 0 ? 1 : 0)
+// ── 用例 4：循环展开（expandLoopTasks 纯逻辑） ─────────────────────────────
+console.log('［用例 4］loop 循环展开 — 依赖链 + ${} 注入 + engine 处理')
+const loopTask = {
+  id: 'module-review',
+  name: '逐模块评审',
+  type: 'loop',
+  dependsOn: ['req-analysis'],
+  timeout: 600,
+  processor: '/x/skills/module-review/SKILL.md',
+  inputsRaw: { analysis: 'output/${project}/analysis.md' },
+  outputsRaw: ['output/${project}/review-${module}.md'],
+  gate: { checker: '/x/skills/review-check/SKILL.md', onFailure: 'block', maxRetries: 0 },
+  itemVar: 'module',
+}
+const items = ['login', 'order', 'payment']
+const params = { project: 'my-proj' }
+
+Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((expanded) => {
+  check('展开 3 个任务', expanded.length === 3, expanded.length)
+  check('ID 格式 module-review/{item}', expanded[0].id === 'module-review/login')
+  check('类型转为 llm-task', expanded.every(t => t.type === 'llm-task'))
+  check('依赖链串行', expanded[0].dependsOn[0] === 'req-analysis' &&
+    expanded[1].dependsOn[0] === 'module-review/login' &&
+    expanded[2].dependsOn[0] === 'module-review/order')
+  check('${module} 注入 outputs', expanded[0].outputs[0] === 'output/my-proj/review-login.md')
+  check('_loopGroup 元数据', expanded[0]._loopGroup === 'module-review')
+
+  // engine 接收展开后任务
+  const engine3 = createWorkflowEngine()
+  engine3.begin({ name: 'loop-wf', version: '1', description: null, params: {}, tasks: expanded })
+  const snap3 = engine3.snapshot()
+  check('engine 有 3 个 task', snap3.tasks.length === 3)
+  check('fingerprint 含 login/order/payment', snap3.fingerprint.indexOf('module-review/login:PENDING') !== -1 &&
+    snap3.fingerprint.indexOf('module-review/order:PENDING') !== -1)
+
+  engine3.updateTask('module-review/login', { status: 'DONE' })
+  const snap4 = engine3.snapshot()
+  check('updateTask 用展开 ID', snap4.tasks[0].status === 'DONE')
+
+  console.log('')
+  console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
+  process.exit(fail > 0 ? 1 : 0)
+}).catch((e) => {
+  console.log('  ✘ expandLoopTasks 异常: ' + e.message)
+  fail++
+  console.log('')
+  console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
+  process.exit(1)
+})

@@ -72,6 +72,7 @@
 - Task 超时（timeout 秒）后仍未完成：标记 FAILED 并报告，按 on-failure 策略处理。
 - 用户可随时介入：要求暂停、修改定义、手动裁决 gate（"这个 PASS"）、
   跳过某个 Task；介入后以用户为准继续。
-- Loop Task（type: loop）当前按 items-from 顺序展开：每个 item 执行一次
-  processor（${item} 已在 inputs/outputs 中替换为当前迭代值），每个迭代独立
-  跑 quality-gate；具体展开细节由编排 prompt 的 loop 段描述（Iter-4 深化）。
+- **Loop Task（type: loop）**：已在 `workflow_begin` 时自动展开为 N 个独立
+  llm-task 串行迭代。每个迭代有独立 ID（如 `module-review/login`）、独立的
+  depends-on 链（iter-1 → iter-2 → iter-3），独立跑 quality-gate。编排 Agent
+  无需特殊处理，按普通 Task 的规则依次执行即可。

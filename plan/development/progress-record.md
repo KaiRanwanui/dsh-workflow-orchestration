@@ -11,7 +11,47 @@
 
 ---
 
+| 今日 | **Iter-4 循环 + 循环展开** | ✅ 完成 |
+
+---
+
 ## 已完成工作
+
+### 4. Iter-4 — 循环 + 循环展开（✅ 完成）
+
+**设计决策**：循环展开在 `workflow_begin` 时由 tools 层完成，engine 收到的是展开后的平面任务列表。每个迭代有唯一 ID（`{loopId}/{item}`）、串行依赖链（iter-N 依赖 iter-N-1）、独立 quality-gate。
+
+| 组件 | 改动 |
+|------|------|
+| `tools-preset.js` | 新增 `expandLoopTasks` 函数，读取 items-from 文件 → 展开 N 个迭代任务 |
+| `tools.js` | 同步增加同逻辑 + 修复 `PARAM_PATTERN` Node 独立加载兜底 |
+| `test-host.js` | 新增用例 4（9 断言：依赖链/ID/注入/engine 集成）|
+| `engine.js` | 无改动（engine 接收展开后任务，已天然支持）|
+| `workflow-host.mjs` | 重建（988 行），ESM 加载验证通过 |
+| `host-body/bundle/verify` | 全部重建 |
+| `system-prompt.md` | 更新：自动展开，"编排 Agent 无需特殊处理" |
+| `agent.cordis.yml` | 同步更新 persona 文本 |
+| `client-body.txt` | 新增循环组可视化：连续迭代显示背景框 + "↻" 标签 |
+
+**Client 动态插件部署**：
+
+| 版本 | 插件 | 状态 |
+|------|------|------|
+| v3 | `wfd-10/pkg-15` | ❌ 颜色不刷新 + 闪烁复发 |
+| v4 | `wfd-11/pkg-16` | ❌ 文字刷新正常，图形全灰 |
+| v5 | **`wfd-12/pkg-17`** | ✅ 颜色/文字均正常刷新，无闪烁 |
+
+**v5 修复要点**：
+- 指纹函数 `fp(st)` 检查 `st.state.tasks` 而非 `st.tasks`（Host 返回 `{ state: {...} }`）
+- `mRoot`/`mLoaded` 提升到 `apply()` 级模块变量，根治 remount 闪烁
+- 颜色 key 使用全名 `PENDING`/`RUNNING`/`DONE`，匹配 `t.status`
+
+**验证结果**：
+- Node 单元测试 41/41 通过（原 32 + 新增 9）
+- expandLoopTasks 探针 18/18 通过
+- ESM 插件加载验证通过
+- 4-task 模拟执行：PENDING（灰）→ RUNNING（蓝）→ DONE（绿）✅
+- 循环组背景框 "↻ 逐模块评审" 显示正确 ✅
 
 ### 1. Iter-3 — Client 监控面板（✅ 完成）
 
@@ -61,15 +101,7 @@
 
 ## 下次启动时的工作
 
-### 下一优先：Iter-4 — 循环 + 循环展开
-
-| 步骤 | 任务 |
-|------|------|
-| 1 | parser 支持 `type: loop`、`items-from`、`item-var` 字段解析 |
-| 2 | engine 循环模板存储 + 展开为 N 个迭代实例 |
-| 3 | system-prompt 循环处理逻辑提示增强 |
-| 4 | Client DAG 循环展开后的多实例显示（折叠/展开）|
-| 5 | `workflow_status` 支持迭代状态更新 |
+### 下一优先：Iter-5 — 并发执行引擎
 
 ### 迭代报告
 

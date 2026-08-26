@@ -1,4 +1,4 @@
-return {
+﻿return {
   inject: ['timer'],
   apply(ctx) {
     const slots = ctx.get('slots')
@@ -72,48 +72,87 @@ return {
         return NODE_COLORS.PENDING
       })()
 
-      const gw = 132, gh = 46, gap = 44
-      const leftPad = 24, cy = 28
+const gw = 132, gh = 46, gap = 44
+      const leftPad = 24, cy = 28, groupLabelH = 20
       const items = Array.isArray(tasks) ? tasks : []
       const svgChildren = []
       let x = leftPad
       const arrowId = 'wf-dash-arrow'
 
-      items.forEach((t, i) => {
-        const isSel = selectedId === t.id
-        const fill = NODE_COLORS[t.status] || NODE_COLORS.PENDING
+      // Group consecutive loop iterations
+      const groups = []
+      for (let gi = 0; gi < items.length;) {
+        const t = items[gi]
+        if (t._loopGroup) {
+          const g = { key: t._loopGroup, name: t._loopGroupName || t._loopGroup, items: [] }
+          while (gi < items.length && items[gi]._loopGroup === g.key) { g.items.push(items[gi]); gi++ }
+          groups.push(g)
+        } else {
+          groups.push({ key: null, name: null, items: [items[gi]] })
+          gi++
+        }
+      }
 
-        svgChildren.push(
-          React.createElement('rect', {
-            key: 'r' + t.id, x, y: cy, width: gw, height: gh, rx: 8,
-            fill, opacity: 0.92,
-            stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
-            cursor: 'pointer',
-            onClick: () => onSelect(t.id),
-          }),
-          React.createElement('text', {
-            key: 't' + t.id, x: x + gw / 2, y: cy + gh / 2 - 2,
-            textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600,
-          }, t.name || t.id),
-          React.createElement('text', {
-            key: 'u' + t.id, x: x + gw / 2, y: cy + gh / 2 + 14,
-            textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10,
-          }, t.id),
-        )
-
-        if (i < items.length - 1) {
+      // Background layer: group rects
+      x = leftPad
+      for (const g of groups) {
+        const groupW = g.items.length * (gw + gap) - gap
+        if (g.key) {
+          const bgPadding = 8
           svgChildren.push(
-            React.createElement('line', {
-              key: 'l' + i,
-              x1: x + gw, y1: cy + gh / 2,
-              x2: x + gw + gap, y2: cy + gh / 2,
-              stroke: '#94a3b8', strokeWidth: 2,
-              markerEnd: 'url(#' + arrowId + ')',
+            React.createElement('rect', {
+              key: 'bg' + g.key, x: x - bgPadding / 2, y: cy - 6 - groupLabelH,
+              width: groupW + bgPadding, height: gh + bgPadding + groupLabelH,
+              rx: 10, fill: 'rgba(148,163,184,0.07)',
             }),
+            React.createElement('text', {
+              key: 'gl' + g.key, x: x + groupW / 2, y: cy - 6 - groupLabelH + 14,
+              textAnchor: 'middle', fill: '#94a3b8', fontSize: 11, fontWeight: 600,
+            }, '\u21BB ' + g.name),
           )
         }
-        x += gw + gap
-      })
+        x += g.items.length * (gw + gap)
+      }
+
+      // Node layer: iterate groups
+      x = leftPad
+      for (const g of groups) {
+        g.items.forEach((t, j) => {
+          const isSel = selectedId === t.id
+          const fill = NODE_COLORS[t.status] || NODE_COLORS.PENDING
+
+          svgChildren.push(
+            React.createElement('rect', {
+              key: 'r' + t.id, x, y: cy, width: gw, height: gh, rx: 8,
+              fill, opacity: 0.92,
+              stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
+              cursor: 'pointer',
+              onClick: () => onSelect(t.id),
+            }),
+            React.createElement('text', {
+              key: 't' + t.id, x: x + gw / 2, y: cy + gh / 2 - 2,
+              textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600,
+            }, t.name || t.id),
+            React.createElement('text', {
+              key: 'u' + t.id, x: x + gw / 2, y: cy + gh / 2 + 14,
+              textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10,
+            }, g.key ? ('#' + t._loopItem) : t.id),
+          )
+
+          if (j < g.items.length - 1) {
+            svgChildren.push(
+              React.createElement('line', {
+                key: 'l' + t.id,
+                x1: x + gw, y1: cy + gh / 2,
+                x2: x + gw + gap, y2: cy + gh / 2,
+                stroke: '#94a3b8', strokeWidth: 2,
+                markerEnd: 'url(#' + arrowId + ')',
+              }),
+            )
+          }
+          x += gw + gap
+        })
+      }
 
       svgChildren.push(
         React.createElement('defs', { key: 'defs' },
@@ -126,8 +165,8 @@ return {
         ),
       )
 
-      const svgWidth = leftPad * 2 + Math.max(items.length, 1) * (gw + gap)
-      const svgHeight = cy * 2 + gh
+      const svgWidth = leftPad * 2 + Math.max(groups.reduce((s, g) => s + g.items.length, 0), 1) * (gw + gap)
+      const svgHeight = cy * 2 + gh + groupLabelH
 
       return React.createElement('div', {
         style: {

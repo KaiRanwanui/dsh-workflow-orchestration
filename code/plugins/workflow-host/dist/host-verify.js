@@ -281,6 +281,8 @@ id: t.id,
 name: t.name,
 type: t.type,
 status: t.status,
+processor: t.processor || null,       // 处理器技能绝对路径（Client 读取 skill 文本用）
+gateChecker: (t.gate && t.gate.checker) || null, // 门禁技能绝对路径
 gateResult: t.gateResult || null,
 gateOnFailure: t.gateOnFailure || null,
 retries: t.retries || 0,
@@ -540,9 +542,10 @@ d = parentDir(d)
 }
 return base + '/' + rel.replace(/\\/g, '/')
 }
+let E_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN : /\$\{(\w+)\}/g
 function injectParams(value, params) {
 if (typeof value !== 'string') return value
-return value.replace(PARAM_PATTERN, (whole, key) => {
+return value.replace(E_PARAM_PATTERN, (whole, key) => {
 if (params && params[key] !== undefined) return String(params[key])
 return whole // 未提供则保留原样，由调用方提示
 })
@@ -568,6 +571,40 @@ if (args.workflowText) {
 return { text: String(args.workflowText), base: undefined }
 }
 return null
+}
+async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
+const expanded = []
+const loopDeps = loopTask.dependsOn || []
+let prevId = null
+for (let i = 0; i < items.length; i++) {
+const item = String(items[i]).trim()
+if (!item) continue
+const iterParams = { ...params }
+iterParams[itemVar] = item
+const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+const iterId = loopTask.id + '/' + sanitized
+expanded.push({
+id: iterId,
+name: (loopTask.name || loopTask.id) + ' - ' + item,
+type: 'llm-task',
+dependsOn: prevId ? [prevId] : loopDeps,
+timeout: loopTask.timeout || 600,
+processor: injectParams(loopTask.processor || '', iterParams),
+inputs: injectInputsMap(loopTask.inputsRaw || {}, iterParams),
+outputs: injectArray(loopTask.outputsRaw || [], iterParams),
+gate: loopTask.gate ? {
+checker: loopTask.gate.checker,
+onFailure: loopTask.gate.onFailure,
+maxRetries: loopTask.gate.maxRetries,
+} : null,
+_loopGroup: loopTask.id,
+_loopGroupName: loopTask.name || loopTask.id,
+_loopItem: item,
+_loopIndex: i,
+})
+prevId = iterId
+}
+return expanded
 }
 function registerWorkflowTools(ctx, harness, engine, storage) {
 const fs = ctx.get('fs')
@@ -628,11 +665,31 @@ maxRetries: t.gateMaxRetries,
 }
 }
 if (t.itemsFromRaw) {
-out.itemsFrom = injectParams(t.itemsFromRaw, params)
+const itemsRel = injectParams(t.itemsFromRaw, params)
+out.itemsFrom = src.base ? await resolveRel(fs, src.base, itemsRel) : itemsRel
+out.itemsFromRaw = t.itemsFromRaw
+out.itemVar = t.itemVar
 }
 return out
 }))
 parsed.tasks = tasks
+const finalTasks = []
+for (const t of tasks) {
+if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
+const text = await fs.readText(await fs.resolve(t.itemsFrom))
+const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+if (items.length === 0) {
+engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+await storage.save()
+return engine.snapshot()
+}
+const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
+finalTasks.push(...iterations)
+} else {
+finalTasks.push(t)
+}
+}
+parsed.tasks = finalTasks
 engine.begin(parsed)
 engine.setError(null)
 const r = await storage.save()

@@ -70,6 +70,65 @@ async function loadWorkflowSource(fs, args) {
   return null
 }
 
+// ── 循环展开：将 loop Task 展开为 N 个串行迭代实例 ────────────────────────
+// items 参数：从 items-from 文件解析出的非空非注释行数组
+// itemVar：迭代变量名（如 "module"），在 inputs/outputs 中解决 ${itemVar}
+// params：已注入的工作流级参数
+// loopTask：原始 loop Task 对象（含 inputsRaw/outputsRaw/processor/gate/dependsOn）
+// prevDeps：【内部使用】前一个迭代的 id，用于构建串行依赖链
+async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
+  const expanded = []
+  const loopDeps = loopTask.dependsOn || []
+  let prevId = null
+
+  for (let i = 0; i < items.length; i++) {
+    const item = String(items[i]).trim()
+    if (!item) continue
+
+    // 构建迭代参数（工作流 params + 当前 item）
+    const iterParams = { ...params }
+    iterParams[itemVar] = item
+
+    // 安全 ID：loopTaskId/sanitized-item
+    const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+    const iterId = loopTask.id + '/' + sanitized
+
+    // inputs/outputs 重新注入（含 item 变量）
+    const iterInputs = injectInputsMap(loopTask.inputsRaw || {}, iterParams)
+    const iterOutputs = injectArray(loopTask.outputsRaw || [], iterParams)
+
+    // processor 路径重新注入（含 item 变量——虽然通常不变）
+    const iterProcessor = injectParams(loopTask.processor || '', iterParams)
+
+    // gate 复制（同一 checker，独立执行）
+    const iterGate = loopTask.gate ? {
+      checker: loopTask.gate.checker,
+      onFailure: loopTask.gate.onFailure,
+      maxRetries: loopTask.gate.maxRetries,
+    } : null
+
+    expanded.push({
+      id: iterId,
+      name: (loopTask.name || loopTask.id) + ' - ' + item,
+      type: 'llm-task',
+      dependsOn: prevId ? [prevId] : loopDeps,
+      timeout: loopTask.timeout || 600,
+      processor: iterProcessor,
+      inputs: iterInputs,
+      outputs: iterOutputs,
+      gate: iterGate,
+      // 循环组元数据（供 Client DAG 分组渲染）
+      _loopGroup: loopTask.id,
+      _loopGroupName: loopTask.name || loopTask.id,
+      _loopItem: item,
+      _loopIndex: i,
+    })
+    prevId = iterId
+  }
+
+  return expanded
+}
+
 // 从工具执行上下文取会话工作区（preset 挂载后 exec.agent 可用）
 function sessionCwd(exec) {
   try {
@@ -148,11 +207,34 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
             }
           }
           if (t.itemsFromRaw) {
-            out.itemsFrom = injectParams(t.itemsFromRaw, params)
+            const itemsRel = injectParams(t.itemsFromRaw, params)
+            out.itemsFrom = src.base ? await resolveRel(fs, src.base, itemsRel) : itemsRel
+            out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
+            out.itemVar = t.itemVar
           }
           return out
         }))
         parsed.tasks = tasks
+
+        // ── 循环展开：将 loop Task 替换为 N 个串行迭代实例 ──
+        const finalTasks = []
+        for (const t of tasks) {
+          if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
+            // 读取 items-from 文件
+            const text = await fs.readText(await fs.resolve(t.itemsFrom))
+            const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+            if (items.length === 0) {
+              engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await storage.save()
+              return engine.snapshot()
+            }
+            const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
+            finalTasks.push(...iterations)
+          } else {
+            finalTasks.push(t)
+          }
+        }
+        parsed.tasks = finalTasks
         engine.begin(parsed)
         engine.setError(null)
         const r = await storage.save()
@@ -213,5 +295,5 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
+  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks }
 }

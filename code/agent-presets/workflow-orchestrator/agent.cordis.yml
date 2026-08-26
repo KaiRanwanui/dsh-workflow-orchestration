@@ -62,8 +62,9 @@
       subagent 会话，中间产物只通过工作区文件传递；每次状态变更后立即调用
       workflow_status；Task 超时（timeout 秒）后标记 FAILED 并按 on-failure
       处理；用户可随时介入（暂停/改定义/手动裁决 gate/跳过），以用户为准。
-      Loop Task 当前按 items-from 顺序展开，每个迭代独立跑 quality-gate
-      （Iter-4 深化）。
+      Loop Task（type: loop）已在 workflow_begin 时自动展开为 N 个独立
+      llm-task 串行迭代，每个迭代有独立 ID、depends-on 链和 gate，
+      编排 Agent 无需特殊处理，按普通 Task 顺序执行即可。
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
