@@ -5,8 +5,8 @@
 | Field | Value |
 |-------|-------|
 | Project Name | workflow-agent |
-| Version | 0.2 |
-| Status | Draft |
+| Version | 0.3 |
+| Status | Active |
 | 基准 | 1 人天/迭代（人类开发者） |
 
 ---
@@ -25,11 +25,11 @@
 ## 2. 迭代全景
 
 ```
-Iter-1     Iter-2     Iter-3     Iter-4       Iter-5       Iter-6         Iter-7
-  │          │          │          │            │            │             │
-  Host      Agent     Client     Loop +       并发         多实例        编排编辑器
-  插件       Preset    监控面板    循环展开      执行          管理
-  (引擎)     (编排)    (UI)       ─── 串行+Gate 验证通过 ───
+Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6          Iter-7         Iter-8
+  │          │          │          │               │                   │               │              │
+  Host      Agent     Client     Loop +          循环错误处理 +      并发执行         多实例         编排编辑器
+  插件       Preset    监控面板    循环展开         DAG 布局优化        引擎            管理
+  (引擎)     (编排)    (UI)       ─── Iter-4 完成 ──
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -37,10 +37,11 @@ Iter-1     Iter-2     Iter-3     Iter-4       Iter-5       Iter-6         Iter-7
 | **1** | Host 插件 — 引擎基础 | 解析器 + 状态管理 + Tool/RPC | `workflow_begin` 返回正确结构 | PoC |
 | **2** | Agent Preset — 串行编排 | 编排 Agent：串行执行 + Gate + 重试 | 2-Task 串行工作流端到端 | Iter-1 |
 | **3** | Client 插件 — 监控面板 | conversation.view Tab + N 节点 DAG | 浏览器实时显示执行状态 | Iter-1,2 |
-| **4** | 循环 + 循环展开 | Loop Task 解析、展开、串行迭代 | 循环 3 次的工作流执行 | Iter-2,3 |
-| **5** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | Iter-4 |
-| **6** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-5 |
-| **7** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-6 |
+| **4** | 循环 + 循环展开 | Loop Task 解析、展开、串行迭代 | 循环 3 次的工作流执行 | ✅ **完成** |
+| **5** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-4** |
+| **6** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | Iter-5 |
+| **7** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-6 |
+| **8** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-7 |
 
 ---
 
@@ -139,35 +140,68 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-4: 循环 + 循环展开（1 人天）
+### Iter-4: 循环 + 循环展开（1 人天 — ✅ 完成）
 
-**输入**：Iter-3 的基础串行+Gate端到端通
+**输入**：Iter-3 的基础串行 + Gate 端到端通
+
+**实际修改范围**：
+
+| 组件 | 改动 |
+|------|------|
+| `workflow-parser.js` | 支持 `type: loop`、`items-from`、`item-var` 字段解析 |
+| `workflow-schema.js` | 新增 `TASK_TYPES.LOOP` 常量定义 |
+| `tools-preset.js` / `tools.js` | 新增 `expandLoopTasks()`：`workflow_begin` 时展开 N 个串行迭代，每迭代带 `_loopGroup` 等元数据 |
+| `engine.js` | 无改动（接收展开后平面任务列表，天然支持）|
+| `system-prompt.md` / `agent.cordis.yml` | 更新："已在 workflow_begin 时自动展开" |
+| `client-body.txt` | 新增循环组 DAG 可视化：`_loopGroup` 检测 + 背景框 + "↻" 标签 |
+| 动态插件 `wfd-12/pkg-17` | 经过 5 次迭代（v1~v5）后稳定运行 |
+
+**验证结果**：
+- Node 单元测试 41/41 通过
+- expandLoopTasks 探针 18/18 通过
+- ESM 插件加载验证通过
+- 4-task 模拟执行：PENDING（灰）→ RUNNING（蓝）→ DONE（绿）✅
+- 循环组背景框 "↻ 逐模块评审" 显示正确 ✅
+
+---
+
+### Iter-5: 循环错误处理 + DAG 布局优化（1 人天）
+
+**输入**：Iter-4 循环展开功能已完成
 
 **修改范围**：
 
 | 组件 | 改动 |
 |------|------|
-| parser.js | 支持 `type: loop`、`items-from`、`item-var` 字段解析 |
-| engine.js | 循环模板存储 + 展开为 N 个迭代实例 |
-| system-prompt | 循环处理逻辑的提示增强 |
-| dag.js | 循环展开后的多实例显示（折叠/展开）|
-| tools.js | `workflow_status` 支持迭代状态更新 |
+| `workflow-schema.js` | 新增 loop 类型 `onError: break \| continue` 可选字段 |
+| `workflow-parser.js` | `normalizeTask()` 增加 `onError` 字段解析，默认 `break` |
+| `tools-preset.js` / `tools.js` | `expandLoopTasks()` 将 `onError` 复制到每个展开迭代的 `_onError` |
+| `engine.js` | 任务 FAILED 后检查 `_onError`：<br>— `break`：标记同组 PENDING → SKIPPED<br>— `continue`：继续执行<br>`getNextRunnableTask()` 跳过 SKIPPED 任务 |
+| `client-body.txt` | 循环组布局：<br>— ≤4 items：水平排列（同当前）<br>— >4 items：折叠态（进度条 + ✅🔄❌⏭ 计数）<br>— 点击展开：垂直列表<br>— SKIPPED 状态：琥珀色 `#f59e0b` + 虚线边框 |
 
 **验证标准**：
 
 ```
-定义 loop(items=3) 工作流
-→ 展开 3 个迭代
-→ 逐个串行执行（迭1 → 迭代2 → 迭3）
-→ 每迭代各自 Gate
-→ 全部完成
+场景 1：onError=break
+→ 定义 loop(items=5)，第 3 item 失败
+→ item-1 ✅, item-2 ✅, item-3 ❌, item-4 ⏭, item-5 ⏭
+→ 循环整体 FAILED
+
+场景 2：onError=continue
+→ 定义 loop(items=5)，第 3 item 失败
+→ item-1 ✅, item-2 ✅, item-3 ❌, item-4 ✅, item-5 ✅
+→ 循环整体部分成功
+
+场景 3：折叠布局
+→ 定义 loop(items=12)，折叠态显示进度条 + 计数摘要
+→ 点击展开显示垂直列表
 ```
 
 ---
 
-### Iter-5: 并发执行引擎（1 人天）
+### Iter-6: 并发执行引擎（1 人天）
 
-**输入**：Iter-4 循环可跑
+**输入**：Iter-5 循环错误处理完成
 
 **修改范围**：
 
@@ -190,9 +224,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-6: 多实例管理（1 人天）
+### Iter-7: 多实例管理（1 人天）
 
-**输入**：Iter-5
+**输入**：Iter-6 并发可用
 
 **修改范围**：
 
@@ -215,11 +249,11 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-7: 编排编辑器（1 人天）
+### Iter-8: 编排编辑器（1 人天）
 
-**输入**：Iter-6
+**输入**：Iter-7 多实例可用
 
-**产出**：`cod/plugins/workflo-client/editor/`
+**产出**：`code/plugins/workflow-client/editor/`
 
 | 文件 | 职能 |
 |------|------|
@@ -242,7 +276,7 @@ cordis_define(code.host=index.js) → cordis_run
 
 | # | 风险 | 影响 | 被哪个迭代暴露 |
 |--|------|------|--------------|
-| R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-5 |
-| R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-4 |
-| R3 | 多实例切换时的状态一致性 | 高 | Iter-6 |
+| R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-6 |
+| R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-5 |
+| R3 | 多实例切换时的状态一致性 | 高 | Iter-7 |
 | R4 | DSH 版本产生接口变化 | 中 | 随时 |
