@@ -1,0 +1,425 @@
+return {
+  inject: ['timer'],
+  apply(ctx) {
+    const slots = ctx.get('slots')
+    if (!slots) return
+
+    let latest = null
+    let lastError = null
+    const listeners = new Set()
+    let pollingActive = false
+
+    function fingerprint(state) {
+      if (!state || !state.tasks) return ''
+      const t = state.tasks.map(function(x) { return x.id + ':' + x.status }).join(',')
+      return [state.stage || '', state.gateResult || '', state.retries || 0, t].join('|')
+    }
+
+    function publish(state) {
+      var fp = state ? fingerprint(state) : ''
+      if (fp && latest && latest.__fp === fp) return
+      if (state) state.__fp = fp
+      latest = state
+      lastError = state ? null : (lastError || 'disconnected')
+      listeners.forEach(function(fn) { try { fn() } catch (e) {} })
+    }
+
+    ctx.effect(function() {
+      if (pollingActive) return
+      pollingActive = true
+      var stop = false
+      var currentRoot = null
+
+      window.__wfSetRoot = function(root) {
+        currentRoot = root
+      }
+
+      var refresh = async function() {
+        if (stop) return
+        try {
+          var s = await host.call('wf:status', { workspaceRoot: currentRoot || '' })
+          if (!stop) publish(s)
+        } catch (e) {
+          if (!stop) { lastError = e && e.message ? e.message : String(e); listeners.forEach(function(fn) { try { fn() } catch (e2) {} }) }
+        }
+      }
+
+      refresh()
+      var d = ctx.interval(refresh, 2000)
+      return function() { stop = true; pollingActive = false; d(); delete window.__wfSetRoot }
+    })
+
+    var NODE_COLORS = {
+      PENDING: '#9ca3af',
+      RUNNING: '#3b82f6',
+      DONE: '#22c55e',
+      FAILED: '#ef4444',
+      SKIPPED: '#f59e0b',
+    }
+    var STAGE_LABELS = {
+      PENDING: 'Pending',
+      RUNNING: 'Running',
+      COMPLETED: 'Completed',
+      FAILED: 'Failed',
+    }
+
+    var TAB_LABEL = 'Workflow'
+    var CONNECTING_MSG = 'Connecting to workflow engine...'
+    var NO_WORKSPACE_MSG = 'No workspace detected'
+    var NO_WORKSPACE_HINT = 'Open a workspace and run the Workflow Orchestrator preset'
+    var CONNECTING_STATE = 'Waiting for workflow data...'
+    var CLICK_HINT = 'Click a node above to view details'
+    var SKILL_LOADING = 'Loading skill...'
+    var NO_SKILL = '(No processor skill configured)'
+    var SKILL_EMPTY = '(Skill file is empty)'
+    var SKILL_HEADER = 'Processor Skill Content:'
+
+    var DagCanvas = React.memo(function DagCanvas(props) {
+      var stage = props.stage
+      var gateResult = props.gateResult
+      var tasks = props.tasks
+      var selectedId = props.selectedId
+      var onSelect = props.onSelect
+      var workflowName = props.workflowName
+      var retries = props.retries
+      var error = props.error
+
+      var mainColor = (function() {
+        if (stage === 'COMPLETED') return gateResult === 'FAIL' ? NODE_COLORS.FAILED : NODE_COLORS.DONE
+        if (stage === 'FAILED') return NODE_COLORS.FAILED
+        if (stage === 'RUNNING') return NODE_COLORS.RUNNING
+        return NODE_COLORS.PENDING
+      })()
+
+      var gw = 132, gh = 46, gap = 44
+      var leftPad = 24, cy = 28
+      var items = Array.isArray(tasks) ? tasks : []
+      var svgChildren = []
+      var x = leftPad
+      var arrowId = 'wf-dash-arrow'
+
+      items.forEach(function(t, i) {
+        var isSel = selectedId === t.id
+        var fill = NODE_COLORS[t.status] || NODE_COLORS.PENDING
+
+        svgChildren.push(
+          React.createElement('rect', {
+            key: 'r' + t.id, x: x, y: cy, width: gw, height: gh, rx: 8,
+            fill: fill, opacity: 0.92,
+            stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
+            cursor: 'pointer',
+            onClick: function() { onSelect(t.id) },
+          }),
+          React.createElement('text', {
+            key: 't' + t.id, x: x + gw / 2, y: cy + gh / 2 - 2,
+            textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600,
+          }, t.name || t.id),
+          React.createElement('text', {
+            key: 'u' + t.id, x: x + gw / 2, y: cy + gh / 2 + 14,
+            textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10,
+          }, t.id),
+        )
+
+        if (i < items.length - 1) {
+          svgChildren.push(
+            React.createElement('line', {
+              key: 'l' + i,
+              x1: x + gw, y1: cy + gh / 2,
+              x2: x + gw + gap, y2: cy + gh / 2,
+              stroke: '#94a3b8', strokeWidth: 2,
+              markerEnd: 'url(#' + arrowId + ')',
+            }),
+          )
+        }
+        x += gw + gap
+      })
+
+      svgChildren.push(
+        React.createElement('defs', { key: 'defs' },
+          React.createElement('marker', {
+            id: arrowId, viewBox: '0 0 10 10', refX: 9, refY: 5,
+            markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+          },
+            React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' }),
+          ),
+        ),
+      )
+
+      var svgWidth = leftPad * 2 + Math.max(items.length, 1) * (gw + gap)
+      var svgHeight = cy * 2 + gh
+
+      return React.createElement('div', {
+        style: {
+          padding: '14px 18px 10px',
+          borderBottom: '1px solid rgba(148,163,184,0.3)',
+        },
+      }, [
+        React.createElement('div', {
+          key: 'statusBar',
+          style: {
+            display: 'flex', alignItems: 'center', gap: 14,
+            marginBottom: 8, fontSize: 12, color: '#64748b',
+            flexWrap: 'wrap',
+          },
+        }, [
+          React.createElement('span', { key: 'w', style: { fontWeight: 600, color: '#334155' } }, workflowName || '(none)'),
+          React.createElement('span', { key: 's' },
+            'Stage: ',
+            React.createElement('span', { style: { color: mainColor, fontWeight: 700 } },
+              (stage || '-') + ' ' + (STAGE_LABELS[stage] || ''),
+            ),
+          ),
+          React.createElement('span', { key: 'g' },
+            'Gate: ',
+            gateResult
+              ? React.createElement('span', {
+                  style: { color: gateResult === 'PASS' ? NODE_COLORS.DONE : NODE_COLORS.FAILED, fontWeight: 700 },
+                }, gateResult)
+              : '-',
+          ),
+          retries > 0 ? React.createElement('span', { key: 'r' }, 'Retries: ', retries) : null,
+          error ? React.createElement('span', { key: 'e', style: { color: NODE_COLORS.FAILED } }, error) : null,
+        ]),
+        React.createElement('svg', {
+          key: 'svg',
+          width: svgWidth,
+          height: svgHeight,
+          xmlns: 'http://www.w3.org/2000/svg',
+          style: {
+            background: 'rgba(148,163,184,0.08)',
+            borderRadius: 8,
+            width: '100%',
+            maxWidth: svgWidth,
+          },
+        }, svgChildren),
+      ])
+    })
+
+    slots.inject('conversation.view', function() {
+      return slots.register(
+        {
+          name: 'conversation.view',
+          id: 'workflow',
+          order: 25,
+          label: function() { return TAB_LABEL },
+        },
+        function WorkflowViewFactory(props) {
+          var workspaceHook = props.useWorkspaces
+
+          function WorkflowView() {
+            var result = React.useReducer(function(x) { return x + 1 }, 0)
+            var forceUpdate = result[1]
+            var selectedIdState = React.useState(null)
+            var selectedId = selectedIdState[0]
+            var setSelectedId = selectedIdState[1]
+            var skillTextState = React.useState(null)
+            var skillText = skillTextState[0]
+            var setSkillText = skillTextState[1]
+            var skillLoadingState = React.useState(false)
+            var skillLoading = skillLoadingState[0]
+            var setSkillLoading = skillLoadingState[1]
+            var workspaceRootState = React.useState('')
+            var workspaceRoot = workspaceRootState[0]
+            var setWorkspaceRoot = workspaceRootState[1]
+            var configLoadedState = React.useState(false)
+            var configLoaded = configLoadedState[0]
+            var setConfigLoaded = configLoadedState[1]
+
+            React.useEffect(function() {
+              listeners.add(forceUpdate)
+              return function() { listeners.delete(forceUpdate) }
+            }, [])
+
+            React.useEffect(function() {
+              if (configLoaded) return
+              try {
+                if (workspaceHook) {
+                  var wsList = workspaceHook()
+                  if (wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items.length > 0) {
+                    var p = wsList.data.items[0].path
+                    if (p) {
+                      var root = String(p).replace(/\\\\/g, '/')
+                      setWorkspaceRoot(root)
+                      if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(root)
+                      setConfigLoaded(true)
+                      return
+                    }
+                  }
+                }
+              } catch (e) {}
+              host.call('wf:config', { workspaceRoot: 'C:/Users/ranwa/dsh_workspace' }).then(function(r) {
+                if (r && r.valid) {
+                  setWorkspaceRoot(r.workspaceRoot)
+                  if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(r.workspaceRoot)
+                }
+                setConfigLoaded(true)
+              }).catch(function() { setConfigLoaded(true) })
+            }, [workspaceHook, configLoaded])
+
+            React.useEffect(function() {
+              if (!selectedId || !workspaceRoot) return
+              var snap = latest
+              var tasks = (snap && snap.state && Array.isArray(snap.state.tasks)) ? snap.state.tasks : []
+              var task = null
+              for (var i = 0; i < tasks.length; i++) {
+                if (tasks[i].id === selectedId) { task = tasks[i]; break }
+              }
+              var path = task && task.processor ? task.processor : null
+              if (!path) {
+                setSkillText(NO_SKILL)
+                setSkillLoading(false)
+                return
+              }
+              var cancelled = false
+              setSkillLoading(true)
+              host.call('wf:skill', { path: path }).then(function(r) {
+                if (!cancelled) {
+                  setSkillText(r && r.text ? r.text : SKILL_EMPTY)
+                  setSkillLoading(false)
+                }
+              }).catch(function(e) {
+                if (!cancelled) {
+                  var msg = e && e.message ? e.message : String(e)
+                  setSkillText('Load failed: ' + msg)
+                  setSkillLoading(false)
+                }
+              })
+              return function() { cancelled = true }
+            }, [selectedId, workspaceRoot])
+
+            var onSelect = React.useCallback(function(id) {
+              setSelectedId(function(prev) { return prev === id ? null : id })
+              setSkillText(null)
+              setSkillLoading(false)
+            }, [])
+
+            var snap = latest
+            var stateData = (snap && snap.state) ? snap.state : null
+            var tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+            var hasData = stateData && stateData.workflow
+
+            if (!configLoaded) {
+              return React.createElement('div', {
+                style: {
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13,
+                },
+              }, CONNECTING_MSG)
+            }
+
+            if (!workspaceRoot) {
+              return React.createElement('div', {
+                style: {
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13,
+                  flexDirection: 'column', gap: 8,
+                },
+              }, [
+                React.createElement('span', { key: 't1' }, NO_WORKSPACE_MSG),
+                React.createElement('span', { key: 't2', style: { fontSize: 11 } }, NO_WORKSPACE_HINT),
+              ])
+            }
+
+            if (!hasData) {
+              var hint = snap && snap.error
+                ? 'Workflow data unavailable: ' + snap.error
+                : CONNECTING_STATE
+              return React.createElement('div', {
+                style: {
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13,
+                  border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8,
+                  margin: 12, background: 'rgba(148,163,184,0.05)',
+                },
+              }, hint)
+            }
+
+            var selectedTask = null
+            if (selectedId) {
+              for (var i = 0; i < tasks.length; i++) {
+                if (tasks[i].id === selectedId) { selectedTask = tasks[i]; break }
+              }
+            }
+            var detailTitle = CLICK_HINT
+            var detailContent = null
+
+            if (selectedTask) {
+              detailTitle = selectedTask.name + ' (' + selectedTask.id + ')'
+              var detailLines = [
+                'Type: ' + (selectedTask.type || 'llm-task'),
+                'Status: ' + (selectedTask.status || '-'),
+                'Retries: ' + (selectedTask.retries || 0),
+              ]
+              if (selectedTask.gateChecker) {
+                detailLines.push('Gate: ' + String(selectedTask.gateChecker).split('/').pop())
+              }
+              if (selectedTask.gateResult) {
+                detailLines.push('Gate Result: ' + selectedTask.gateResult)
+              }
+              if (selectedTask.processor) {
+                detailLines.push('Processor: ' + selectedTask.processor)
+              }
+
+              detailContent = React.createElement('div', { key: 'info', style: { fontSize: 12, lineHeight: 1.8, color: '#475569' } },
+                detailLines.map(function(line, i) { return React.createElement('div', { key: i }, line) }),
+              )
+
+              if (skillLoading) {
+                detailContent = React.createElement('div', { key: 'loading', style: { fontSize: 12, color: '#9ca3af' } }, SKILL_LOADING)
+              } else if (skillText) {
+                detailContent = React.createElement('div', null, [
+                  detailContent,
+                  React.createElement('div', { key: 'divider', style: { borderTop: '1px solid rgba(148,163,184,0.25)', margin: '8px 0' } }),
+                  React.createElement('div', { key: 'sl', style: { fontSize: 11, color: '#64748b', marginBottom: 4 } }, SKILL_HEADER),
+                  React.createElement('pre', {
+                    style: {
+                      margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      fontSize: 11, lineHeight: 1.5, color: '#334155',
+                      background: 'rgba(148,163,184,0.08)', borderRadius: 6,
+                      padding: '8px 10px', maxHeight: 300, overflow: 'auto',
+                    },
+                  }, skillText),
+                ])
+              }
+            }
+
+            var bottomEl = React.createElement('div', {
+              key: 'bottom',
+              style: { flex: 1, overflow: 'auto', padding: '10px 16px 16px' },
+            }, [
+              React.createElement('div', {
+                key: 'bh',
+                style: { fontSize: 12, color: '#64748b', marginBottom: 6 },
+              }, detailTitle),
+              detailContent || React.createElement('div', {
+                key: 'hint',
+                style: { fontSize: 12, color: '#9ca3af' },
+              }, CLICK_HINT),
+            ])
+
+            var dagEl = React.createElement(DagCanvas, {
+              key: 'dag',
+              stage: stateData.stage,
+              gateResult: stateData.gateResult || null,
+              tasks: tasks,
+              selectedId: selectedId,
+              onSelect: onSelect,
+              workflowName: stateData.workflow,
+              retries: stateData.retries || 0,
+              error: stateData.error || null,
+            })
+
+            return React.createElement('div', {
+              style: {
+                display: 'flex', flexDirection: 'column', height: '100%',
+                minHeight: 420, fontFamily: 'inherit', fontSize: 13,
+              },
+            }, [dagEl, bottomEl])
+          }
+
+          return React.createElement(WorkflowView)
+        },
+      )
+    })
+  },
+}

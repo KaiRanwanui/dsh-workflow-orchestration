@@ -1,0 +1,16 @@
+name: poc-with-gate
+version: "0.1"
+description: "PoC 工作流：需求分析 + 质量门禁（独立会话）+ 失败重试"
+
+tasks:
+  - id: analyze-req
+    name: "需求分析"
+    processor: PoC/skills/poc-analyzer/SKILL.md
+    inputs:
+      - PoC/test-data/ir-sample.md
+    outputs:
+      - PoC/output/analysis.md
+    quality-gate:
+      checker: PoC/skills/poc-reviewer/SKILL.md
+      on-failure: retry
+      max-retries: 2

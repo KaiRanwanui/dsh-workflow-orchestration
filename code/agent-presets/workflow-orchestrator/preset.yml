@@ -1,0 +1,2 @@
+name: Workflow Orchestrator
+description: 通用工作流编排预设：按 YAML 定义的 depends-on 顺序串行执行 Task（独立 subagent 会话），质量门禁（独立会话评审 + PASS/FAIL）与失败重试/阻断/跳过，进展经 workflow_begin/workflow_status 工具持久化并可被监控面板呈现（Iter-3）。

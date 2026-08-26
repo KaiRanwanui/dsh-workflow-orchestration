@@ -1,0 +1,56 @@
+return {
+  inject: ['timer', 'fs'],
+  apply(ctx) {
+    const fs = ctx.get('fs')
+
+    async function loadState(workspaceRoot) {
+      if (!fs) return { state: null, error: 'fs service unavailable' }
+      try {
+        const root = (workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+        if (!root) return { state: null, error: 'workspaceRoot not specified' }
+        const statePath = root + '/.workflow-agent/state.json'
+        const resolved = await fs.resolve(statePath)
+        const text = await fs.readText(resolved)
+        const state = JSON.parse(text)
+        return { state, error: null }
+      } catch (e) {
+        return { state: null, error: e && e.message ? e.message : String(e) }
+      }
+    }
+
+    harness.handle('wf:status', async (args) => {
+      const workspaceRoot = args && args.workspaceRoot ? String(args.workspaceRoot) : ''
+      const result = await loadState(workspaceRoot)
+      return result
+    })
+
+    harness.handle('wf:skill', async (args) => {
+      if (!fs) return { error: 'fs service unavailable' }
+      try {
+        const path = args && args.path ? String(args.path) : ''
+        if (!path) return { error: 'no file path provided', text: null }
+        const resolved = await fs.resolve(path)
+        const text = await fs.readText(resolved)
+        return { text, error: null }
+      } catch (e) {
+        return { text: null, error: e && e.message ? e.message : String(e) }
+      }
+    })
+
+    harness.handle('wf:config', async (args) => {
+      const root = args && args.workspaceRoot ? String(args.workspaceRoot) : ''
+      if (root && fs) {
+        try {
+          const p = root + '/.workflow-agent/state.json'
+          await fs.resolve(p)
+          return { valid: true, workspaceRoot: root }
+        } catch (e) {
+          return { valid: false, workspaceRoot: root, error: 'state.json not found at ' + root + '/.workflow-agent/state.json' }
+        }
+      }
+      return { valid: false, workspaceRoot: null, error: 'no workspaceRoot provided' }
+    })
+
+    ctx.effect(() => () => {})
+  },
+}

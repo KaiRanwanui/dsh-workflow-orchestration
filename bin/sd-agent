@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# software-design-agent launcher
+# Usage: ./bin/sd-agent [port]
+# Starts the software-design-agent DSH profile on the given port (default 3081).
+
+set -euo pipefail
+
+PORT="${1:-3081}"
+
+echo "=== software-design-agent ==="
+echo "Port:     $PORT"
+echo "Workspace: $(pwd)"
+echo ""
+
+exec dsh --profile software-design-agent --port "$PORT"

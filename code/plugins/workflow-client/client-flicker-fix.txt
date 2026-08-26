@@ -1,0 +1,155 @@
+// Fix: flicker-proof Client half for wfd-2
+// All mutable state lives at apply() scope so remount never loses data.
+return {
+  inject: ['timer'],
+  apply(ctx) {
+    var s = ctx.get('slots')
+    if (!s) return
+
+    // -- module-level state (survives remount) --
+    var latest = null
+    var lastError = null
+    var listeners = []
+    var pollingActive = false
+    var workspaceRoot = ''
+    var configLoaded = false
+
+    function pub(v) {
+      if (!v) return
+      var fp = (v.stage||'')+'|'+(v.gateResult||'')+'|'+JSON.stringify((v.tasks||[]).map(function(t){return t.id+':'+t.status}))
+      if (latest && latest._fp === fp) return
+      v._fp = fp; latest = v; lastError = null
+      for (var i=0;i<listeners.length;i++) { try { listeners[i]() } catch(e) {} }
+    }
+
+    ctx.effect(function() {
+      if (pollingActive) return
+      pollingActive = true
+      var stop = false
+
+      // workspace discovery (once, not per-remount)
+      // try useWorkspaces hook first (passed via window), fallback to known path
+      function tryDiscover() {
+        if (configLoaded) return
+        try {
+          var w = window.__wfWorkspaceList
+          if (w && w.data && w.data.items && w.data.items[0] && w.data.items[0].path) {
+            workspaceRoot = String(w.data.items[0].path).replace(/\\/g,'/')
+            configLoaded = true; return
+          }
+        } catch(e) {}
+        host.call('wf:config',{workspaceRoot:'C:/Users/ranwa/dsh_workspace'}).then(function(r){
+          if (!stop && r && r.valid) { workspaceRoot = r.workspaceRoot; configLoaded = true }
+          else configLoaded = true
+        }).catch(function(){configLoaded=true})
+      }
+      tryDiscover()
+
+      var poll = async function() {
+        if (stop) return
+        try {
+          var r = await host.call('wf:status',{workspaceRoot:workspaceRoot||''})
+          if (!stop && r && r.state) pub(r.state)
+        } catch(e) {}
+      }
+      poll()
+      var d = ctx.interval(poll,2000)
+      return function(){stop=true;pollingActive=false;d()}
+    })
+
+    // -- constants --
+    var COLS = {PENDING:'#9ca3af',RUNNING:'#3b82f6',DONE:'#22c55e',FAILED:'#ef4444',SKIPPED:'#f59e0b'}
+
+    // -- memoized DAG --
+    var Dag = React.memo(function(props){
+      var st=props.stage,gr=props.gateResult,ts=props.tasks,sel=props.selId,onS=props.onSel
+      var mc=st==='COMPLETED'?(gr==='FAIL'?COLS.FAILED:COLS.DONE):st==='FAILED'?COLS.FAILED:st==='RUNNING'?COLS.RUNNING:COLS.PENDING
+      var gw=120,gh=40,gap=36,x=24,items=Array.isArray(ts)?ts:[],svg=[],arrId='wfa'
+      items.forEach(function(t,i){
+        var is=sel===t.id,fl=COLS[t.status]||COLS.PENDING
+        svg.push(React.createElement('rect',{key:'r'+t.id,x:x,y:24,width:gw,height:gh,rx:7,fill:fl,opacity:0.92,stroke:is?'#fff':'transparent',strokeWidth:is?3:0,cursor:'pointer',onClick:function(){onS(t.id)}}))
+        svg.push(React.createElement('text',{key:'t'+t.id,x:x+gw/2,y:24+gh/2-2,textAnchor:'middle',fill:'#fff',fontSize:12,fontWeight:600},t.name||t.id))
+        svg.push(React.createElement('text',{key:'u'+t.id,x:x+gw/2,y:24+gh/2+14,textAnchor:'middle',fill:'rgba(255,255,255,0.85)',fontSize:10},t.id))
+        if(i<items.length-1) svg.push(React.createElement('line',{key:'l'+i,x1:x+gw,y1:24+gh/2,x2:x+gw+gap,y2:24+gh/2,stroke:'#94a3b8',strokeWidth:2}))
+        x+=gw+gap
+      })
+      svg.push(React.createElement('defs',{key:'d'},React.createElement('marker',{id:arrId,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto'},React.createElement('path',{d:'M0 0 L10 5 L0 10z',fill:'#94a3b8'}))))
+      var w=48+Math.max(items.length,1)*(gw+gap)
+      return React.createElement('div',{style:{padding:'12px 16px 8px',borderBottom:'1px solid rgba(148,163,184,0.3)'}},[
+        React.createElement('div',{style:{display:'flex',alignItems:'center',gap:12,marginBottom:6,fontSize:12,color:'#64748b',flexWrap:'wrap'}},[
+          React.createElement('span',{style:{fontWeight:600,color:'#334155'}},props.name),
+          React.createElement('span',null,'Stage: ',React.createElement('span',{style:{color:mc,fontWeight:700}},st)),
+          React.createElement('span',null,'Gate: ',gr?React.createElement('span',{style:{color:gr==='PASS'?COLS.DONE:COLS.FAILED,fontWeight:700}},gr):'-'),
+          props.retry>0?React.createElement('span',null,'Retry:',props.retry):null,
+          props.err?React.createElement('span',{style:{color:COLS.FAILED}},props.err):null,
+        ]),
+        React.createElement('svg',{width:w,height:88,xmlns:'http://www.w3.org/2000/svg',style:{background:'rgba(148,163,184,0.08)',borderRadius:8,width:'100%',maxWidth:w}},svg),
+      ])
+    })
+
+    // -- register view --
+    s.inject('conversation.view',function(){
+      return s.register({name:'conversation.view',id:'workflow',order:25,label:function(){return'Workflow'}},
+        function(props){
+          // pass workspace list to module level once on mount
+          var wh = props.useWorkspaces
+          try { if (wh) { var w = wh(); if (w) window.__wfWorkspaceList = w } } catch(e){}
+
+          return function W(){
+            var u=React.useReducer(function(x){return x+1},0),fu=u[1]
+            var si=React.useState(null),sid=si[0],ss=si[1]
+            var st=React.useState(null),stxt=st[0],sst=st[1]
+            var sl=React.useState(false),sld=sl[0],ssl=sl[1]
+
+            // subscribe to module-level updates
+            React.useEffect(function(){listeners.push(fu);return function(){listeners=listeners.filter(function(f){return f!==fu})}},[])
+
+            // skill fetch on selection
+            React.useEffect(function(){
+              if(!sid)return
+              var snap=latest,tasks=(snap&&snap.tasks)?snap.tasks:[]
+              var task=null;for(var i=0;i<tasks.length;i++){if(tasks[i].id===sid){task=tasks[i];break}}
+              var path=task&&task.processor?task.processor:null
+              if(!path){sst('(no skill)');return}
+              var cancel=false;ssl(true)
+              host.call('wf:skill',{path:path}).then(function(r){if(!cancel)sst(r&&r.text?r.text:'(empty)');ssl(false)}).catch(function(e){if(!cancel){sst('err:'+(e.message||String(e)));ssl(false)}})
+              return function(){cancel=true}
+            },[sid])
+
+            var onClick=React.useCallback(function(id){ss(function(p){return p===id?null:id});sst(null);ssl(false)},[])
+
+            var snap=latest,data=(snap&&snap.state)?snap.state:snap,hasData=data&&data.workflow
+            var tasks=hasData&&Array.isArray(data.tasks)?data.tasks:[]
+
+            // no data: show skeleton (stable, never flashes "Connecting...")
+            if(!hasData){
+              var hint='Waiting for workflow data...'
+              if(!configLoaded) hint='Connecting...'
+              else if(lastError||(snap&&snap.error)) hint='Workflow data unavailable'
+              return React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',minHeight:420,color:'#9ca3af',fontSize:13,border:'1px dashed rgba(148,163,184,0.35)',borderRadius:8,margin:12}},hint)
+            }
+
+            // detail panel
+            var selTask=null;for(var i=0;i<tasks.length;i++){if(tasks[i].id===sid){selTask=tasks[i];break}}
+            var dt=selTask?(selTask.name+' ('+selTask.id+')'):'Click a node above'
+            var detail=React.createElement('div',{style:{padding:'8px 16px 18px'}},[
+              React.createElement('div',{style:{fontSize:12,color:'#64748b',marginBottom:4}},dt),
+              selTask?React.createElement('div',{style:{fontSize:12,lineHeight:1.8,color:'#475569'}},[
+                React.createElement('div',null,'Type: '+(selTask.type||'llm-task')),
+                React.createElement('div',null,'Status: '+(selTask.status||'-')),
+                selTask.gateChecker?React.createElement('div',null,'Gate: '+String(selTask.gateChecker).split('/').pop()):null,
+                selTask.gateResult?React.createElement('div',null,'Gate: '+selTask.gateResult):null,
+                selTask.processor?React.createElement('div',null,'Processor: '+selTask.processor):null,
+                sld?React.createElement('div',{style:{fontSize:12,color:'#9ca3af'}},'Loading skill...'):null,
+                stxt&&!sld?React.createElement('pre',{style:{marginTop:8,whiteSpace:'pre-wrap',wordBreak:'break-word',fontSize:11,lineHeight:1.5,color:'#334155',background:'rgba(148,163,184,0.08)',borderRadius:6,padding:'8px 10px',maxHeight:200,overflow:'auto'}},stxt):null,
+              ]):null,
+            ])
+
+            var top=React.createElement(Dag,{key:'dag',stage:data.stage,gateResult:data.gateResult||null,tasks:tasks,selId:sid,onSel:onClick,name:data.workflow,retry:data.retries||0,err:data.error||null})
+            return React.createElement('div',{style:{display:'flex',flexDirection:'column',height:'100%',minHeight:420,fontFamily:'inherit'}},[top,detail])
+          }
+        }
+      )
+    })
+  },
+}

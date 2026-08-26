@@ -1,0 +1,14 @@
+{
+  "name": "workflow-agent",
+  "version": "0.2.0",
+  "private": true,
+  "description": "DSH plugin project for a general-purpose workflow orchestration framework — define, edit, execute, and monitor workflows with LLM-driven Task processing, quality gates, branching, and external agent integration.",
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app"
+      ]
+    }
+  }
+}

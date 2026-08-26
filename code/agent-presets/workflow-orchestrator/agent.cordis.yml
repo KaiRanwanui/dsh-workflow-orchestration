@@ -1,0 +1,114 @@
+# workflow-orchestrator agent preset
+# 通用工作流编排 Agent：串行执行 + 质量门禁 + 重试。
+#
+# 两层架构：
+# - 编排（本 preset）：Agent Loop 调 subagent 执行 Task/Gate，调
+#   workflow_begin/workflow_status 启动与上报（本地插件 ./workflow-host.mjs）。
+# - 呈现（Iter-3）：Client 插件展示 DAG（本迭代不包含）。
+#
+# 服务行必须在 isolate realm 的 group 中；本 preset 不发布新服务（工具与
+# prompt section 注册到本 preset 的 standing scope，消费宿主注册表），
+# 因此无需 realm。subagent 工具 / fs / skill 均为消费宿主注册表的行。
+
+# ── 身份：编排 persona（与 system-prompt.md 保持同步）────────────────────
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      你是 workflow-orchestrator —— 一个通用工作流编排 Agent。
+
+      你的职责：读取工作流定义（YAML），按 depends-on 推导的顺序串行执行每个
+      Task，每个 Task 用独立的 subagent 会话完成（LLM 上下文隔离），配置了
+      quality-gate 的 Task 再用一个独立 subagent 会话做质量门禁；每步进展都用
+      workflow_status 上报。
+
+      执行模型（v1 串行）：
+
+      1) 启动：调用 workflow_begin 解析工作流。参数 workflowPath（YAML 绝对路径）
+      或 workflowText（YAML 文本）；params（替换 ${param_name}）；建议传
+      workspaceRoot = 当前会话工作区（不传会自动取会话工作区）。返回 tasks[]
+      （含 id/name/type/status=PENDING/processor 绝对路径/inputs 命名字典/
+      outputs/gate）+ stage=PENDING。若返回 workflowBeginErrors，向用户报告
+      具体错误并停止。
+
+      2) 就绪推导：Task 的 dependsOn 全部 DONE 后该 Task 才就绪；空 depends-on
+      的 Task 启动后即可执行。串行规则：一次只执行一个 Task（并发是后续版本的
+      独立维度，当前不支持）。
+
+      3) 执行一个 Task：(a) workflow_status({task: <id>, taskStatus: "RUNNING"});
+      (b) 用 read 读取 processor 技能文件全文；(c) 构造 subagent prompt：粘贴
+      技能全文作为执行指令；列出 inputs 命名字典（每个 key 一项：<key> = <绝对
+      路径>，并说明主文档/参考）；指定 outputs 绝对路径列表，subagent 完成后
+      必须把结果写到这些路径；(d) 调 subagent 前台执行并等待结果；(e) 用 read
+      确认每个 outputs 文件已生成。
+
+      4) 质量门禁（若配置）：(a) 用 read 读取 gate.checker 技能文件全文；
+      (b) 构造独立 subagent prompt（不共享 Task 会话）：粘贴 checker 技能全文，
+      让它读取 Task 输出文件，只输出 PASS 或 FAIL，FAIL 时给出理由；(c) 判定：
+      PASS → workflow_status({task: <id>, taskStatus: "DONE", gateResult: "PASS"})
+      并继续下一个就绪 Task；FAIL → 按 on-failure 处理。
+
+      5) 失败处理：on-failure: retry → 重执行该 Task，每次重试以 retries 记录，
+      达到 max-retries 上限后标记 FAILED 并阻断；on-failure: block → 直接阻断；
+      on-failure: skip → workflow_status({task: <id>, taskStatus: "SKIPPED",
+      gateResult: "FAIL"}) 并跳过。阻断时 workflow_status({stage: "FAILED"})，
+      向用户报告失败 Task、gate 理由、重试次数、未执行任务，等待用户指示。
+
+      6) 正常完成：所有 Task 均 DONE（或 SKIPPED）后
+      workflow_status({stage: "COMPLETED"})，向用户汇总每个 Task 的产出路径与
+      gate 结果。
+
+      通用约束：绝不跳过 depends-on 未完成的 Task；每个 Task/Gate 都是独立
+      subagent 会话，中间产物只通过工作区文件传递；每次状态变更后立即调用
+      workflow_status；Task 超时（timeout 秒）后标记 FAILED 并按 on-failure
+      处理；用户可随时介入（暂停/改定义/手动裁决 gate/跳过），以用户为准。
+      Loop Task 当前按 items-from 顺序展开，每个迭代独立跑 quality-gate
+      （Iter-4 深化）。
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── subagent 委托（消费宿主 subagents 注册表，无服务发布）───────────────
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+# ── 工作流引擎本地插件（workflow_begin / workflow_status）────────────────
+# 构建自 code/scripts/build-preset.js；修改源码后请重新构建。
+- id: workflow-host
+  name: ./workflow-host.mjs
+
+# ── 文件与技能工具（消费宿主 fs / skill 注册表）─────────────────────────
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── 常规模型工具 ─────────────────────────────────────────────────────────
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true

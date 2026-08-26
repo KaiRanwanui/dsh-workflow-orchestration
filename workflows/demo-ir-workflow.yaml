@@ -1,0 +1,41 @@
+name: demo-ir-workflow
+version: "1.0"
+description: "Iter-1 验证：需求分析 + 逐模块评审（循环）"
+
+params:
+  ir_doc:
+    type: string
+    description: "初始需求文档路径"
+  project:
+    type: string
+    default: "demo-project"
+
+tasks:
+  - id: req-analysis
+    name: "需求分析"
+    processor: skills/req-analysis/SKILL.md
+    inputs:
+      ir_doc: "${ir_doc}"
+    outputs:
+      - "output/${project}/analysis.md"
+    depends-on: []
+    timeout: 600
+    quality-gate:
+      checker: skills/req-review/SKILL.md
+      on-failure: retry
+      max-retries: 3
+
+  - id: module-review
+    name: "逐模块评审"
+    type: loop
+    items-from: config/modules.txt
+    item-var: "module"
+    processor: skills/module-review/SKILL.md
+    inputs:
+      analysis: "output/${project}/analysis.md"
+    outputs:
+      - "output/${project}/review-${module}.md"
+    depends-on: [req-analysis]
+    quality-gate:
+      checker: skills/review-check/SKILL.md
+      on-failure: block
