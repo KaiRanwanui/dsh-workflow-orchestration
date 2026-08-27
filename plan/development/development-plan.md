@@ -25,12 +25,9 @@
 ## 2. 迭代全景
 
 ```
-Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6              Iter-7          Iter-8         Iter-9
-  │          │          │          │               │                   │                   │               │              │
-  Host      Agent     Client     Loop +          Host/Client         循环错误处理 +      并发执行         多实例         编排编辑器
-  插件       Preset    监控面板    循环展开         架构调整            DAG 布局优化        引擎            管理
-  (引擎)     (编排)    (UI)       ── Iter-4 完成 ──  (RPC 链路修复)   ──── Iter-5 完成 ────
-                                    ── Iter-5 完成 ──
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎)
+当前:   Iter-8(并发语义完善 + concurrent 节点 + DAG 增强)   ← 待开发
+后续:   Iter-9(多实例管理) → Iter-10(编排编辑器)
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -41,9 +38,10 @@ Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6     
 | **4** | 循环 + 循环展开 | Loop Task 解析、展开、串行迭代 | 循环 3 次的工作流执行 | ✅ **完成** |
 | **5** | **Host/Client 架构调整** | **Client RPC 链路修复：webServer HTTP 路由 + fetch 轮询，废弃 harness RPC** | **DAG 面板经 HTTP 显示工作流状态** | ✅ **完成** |
 | **6** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-5** |
-| **7** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | Iter-6 |
-| **8** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-7 |
-| **9** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-8 |
+| **7** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | ✅ **完成** |
+| **8** | **并发语义完善 + concurrent 节点 + DAG 增强** | **组级/工作流级 max 取最严格；concurrent Task 类型；启动/结束节点；依赖同前驱节点垂直排列** | **concurrent 并发 + start/end 节点 + 垂直排列** | **Iter-7** |
+| **9** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-8 |
+| **10** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-9 |
 
 ---
 
@@ -262,9 +260,47 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-8: 多实例管理（1 人天）
+### Iter-8: 并发语义完善 + concurrent 节点 + DAG 增强（1 人天）
 
-**输入**：Iter-7 并发可用
+**输入**：Iter-7 并发执行引擎完成
+
+**背景**：交付 Iter-7 后发现对"并发"的理解有偏差，需修正并新增伪并发场景能力。
+
+**修改范围**：
+
+| 组件 | 改动 |
+|------|------|
+| workflow-schema | 新增 `TASK_TYPES.CONCURRENT`；`REQUIRED.concurrent`（id/processor/items-from/item-var）；concurrent 节点新增 `max-concurrency` 字段 |
+| workflow-parser | `normalizeTask` 支持 `type: concurrent`（同 loop 的 items-from/item-var/processor/inputs/outputs/quality-gate 解析） |
+| tools-preset | 新增 `expandConcurrentTasks()`：展开为 N 个 item 迭代，迭代之间**无依赖**（区别于 loop 的串行依赖链）；复制 `max-concurrency` 到迭代元数据 `_concurrentGroup`/`_concurrentMax` |
+| engine | `getRunnableTasks` 并发语义：concurrent 迭代就绪需同时满足**组级 `max-concurrency`**（组内 RUNNING < 组级 max）与**工作流级 `max-concurrency`**（全局 RUNNING < 全局 max），**取最严格者** |
+| client DAG | ① 依赖同一前驱的多个节点：**撤销线框**（不打包成组），**保留垂直排列**（上下并列，各自独立） ② concurrent 节点：类似 loop 折叠框，标注"⚡ 并发" ③ **新增启动(start)/结束(end)节点**：start 发出箭头指向首节点/无依赖节点，end 汇聚所有终节点箭头 |
+
+**执行需求**：
+- 组级 `max-concurrency` 与工作流级 `max-concurrency` 取最严格者（两者都约束 concurrent 迭代）
+- concurrent 节点：单输入/输出/过程/门禁设置，对 items-from 的每个 item 并发执行相同操作（每个 item 独立 subagent 会话 + 独立 gate）
+- 依赖同一前驱的多个节点：垂直排列（无框），表示可并发执行
+- 流程图增加启动(start)/结束(end)节点
+
+**验证标准**：
+
+```
+场景 1：concurrent(items=4, max-concurrency=2)
+→ 先启 2 个迭代，完成 1 个立即启第 3 个
+→ 组内 RUNNING 数恒 <= 组级 max，且全局 RUNNING 数 <= 工作流级 max
+
+场景 2：依赖同一前驱的 3 个节点
+→ DAG 垂直排列（无线框），可同时 RUNNING（蓝色）
+
+场景 3：流程图 start/end
+→ 启动节点发出箭头指向首节点/无依赖节点；结束节点汇聚所有终节点箭头
+```
+
+---
+
+### Iter-9: 多实例管理（1 人天）
+
+**输入**：Iter-8 并发语义完善可用
 
 **修改范围**：
 
@@ -287,9 +323,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-9: 编排编辑器（1 人天）
+### Iter-10: 编排编辑器（1 人天）
 
-**输入**：Iter-8 多实例可用
+**输入**：Iter-9 多实例可用
 
 **产出**：`code/plugins/workflow-client/editor/`
 
@@ -316,7 +352,8 @@ cordis_define(code.host=index.js) → cordis_run
 |--|------|------|--------------|
 | R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-7 |
 | R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-6 |
-| R3 | 多实例切换时的状态一致性 | 高 | Iter-8 |
+| R3 | 多实例切换时的状态一致性 | 高 | Iter-9 |
 | R4 | DSH 版本产生接口变化 | 中 | 随时 |
 | R5 | webServer 路由冲突（`/wf/*` 与既有路由） | 中 | Iter-5 |
 | R6 | fetch 轮询跨域/同源策略限制 | 中 | Iter-5 |
+| R7 | concurrent 组级/工作流级 max 取最严格的调度执行 | 中 | Iter-8 |
