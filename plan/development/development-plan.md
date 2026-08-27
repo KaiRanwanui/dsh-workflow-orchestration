@@ -5,7 +5,7 @@
 | Field | Value |
 |-------|-------|
 | Project Name | workflow-agent |
-| Version | 0.3 |
+| Version | 0.4 |
 | Status | Active |
 | 基准 | 1 人天/迭代（人类开发者） |
 
@@ -25,11 +25,12 @@
 ## 2. 迭代全景
 
 ```
-Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6          Iter-7         Iter-8
-  │          │          │          │               │                   │               │              │
-  Host      Agent     Client     Loop +          循环错误处理 +      并发执行         多实例         编排编辑器
-  插件       Preset    监控面板    循环展开         DAG 布局优化        引擎            管理
-  (引擎)     (编排)    (UI)       ─── Iter-4 完成 ──
+Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6              Iter-7          Iter-8         Iter-9
+  │          │          │          │               │                   │                   │               │              │
+  Host      Agent     Client     Loop +          Host/Client         循环错误处理 +      并发执行         多实例         编排编辑器
+  插件       Preset    监控面板    循环展开         架构调整            DAG 布局优化        引擎            管理
+  (引擎)     (编排)    (UI)       ── Iter-4 完成 ──  (RPC 链路修复)   ──── Iter-5 完成 ────
+                                    ── Iter-5 完成 ──
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -38,10 +39,11 @@ Iter-1     Iter-2     Iter-3     Iter-4          Iter-5              Iter-6     
 | **2** | Agent Preset — 串行编排 | 编排 Agent：串行执行 + Gate + 重试 | 2-Task 串行工作流端到端 | Iter-1 |
 | **3** | Client 插件 — 监控面板 | conversation.view Tab + N 节点 DAG | 浏览器实时显示执行状态 | Iter-1,2 |
 | **4** | 循环 + 循环展开 | Loop Task 解析、展开、串行迭代 | 循环 3 次的工作流执行 | ✅ **完成** |
-| **5** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-4** |
-| **6** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | Iter-5 |
-| **7** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-6 |
-| **8** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-7 |
+| **5** | **Host/Client 架构调整** | **Client RPC 链路修复：webServer HTTP 路由 + fetch 轮询，废弃 harness RPC** | **DAG 面板经 HTTP 显示工作流状态** | ✅ **完成** |
+| **6** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-5** |
+| **7** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | Iter-6 |
+| **8** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-7 |
+| **9** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-8 |
 
 ---
 
@@ -165,9 +167,45 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-5: 循环错误处理 + DAG 布局优化（1 人天）
+### Iter-5: Host/Client 架构调整 — Client RPC 链路修复（1 人天 — ✅ 完成）
 
-**输入**：Iter-4 循环展开功能已完成
+**背景**：Client UI 迁移到 npm 包后 RPC 链路断裂。`host.call` 是动态插件闭包注入的符号，npm 包无法使用。
+决策详见 `plan/architecture/architecture-decisions.md` §5 与 `plan/design/client-host-communication.md`。
+
+**输入**：Iter-4 循环展开 + 现有 npm 包架构（workflow-host / client-ui-monitor）
+
+**修改范围**：
+
+| 组件 | 改动 |
+|------|------|
+| `workflow-host` npm 包 | 新增 `ctx.webServer.register()` 路由：`GET /wf/status`（读 state.json，复用 `loadState` 逻辑）|
+| `workflow-host/package.json` | `inject` 增加 `webServer`，版本升至 0.3.0 |
+| `client-ui-monitor/src/client.js` | `host.call('wf:status', ...)` → `fetch('/wf/status?workspaceRoot=...')`；保留模块级数据层 + 指纹防抖 + 2s 轮询；`ctx.interval` → `window.setInterval` |
+| `client-ui-monitor/build.js` | 移除 `require("@deepseek-ai/dsh-client-runtime").host`（该包不导出 host）；inject 改为 `['slots']` |
+| `workflow-rpc.mjs`（preset） | 停用/归档（harness RPC 由 webServer 路由替代）|
+| 安全 | loopback 检查：仅回环地址接受（仿 `@linxin666/dsh-tool-describe-image` 的 `isLoopbackRequest`）|
+
+**验证标准**：
+
+```
+启动工作流执行
+→ DAG 面板经 HTTP 轮询显示工作流状态（不再依赖 host.call）
+→ 节点颜色随 state.json 变化刷新（PENDING 灰 → RUNNING 蓝 → DONE 绿）
+→ 无 "Connecting..." 闪烁、无空白面板
+→ 浏览器 DevTools Network 可见周期性的 /wf/status 请求
+```
+
+**验证结果**（✅）：路由单测全通过；安装到 desktop profile（0.3.0）；Client bundle 进入 boot 图（新 rev）；DAG 图显示（节点颜色绿/红/琥珀 + 循环组折叠框 + 状态条正确）。详见 `progress-record.md` §6。
+
+**参考先例**：`@linxin666/dsh-tool-describe-image`（npm 包 + webServer + fetch，本机已运行）：
+- Host：`src/attach-routes.ts`（`webserver.register` + `isLoopbackRequest`）
+- Client：`src/client/attach.ts`（`fetch()` 同源相对路径）
+
+---
+
+### Iter-6: 循环错误处理 + DAG 布局优化（1 人天）
+
+**输入**：Iter-5 Host/Client 架构调整完成
 
 **修改范围**：
 
@@ -177,7 +215,7 @@ cordis_define(code.host=index.js) → cordis_run
 | `workflow-parser.js` | `normalizeTask()` 增加 `onError` 字段解析，默认 `break` |
 | `tools-preset.js` / `tools.js` | `expandLoopTasks()` 将 `onError` 复制到每个展开迭代的 `_onError` |
 | `engine.js` | 任务 FAILED 后检查 `_onError`：<br>— `break`：标记同组 PENDING → SKIPPED<br>— `continue`：继续执行<br>`getNextRunnableTask()` 跳过 SKIPPED 任务 |
-| `client-body.txt` | 循环组布局：<br>— ≤4 items：水平排列（同当前）<br>— >4 items：折叠态（进度条 + ✅🔄❌⏭ 计数）<br>— 点击展开：垂直列表<br>— SKIPPED 状态：琥珀色 `#f59e0b` + 虚线边框 |
+| `client-body.txt` | 循环组统一使用**折叠/展开布局**（不区分 item 数量）：<br>— 折叠态：背景框 + "↻" 标签 + 进度条 + ✅🔄❌⏭ 计数<br>— 展开态：垂直列表，每行一个 item + 状态颜色点<br>— SKIPPED 状态：琥珀色 `#f59e0b` + 虚线边框 |
 
 **验证标准**：
 
@@ -199,9 +237,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-6: 并发执行引擎（1 人天）
+### Iter-7: 并发执行引擎（1 人天）
 
-**输入**：Iter-5 循环错误处理完成
+**输入**：Iter-6 循环错误处理完成
 
 **修改范围**：
 
@@ -224,9 +262,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-7: 多实例管理（1 人天）
+### Iter-8: 多实例管理（1 人天）
 
-**输入**：Iter-6 并发可用
+**输入**：Iter-7 并发可用
 
 **修改范围**：
 
@@ -249,9 +287,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-8: 编排编辑器（1 人天）
+### Iter-9: 编排编辑器（1 人天）
 
-**输入**：Iter-7 多实例可用
+**输入**：Iter-8 多实例可用
 
 **产出**：`code/plugins/workflow-client/editor/`
 
@@ -276,7 +314,9 @@ cordis_define(code.host=index.js) → cordis_run
 
 | # | 风险 | 影响 | 被哪个迭代暴露 |
 |--|------|------|--------------|
-| R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-6 |
-| R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-5 |
-| R3 | 多实例切换时的状态一致性 | 高 | Iter-7 |
+| R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-7 |
+| R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-6 |
+| R3 | 多实例切换时的状态一致性 | 高 | Iter-8 |
 | R4 | DSH 版本产生接口变化 | 中 | 随时 |
+| R5 | webServer 路由冲突（`/wf/*` 与既有路由） | 中 | Iter-5 |
+| R6 | fetch 轮询跨域/同源策略限制 | 中 | Iter-5 |

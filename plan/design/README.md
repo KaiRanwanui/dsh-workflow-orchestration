@@ -10,6 +10,7 @@
 | `architecture-comparison.md` | `solutions/architecture-comparison.md` | 方案对比 |
 | `poc-plan.md` | `solutions/poc-plan.md` | PoC 验证计划 |
 | `PoC-design.md` | `PoC/design.md` | PoC 概念原型设计 |
+| `client-host-communication.md` | 架构决策 §5 | Client↔Host 通信方案对比（轮询 vs Host 推送） |
 
 ## 规划中
 
