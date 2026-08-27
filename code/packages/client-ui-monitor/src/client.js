@@ -143,24 +143,35 @@ export function register(ctx) {
     const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
     const mc = stage === 'COMPLETED' ? (gateResult === 'FAIL' ? C.FAILED : C.DONE) : stage === 'FAILED' ? C.FAILED : stage === 'RUNNING' ? C.RUNNING : C.PENDING
 
-    // 构建流程节点：普通 task + loop 组 + 并发组（Iter-7）
-    // 并发组 = 连续多个 dependsOn 完全相同的非循环 task（无相互依赖，可并行）
+    // 构建流程节点：start + 普通task / 垂直组(dependsOn相同无框) / loop折叠框 / concurrent折叠框 + end（Iter-8）
     const flat = Array.isArray(tasks) ? tasks : []
-    const flowNodes = [], loopGroups = []
+    const flowNodes = [], loopGroups = [], concGroups = []
     const depKeyOf = (t) => JSON.stringify((t.dependsOn || []).slice().sort())
+
+    // start 节点（流程起点）
+    flowNodes.push({ type: 'start' })
+
     for (let gi = 0; gi < flat.length;) {
       const t = flat[gi]
       if (t._loopGroup) {
+        // loop 折叠框
         const g = { key: t._loopGroup, name: t._loopGroupName || t._loopGroup, items: [] }
         while (gi < flat.length && flat[gi]._loopGroup === g.key) { g.items.push(flat[gi]); gi++ }
         loopGroups.push(g)
         flowNodes.push({ type: 'loop', group: g })
+      } else if (t._concurrentGroup) {
+        // Iter-8：concurrent 折叠框（⚡ 并发）
+        const g = { key: t._concurrentGroup, name: t._concurrentGroupName || t._concurrentGroup, items: [] }
+        while (gi < flat.length && flat[gi]._concurrentGroup === g.key) { g.items.push(flat[gi]); gi++ }
+        concGroups.push(g)
+        flowNodes.push({ type: 'concgroup', group: g })
       } else {
+        // 垂直组：连续多个 dependsOn 相同的 task（无线框，垂直排列，可并发）
         const depKey = depKeyOf(t)
         let j = gi + 1
-        while (j < flat.length && !flat[j]._loopGroup && depKeyOf(flat[j]) === depKey) j++
+        while (j < flat.length && !flat[j]._loopGroup && !flat[j]._concurrentGroup && depKeyOf(flat[j]) === depKey) j++
         if (j - gi > 1) {
-          flowNodes.push({ type: 'concurrent', tasks: flat.slice(gi, j), key: 'conc-' + t.id })
+          flowNodes.push({ type: 'vertgroup', tasks: flat.slice(gi, j), key: 'vg-' + t.id })
           gi = j
         } else {
           flowNodes.push({ type: 'task', task: t })
@@ -168,6 +179,9 @@ export function register(ctx) {
         }
       }
     }
+
+    // end 节点（流程终点）
+    flowNodes.push({ type: 'end' })
 
     const gW = 132, gH = 46, gHLoop = 64, gap = 44, pad = 24
     const gapV = 8, padV = 10 // Iter-7：并发组内垂直间隔 + 组框内 padding
@@ -191,7 +205,8 @@ export function register(ctx) {
     flowNodes.forEach((fn, fi) => {
       let h
       if (fn.type === 'loop') h = gHLoop
-      else if (fn.type === 'concurrent') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+      else if (fn.type === 'vertgroup') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+      else if (fn.type === 'concgroup') h = 26 + (fn.group.items.length * (gH + gapV)) + padV
       else h = gH
       const cy = 28
 
@@ -214,6 +229,20 @@ export function register(ctx) {
             textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
           }, t.id),
         )
+      } else if (fn.type === 'start') {
+        // start 节点（绿色椭圆，流程起点）
+        const cx = svgX + gW / 2, cyc = cy + gH / 2
+        svgChildren.push(
+          React.createElement('ellipse', { key: 'st', cx, cy: cyc, rx: gW / 2, ry: gH / 2, fill: '#22c55e' }),
+          React.createElement('text', { key: 'stt', x: cx, y: cyc + 4, textAnchor: 'middle', fill: '#fff', fontSize: 13, fontWeight: 700 }, '开始'),
+        )
+      } else if (fn.type === 'end') {
+        // end 节点（红色椭圆，流程终点）
+        const cx = svgX + gW / 2, cyc = cy + gH / 2
+        svgChildren.push(
+          React.createElement('ellipse', { key: 'en', cx, cy: cyc, rx: gW / 2, ry: gH / 2, fill: '#ef4444' }),
+          React.createElement('text', { key: 'ent', x: cx, y: cyc + 4, textAnchor: 'middle', fill: '#fff', fontSize: 13, fontWeight: 700 }, '结束'),
+        )
       } else if (fn.type === 'loop') {
         // Loop 组节点
         const g = fn.group
@@ -222,15 +251,42 @@ export function register(ctx) {
           selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
         })
         svgChildren.push(...lgEls)
-      } else {
-        // Iter-7：并发组——垂直并列 + 虚线线框，框上箭头指向后继
+      } else if (fn.type === 'concgroup') {
+        // Iter-8：concurrent 折叠框（⚡ 并发）
+        const g = fn.group
         svgChildren.push(
           React.createElement('rect', {
-            key: 'cbg' + fn.key, x: svgX, y: cy, width: gW, height: h, rx: 8,
-            fill: 'rgba(148,163,184,0.06)',
-            stroke: 'rgba(148,163,184,0.5)', strokeWidth: 1.5, strokeDasharray: '4 3'
-          })
+            key: 'cgbg' + g.key, x: svgX, y: cy, width: gW, height: h, rx: 8,
+            fill: 'rgba(59,130,246,0.1)', stroke: 'rgba(59,130,246,0.6)', strokeWidth: 1.5, strokeDasharray: '4 3'
+          }),
+          React.createElement('text', {
+            key: 'cgt' + g.key, x: svgX + gW / 2, y: cy + 18,
+            textAnchor: 'middle', fill: '#3b82f6', fontSize: 11, fontWeight: 700
+          }, '⚡ 并发 ' + g.name + ' (' + g.items.length + ')'),
+          React.createElement('text', {
+            key: 'cge' + g.key, x: svgX + gW - 8, y: cy + 18, textAnchor: 'end',
+            fill: '#3b82f6', fontSize: 12, cursor: 'pointer',
+            onClick: () => toggleGroup('cc-' + g.key)
+          }, expanded['cc-' + g.key] ? '▲' : '▼'),
         )
+        if (expanded['cc-' + g.key]) {
+          g.items.forEach((t, i) => {
+            const ty = cy + 26 + i * (gH + gapV)
+            const isSel = selectedId === t.id
+            svgChildren.push(
+              React.createElement('rect', {
+                key: 'r' + t.id, x: svgX + 4, y: ty, width: gW - 8, height: gH, rx: 6,
+                fill: C[t.status] || C.PENDING, opacity: 0.92,
+                stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
+                cursor: 'pointer', onClick: () => onSelect(t.id)
+              }),
+              React.createElement('text', { key: 't' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 5, textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600 }, t.name || t.id),
+              React.createElement('text', { key: 'u' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 18, textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10 }, t.id),
+            )
+          })
+        }
+      } else {
+        // Iter-8：依赖同一前驱的节点——垂直并列，无线框（各自独立，可并发）
         fn.tasks.forEach((t, i) => {
           const ty = cy + padV + i * (gH + gapV)
           const isSel = selectedId === t.id
@@ -256,7 +312,10 @@ export function register(ctx) {
       nodePositions.push({
         x: svgX, w: gW, h,
         type: fn.type,
-        key: fn.type === 'loop' ? fn.group.key : fn.type === 'concurrent' ? fn.key : fn.task.id
+        key: fn.type === 'start' || fn.type === 'end' ? fn.type
+          : fn.type === 'loop' || fn.type === 'concgroup' ? fn.group.key
+          : fn.type === 'vertgroup' ? fn.key
+          : fn.task.id
       })
       svgX += gW + gap
 
@@ -288,7 +347,8 @@ export function register(ctx) {
     const svgW = flowNodes.length ? pad * 2 + flowNodes.reduce((s, fn, i) => s + (i > 0 ? gap : 0) + gW, 0) : 0
     const maxH = flowNodes.reduce((mx, fn) => {
       const h = fn.type === 'loop' ? gHLoop
-        : fn.type === 'concurrent' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+        : fn.type === 'vertgroup' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+        : fn.type === 'concgroup' ? 26 + (fn.group.items.length * (gH + gapV)) + padV
         : gH
       return Math.max(mx, h)
     }, 0)
