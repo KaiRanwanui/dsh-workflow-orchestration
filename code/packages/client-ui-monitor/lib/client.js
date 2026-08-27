@@ -159,9 +159,11 @@ function register(ctx) {
     const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
     const mc = stage === 'COMPLETED' ? (gateResult === 'FAIL' ? C.FAILED : C.DONE) : stage === 'FAILED' ? C.FAILED : stage === 'RUNNING' ? C.RUNNING : C.PENDING
 
-    // 构建流程节点：普通 task + loop 组
+    // 构建流程节点：普通 task + loop 组 + 并发组（Iter-7）
+    // 并发组 = 连续多个 dependsOn 完全相同的非循环 task（无相互依赖，可并行）
     const flat = Array.isArray(tasks) ? tasks : []
     const flowNodes = [], loopGroups = []
+    const depKeyOf = (t) => JSON.stringify((t.dependsOn || []).slice().sort())
     for (let gi = 0; gi < flat.length;) {
       const t = flat[gi]
       if (t._loopGroup) {
@@ -170,12 +172,21 @@ function register(ctx) {
         loopGroups.push(g)
         flowNodes.push({ type: 'loop', group: g })
       } else {
-        flowNodes.push({ type: 'task', task: t })
-        gi++
+        const depKey = depKeyOf(t)
+        let j = gi + 1
+        while (j < flat.length && !flat[j]._loopGroup && depKeyOf(flat[j]) === depKey) j++
+        if (j - gi > 1) {
+          flowNodes.push({ type: 'concurrent', tasks: flat.slice(gi, j), key: 'conc-' + t.id })
+          gi = j
+        } else {
+          flowNodes.push({ type: 'task', task: t })
+          gi++
+        }
       }
     }
 
     const gW = 132, gH = 46, gHLoop = 64, gap = 44, pad = 24
+    const gapV = 8, padV = 10 // Iter-7：并发组内垂直间隔 + 组框内 padding
     let svgX = pad
     const svgChildren = []
 
@@ -194,7 +205,10 @@ function register(ctx) {
     const nodePositions = []
 
     flowNodes.forEach((fn, fi) => {
-      const h = fn.type === 'loop' ? gHLoop : gH
+      let h
+      if (fn.type === 'loop') h = gHLoop
+      else if (fn.type === 'concurrent') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+      else h = gH
       const cy = 28
 
       if (fn.type === 'task') {
@@ -216,7 +230,7 @@ function register(ctx) {
             textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
           }, t.id),
         )
-      } else {
+      } else if (fn.type === 'loop') {
         // Loop 组节点
         const g = fn.group
         const lgEls = LoopGroupNode({
@@ -224,11 +238,41 @@ function register(ctx) {
           selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
         })
         svgChildren.push(...lgEls)
+      } else {
+        // Iter-7：并发组——垂直并列 + 虚线线框，框上箭头指向后继
+        svgChildren.push(
+          React.createElement('rect', {
+            key: 'cbg' + fn.key, x: svgX, y: cy, width: gW, height: h, rx: 8,
+            fill: 'rgba(148,163,184,0.06)',
+            stroke: 'rgba(148,163,184,0.5)', strokeWidth: 1.5, strokeDasharray: '4 3'
+          })
+        )
+        fn.tasks.forEach((t, i) => {
+          const ty = cy + padV + i * (gH + gapV)
+          const isSel = selectedId === t.id
+          svgChildren.push(
+            React.createElement('rect', {
+              key: 'r' + t.id, x: svgX + 4, y: ty, width: gW - 8, height: gH, rx: 6,
+              fill: C[t.status] || C.PENDING, opacity: 0.92,
+              stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
+              cursor: 'pointer', onClick: () => onSelect(t.id)
+            }),
+            React.createElement('text', {
+              key: 't' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 5,
+              textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600
+            }, t.name || t.id),
+            React.createElement('text', {
+              key: 'u' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 18,
+              textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
+            }, t.id),
+          )
+        })
       }
 
       nodePositions.push({
-        x: svgX, w: gW, h: fn.type === 'loop' ? gHLoop : gH,
-        type: fn.type, key: fn.type === 'loop' ? fn.group.key : fn.task.id
+        x: svgX, w: gW, h,
+        type: fn.type,
+        key: fn.type === 'loop' ? fn.group.key : fn.type === 'concurrent' ? fn.key : fn.task.id
       })
       svgX += gW + gap
 
@@ -258,7 +302,12 @@ function register(ctx) {
     }
 
     const svgW = flowNodes.length ? pad * 2 + flowNodes.reduce((s, fn, i) => s + (i > 0 ? gap : 0) + gW, 0) : 0
-    const maxH = flowNodes.reduce((mx, fn) => Math.max(mx, fn.type === 'loop' ? gHLoop : gH), 0)
+    const maxH = flowNodes.reduce((mx, fn) => {
+      const h = fn.type === 'loop' ? gHLoop
+        : fn.type === 'concurrent' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+        : gH
+      return Math.max(mx, h)
+    }, 0)
     const svgH = 28 * 2 + maxH
 
     // 展开的列表（SVG 下方）
