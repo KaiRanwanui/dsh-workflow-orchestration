@@ -37,6 +37,8 @@
 
 | 今日 | **Iter-7 并发执行引擎 + DAG 并发组可视化** | ✅ 完成（getRunnableTasks + max-concurrency，59 单测通过） |
 
+| 今日 | **Iter-8 并发语义完善 + concurrent 节点 + DAG 增强** | ✅ 完成（组级/工作流级 max 最严格，65 单测通过） |
+
 ---
 
 ## 已完成工作
@@ -141,11 +143,28 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ---
 
+### 10. Iter-8: 并发语义完善 + concurrent 节点 + DAG 增强（✅ 完成）
+
+**迭代报告**：`plan/development/iter8-report.md`
+
+**核心交付**：
+- **并发语义**：`getRunnableTasks` 对 concurrent 迭代做组级并发控制（组内 RUNNING + 已列入 < 组级 max），与工作流级 max 取最严格者
+- **concurrent 节点**：`type: concurrent`（同 loop 结构 + 自身 max-concurrency）；`expandConcurrentTasks` 展开 N 个 item 迭代，迭代**无依赖**（可并发）；engine 存 `_concurrentGroup`/`_concurrentMax` 元数据
+- **DAG**：依赖同一前驱节点撤销线框改垂直排列；新增 start（绿实心圆点）/end（红空心圆圈）；concurrent 节点复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开，标注"⚡ 并发"）
+
+**验证**：单测 65/65（用例 7 共 6 断言）；在线验证 demo-concurrent 的组级并发动态 + DAG start/end + concurrent 实线节点。
+
+**提交**：`898ce53` + `8ca2ac0` + `127ec86` + `af7ce10` + `916a2ea` + `d508a15`
+
+**遗留**（用户确认延后修）：① 箭头 x 左右未连接图元边缘 ② 节点内长文字覆盖 ▶/▼ 图标 ③ 图元宽度偏窄——后续增加文字内容时统一调整。
+
+---
+
 ## 待办（下次启动）
 
-### Iter-8: 多实例管理（计划中）
+### Iter-9: 多实例管理（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-8）
+**迭代计划**：`plan/development/development-plan.md`（Iter-9）
 
 **目标**：多个工作流实例并行管理（定义多个流、暂停/切换/恢复）。
 
@@ -243,6 +262,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-5 报告 | `plan/development/iter5-report.md` |
 | Iter-6 报告 | `plan/development/iter6-report.md` |
 | Iter-7 报告 | `plan/development/iter7-report.md` |
+| Iter-8 报告 | `plan/development/iter8-report.md` |
 
 ---
 

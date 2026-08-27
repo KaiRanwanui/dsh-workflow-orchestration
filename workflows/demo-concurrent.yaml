@@ -1,0 +1,24 @@
+name: concurrent-demo
+version: "1.0"
+description: "Iter-8 并发节点验证"
+max-concurrency: 4
+
+tasks:
+  - id: req-analysis
+    name: "需求分析"
+    processor: skills/req-analysis/SKILL.md
+    outputs:
+      - "output/demo/analysis.md"
+
+  - id: batch-review
+    name: "逐模块并发评审"
+    type: concurrent
+    items-from: config/modules.txt
+    item-var: module
+    max-concurrency: 2
+    processor: skills/module-review/SKILL.md
+    inputs:
+      analysis: "output/demo/analysis.md"
+    outputs:
+      - "output/demo/review-${module}.md"
+    depends-on: [req-analysis]
