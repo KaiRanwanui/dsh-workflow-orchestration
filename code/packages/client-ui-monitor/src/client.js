@@ -199,16 +199,21 @@ export function register(ctx) {
       })
     }, [])
 
+    // 最高节点高度（统一垂直中心 + SVG 高度）
+    const nodeHeightOf = (fn) => {
+      if (fn.type === 'loop' || fn.type === 'concgroup') return gHLoop
+      if (fn.type === 'vertgroup') return 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
+      return gH
+    }
+    const maxH = flowNodes.reduce((mx, fn) => Math.max(mx, nodeHeightOf(fn)), 0)
+    const centerY = maxH / 2 + pad
+
     // 节点位置
     const nodePositions = []
 
     flowNodes.forEach((fn, fi) => {
-      let h
-      if (fn.type === 'loop') h = gHLoop
-      else if (fn.type === 'vertgroup') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-      else if (fn.type === 'concgroup') h = gHLoop
-      else h = gH
-      const cy = 28
+      const h = nodeHeightOf(fn)
+      const cy = fn.type === 'start' || fn.type === 'end' ? centerY - gH / 2 : centerY - h / 2
 
       if (fn.type === 'task') {
         const t = fn.task
@@ -231,15 +236,15 @@ export function register(ctx) {
         )
       } else if (fn.type === 'start') {
         // start 节点（绿色实心小圆点，流程起点）
-        const cx = svgX + gW / 2, cyc = cy + gH / 2
+        const cx = svgX + gW / 2
         svgChildren.push(
-          React.createElement('circle', { key: 'st', cx, cy: cyc, r: 12, fill: '#22c55e' }),
+          React.createElement('circle', { key: 'st', cx, cy: centerY, r: 12, fill: '#22c55e' }),
         )
       } else if (fn.type === 'end') {
         // end 节点（红色空心小圆圈，流程终点）
-        const cx = svgX + gW / 2, cyc = cy + gH / 2
+        const cx = svgX + gW / 2
         svgChildren.push(
-          React.createElement('circle', { key: 'en', cx, cy: cyc, r: 12, fill: 'none', stroke: '#ef4444', strokeWidth: 3 }),
+          React.createElement('circle', { key: 'en', cx, cy: centerY, r: 12, fill: 'none', stroke: '#ef4444', strokeWidth: 3 }),
         )
       } else if (fn.type === 'loop') {
         // Loop 组节点
@@ -253,7 +258,7 @@ export function register(ctx) {
         // Iter-8：concurrent 节点——复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开），标注 ⚡ 并发
         const g = fn.group
         const cgEls = LoopGroupNode({
-          x: svgX, y: cy, gW, gH: h, group: g,
+          x: svgX, y: cy, gW, gH: gHLoop, group: g,
           selectedId, onSelect, isExpanded: !!expanded['cc-' + g.key], onToggle: () => toggleGroup('cc-' + g.key),
           label: '\u26A1 并发 '
         })
@@ -292,14 +297,13 @@ export function register(ctx) {
       })
       svgX += gW + gap
 
-      // 箭头
+      // 箭头（统一 centerY，对准所有节点中心）
       if (fi < flowNodes.length - 1) {
-        const cyArrow = cy + h / 2
         svgChildren.push(
           React.createElement('line', {
             key: 'a' + fi,
-            x1: svgX - gap + 3, y1: cyArrow, // 当前节点右侧边缘
-            x2: svgX - 3, y2: cyArrow, // 下一个节点左侧边缘
+            x1: svgX - gap + 3, y1: centerY,
+            x2: svgX - 3, y2: centerY,
             stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#da)'
           }),
         )
@@ -318,14 +322,7 @@ export function register(ctx) {
     }
 
     const svgW = flowNodes.length ? pad * 2 + flowNodes.reduce((s, fn, i) => s + (i > 0 ? gap : 0) + gW, 0) : 0
-    const maxH = flowNodes.reduce((mx, fn) => {
-      const h = fn.type === 'loop' ? gHLoop
-        : fn.type === 'vertgroup' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-        : fn.type === 'concgroup' ? gHLoop
-        : gH
-      return Math.max(mx, h)
-    }, 0)
-    const svgH = 28 * 2 + maxH
+    const svgH = maxH + 2 * pad
 
     // 展开的列表（SVG 下方）
     const listElems = []
