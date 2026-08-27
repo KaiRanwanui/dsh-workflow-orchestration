@@ -35,6 +35,10 @@
 
 ---
 
+| 今日 | **Iter-7 并发执行引擎 + DAG 并发组可视化** | ✅ 完成（getRunnableTasks + max-concurrency，59 单测通过） |
+
+---
+
 ## 已完成工作
 
 ### 6. Iter-5: Host/Client 架构调整 — Client RPC 链路修复（✅ 完成）
@@ -121,13 +125,29 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ---
 
+### 9. Iter-7: 并发执行引擎 + DAG 并发组可视化（✅ 完成）
+
+**迭代报告**：`plan/development/iter7-report.md`
+
+**核心交付**：
+- `getRunnableTasks()`：就绪 = 前驱全 DONE/SKIPPED，槽位 = maxConcurrency - 当前 RUNNING；snapshot 输出 `runnable` 列表
+- 工作流级 `max-concurrency` 字段（默认 1=串行，>1 并发）
+- system-prompt 执行模型 v1 串行 → v2 并发（以 `runnable` 为准）
+- DAG 并发组可视化：dependsOn 相同的连续任务垂直并列 + 虚线线框 + 箭头指向后继
+
+**验证**：单测 59/59（用例 6 共 9 断言）；在线验证 concurrent-demo 的 runnable 动态变化 + DAG 并发组显示。
+
+**提交**：`c6b140f` + `ff3a334` + `1b2ece0` + `ec1f0f0`
+
+---
+
 ## 待办（下次启动）
 
-### Iter-7: 并发执行引擎（计划中）
+### Iter-8: 多实例管理（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-7）
+**迭代计划**：`plan/development/development-plan.md`（Iter-8）
 
-**目标**：就绪队列 + 并发调度器；max-concurrency 生效；无依赖 Task 并行执行；循环迭代并发。
+**目标**：多个工作流实例并行管理（定义多个流、暂停/切换/恢复）。
 
 ---
 
@@ -222,6 +242,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-3 报告 | `plan/development/iter3-report.md` |
 | Iter-5 报告 | `plan/development/iter5-report.md` |
 | Iter-6 报告 | `plan/development/iter6-report.md` |
+| Iter-7 报告 | `plan/development/iter7-report.md` |
 
 ---
 
