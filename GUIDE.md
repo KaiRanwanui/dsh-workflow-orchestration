@@ -14,23 +14,7 @@
   - **Host 侧插件**（部署在 Agent 执行侧 / desktop profile）：引擎 + 工具 + webServer 路由
   - **Client 侧插件**（部署在 Web UI）：DAG 监控面板
 
-## 2. 当前迭代状态（速览）
-
-| 迭代 | 名称 | 状态 |
-|------|------|------|
-| Iter-1 | Host 插件 — 引擎基础 | ✅ 完成 |
-| Iter-2 | Agent Preset — 串行编排 | ✅ 完成 |
-| Iter-3 | Client 插件 — 监控面板 | ✅ 完成 |
-| Iter-4 | 循环 + 循环展开 | ✅ 完成 |
-| **Iter-5** | **Host/Client 架构调整 — Client RPC 链路修复（HTTP 轮询）** | ✅ **完成** |
-| **Iter-6** | **循环错误处理 + DAG 布局优化** | 📌 **下一个** |
-| Iter-7 | 并发执行引擎 | 计划 |
-| Iter-8 | 多实例管理 | 计划 |
-| Iter-9 | 编排编辑器 | 计划 |
-
----
-
-## 3. 阅读顺序（新会话 LLM 必读）
+## 2. 阅读顺序（新会话 LLM 必读）
 
 > 按顺序读，每篇都是下一篇的上下文基础。
 
@@ -60,7 +44,7 @@
 
 ---
 
-## 4. 代码结构导航
+## 3. 代码结构导航
 
 ```
 workflow-agent/
@@ -97,7 +81,7 @@ workflow-agent/
 
 ---
 
-## 5. 关键机制速查（当前方案）
+## 4. 关键机制速查（当前方案）
 
 ### 5.1 Client↔Host 通信：HTTP 轮询
 
@@ -120,7 +104,7 @@ workflow-agent/
 
 ---
 
-## 6. 开发流程（当前）
+## 5. 开发流程（当前）
 
 1. 改源码（`code/packages/*/src/` 或 `code/agent-presets/.../workflow-host.mjs`）
 2. `node build.js` 打包（workflow-host 或 client-ui-monitor）
@@ -131,7 +115,7 @@ workflow-agent/
 
 ---
 
-## 7. 团队约定摘要
+## 6. 团队约定摘要
 
 - **上下文压力处理**：上下文紧张时主动告知，不擅自压缩/省略
 - **差分验证原则**：一次只改一个维度，改完立即验证
