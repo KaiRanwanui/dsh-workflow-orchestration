@@ -222,7 +222,7 @@ function register(ctx) {
       let h
       if (fn.type === 'loop') h = gHLoop
       else if (fn.type === 'vertgroup') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-      else if (fn.type === 'concgroup') h = expanded['cc-' + fn.group.key] ? (26 + (fn.group.items.length * (gH + gapV)) + padV) : gH
+      else if (fn.type === 'concgroup') h = gHLoop
       else h = gH
       const cy = 28
 
@@ -246,18 +246,16 @@ function register(ctx) {
           }, t.id),
         )
       } else if (fn.type === 'start') {
-        // start 节点（绿色椭圆，流程起点）
+        // start 节点（绿色实心小圆点，流程起点）
         const cx = svgX + gW / 2, cyc = cy + gH / 2
         svgChildren.push(
-          React.createElement('ellipse', { key: 'st', cx, cy: cyc, rx: gW / 2, ry: gH / 2, fill: '#22c55e' }),
-          React.createElement('text', { key: 'stt', x: cx, y: cyc + 4, textAnchor: 'middle', fill: '#fff', fontSize: 13, fontWeight: 700 }, '开始'),
+          React.createElement('circle', { key: 'st', cx, cy: cyc, r: 12, fill: '#22c55e' }),
         )
       } else if (fn.type === 'end') {
-        // end 节点（红色椭圆，流程终点）
+        // end 节点（红色空心小圆圈，流程终点）
         const cx = svgX + gW / 2, cyc = cy + gH / 2
         svgChildren.push(
-          React.createElement('ellipse', { key: 'en', cx, cy: cyc, rx: gW / 2, ry: gH / 2, fill: '#ef4444' }),
-          React.createElement('text', { key: 'ent', x: cx, y: cyc + 4, textAnchor: 'middle', fill: '#fff', fontSize: 13, fontWeight: 700 }, '结束'),
+          React.createElement('circle', { key: 'en', cx, cy: cyc, r: 12, fill: 'none', stroke: '#ef4444', strokeWidth: 3 }),
         )
       } else if (fn.type === 'loop') {
         // Loop 组节点
@@ -339,7 +337,7 @@ function register(ctx) {
     const maxH = flowNodes.reduce((mx, fn) => {
       const h = fn.type === 'loop' ? gHLoop
         : fn.type === 'vertgroup' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-        : fn.type === 'concgroup' ? (expanded['cc-' + fn.group.key] ? (26 + (fn.group.items.length * (gH + gapV)) + padV) : gH)
+        : fn.type === 'concgroup' ? gHLoop
         : gH
       return Math.max(mx, h)
     }, 0)
