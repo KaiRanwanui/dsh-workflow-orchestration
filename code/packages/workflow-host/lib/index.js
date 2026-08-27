@@ -511,7 +511,20 @@ function createWorkflowEngine() {
     if (patch.error !== undefined) t.error = patch.error
     state.updatedAt = Date.now()
     log('TASK', taskId + ' -> ' + t.status)
+    // Iter-6：任务 FAILED 后按 _onError 处理循环中断
+    //   break    → 同组后续 PENDING 迭代标记 SKIPPED（中断）
+    //   continue → 不中断，后续迭代继续执行
+    if (t.status === E_TASK_STATUS.FAILED && t._onError === 'break') {
+      processBreak(taskId)
+    }
     return true
+  }
+
+  // Iter-6：返回下一个可运行任务（跳过 SKIPPED 与非 PENDING 任务）
+  // 串行架构下由编排 Agent 调用 workflow_status 后自行推导；本函数供
+  // 未来并发引擎（Iter-7）复用，SKIPPED 任务天然不满足 status===PENDING。
+  function getNextRunnableTask() {
+    return state.tasks.find((t) => t.status === E_TASK_STATUS.PENDING) || null
   }
 
   function setStage(s) {
@@ -601,6 +614,12 @@ function createWorkflowEngine() {
       gate: t.gate || null,
       gateResult: t.gateResult || null,
       retries: t.retries || 0,
+      // Iter-6：恢复循环元数据（processBreak 与 Client DAG 分组依赖）
+      _loopGroup: t._loopGroup || null,
+      _loopItem: t._loopItem || null,
+      _loopIndex: t._loopIndex ?? 0,
+      _loopGroupName: t._loopGroupName || null,
+      _onError: t._onError || null,
     })) : []
     state.updatedAt = Date.now()
   }
@@ -611,6 +630,7 @@ function createWorkflowEngine() {
     hydrate,
     updateTask,
     processBreak,
+    getNextRunnableTask,
     setStage,
     setGateResult,
     setRetries,
