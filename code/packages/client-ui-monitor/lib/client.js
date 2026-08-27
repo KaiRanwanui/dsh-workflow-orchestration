@@ -111,7 +111,7 @@ function register(ctx) {
       }),
       React.createElement('text', {
         key: 'tt', x: tx, y: ty, fill: '#fff', fontSize: 11, fontWeight: 600
-      }, '\u21BB ' + group.name + ' (' + total + ')'),
+      }, (props.label || '\u21BB ') + group.name + ' (' + total + ')'),
     ]
 
     // 进度条
@@ -268,39 +268,14 @@ function register(ctx) {
         })
         svgChildren.push(...lgEls)
       } else if (fn.type === 'concgroup') {
-        // Iter-8：concurrent 折叠框（⚡ 并发）
+        // Iter-8：concurrent 节点——复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开），标注 ⚡ 并发
         const g = fn.group
-        svgChildren.push(
-          React.createElement('rect', {
-            key: 'cgbg' + g.key, x: svgX, y: cy, width: gW, height: h, rx: 8,
-            fill: 'rgba(59,130,246,0.1)', stroke: 'rgba(59,130,246,0.6)', strokeWidth: 1.5, strokeDasharray: '4 3'
-          }),
-          React.createElement('text', {
-            key: 'cgt' + g.key, x: svgX + gW / 2, y: cy + 18,
-            textAnchor: 'middle', fill: '#3b82f6', fontSize: 11, fontWeight: 700
-          }, '⚡ 并发 ' + g.name + ' (' + g.items.length + ')'),
-          React.createElement('text', {
-            key: 'cge' + g.key, x: svgX + gW - 8, y: cy + 18, textAnchor: 'end',
-            fill: '#3b82f6', fontSize: 12, cursor: 'pointer',
-            onClick: () => toggleGroup('cc-' + g.key)
-          }, expanded['cc-' + g.key] ? '▲' : '▼'),
-        )
-        if (expanded['cc-' + g.key]) {
-          g.items.forEach((t, i) => {
-            const ty = cy + 26 + i * (gH + gapV)
-            const isSel = selectedId === t.id
-            svgChildren.push(
-              React.createElement('rect', {
-                key: 'r' + t.id, x: svgX + 4, y: ty, width: gW - 8, height: gH, rx: 6,
-                fill: C[t.status] || C.PENDING, opacity: 0.92,
-                stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
-                cursor: 'pointer', onClick: () => onSelect(t.id)
-              }),
-              React.createElement('text', { key: 't' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 5, textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600 }, t.name || t.id),
-              React.createElement('text', { key: 'u' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 18, textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10 }, t.id),
-            )
-          })
-        }
+        const cgEls = LoopGroupNode({
+          x: svgX, y: cy, gW, gH: h, group: g,
+          selectedId, onSelect, isExpanded: !!expanded['cc-' + g.key], onToggle: () => toggleGroup('cc-' + g.key),
+          label: '\u26A1 并发 '
+        })
+        svgChildren.push(...cgEls)
       } else {
         // Iter-8：依赖同一前驱的节点——垂直并列，无线框（各自独立，可并发）
         fn.tasks.forEach((t, i) => {
@@ -341,8 +316,8 @@ function register(ctx) {
         svgChildren.push(
           React.createElement('line', {
             key: 'a' + fi,
-            x1: svgX - gap - gap / 2, y1: cyArrow,
-            x2: svgX - gap / 2, y2: cyArrow,
+            x1: svgX - gap + 3, y1: cyArrow, // 当前节点右侧边缘
+            x2: svgX - 3, y2: cyArrow, // 下一个节点左侧边缘
             stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#da)'
           }),
         )
@@ -386,6 +361,45 @@ function register(ctx) {
             width: listW + 'px',
             background: 'rgba(148,163,184,0.05)',
             border: '1px solid rgba(148,163,184,0.2)',
+            borderTop: 'none',
+            borderBottomLeftRadius: 8, borderBottomRightRadius: 8,
+            padding: '4px 0',
+            fontSize: 12,
+          },
+        }, g.items.map((t, i) => {
+          const sel = selectedId === t.id
+          return React.createElement('div', {
+            key: t.id, onClick: () => onSelect(t.id),
+            style: {
+              display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+              cursor: 'pointer', background: sel ? 'rgba(59,130,246,0.1)' : 'transparent',
+            },
+          }, [
+            React.createElement('span', {
+              style: { width: 8, height: 8, borderRadius: 4, background: C[t.status] || C.PENDING, flexShrink: 0 }
+            }),
+            React.createElement('span', { style: { flex: 1, color: '#475569' } }, (i + 1) + '. ' + (t.name || t.id)),
+            React.createElement('span', { style: { color: '#64748b', fontSize: 11 } }, t.status),
+          ])
+        }))
+      )
+    })
+
+    // Iter-8：concurrent 组展开列表（SVG 下方，同 loop）
+    concGroups.forEach(g => {
+      if (!expanded['cc-' + g.key]) return
+      const pos = nodePositions.find(p => p.type === 'concgroup' && p.key === g.key)
+      if (!pos) return
+      const listX = pos.x
+      const listW = gW
+      listElems.push(
+        React.createElement('div', {
+          key: 'cl' + g.key,
+          style: {
+            marginLeft: listX + 'px',
+            width: listW + 'px',
+            background: 'rgba(59,130,246,0.05)',
+            border: '1px solid rgba(59,130,246,0.2)',
             borderTop: 'none',
             borderBottomLeftRadius: 8, borderBottomRightRadius: 8,
             padding: '4px 0',
