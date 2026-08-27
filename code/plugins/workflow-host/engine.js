@@ -28,7 +28,7 @@ function taskSnapshot(t) {
     retries: t.retries || 0,
     _loopGroup: t._loopGroup || null,
     _loopItem: t._loopItem || null,
-    _loopIndex: t._loopIndex,
+    _loopIndex: t._loopIndex ?? 0,
     _loopGroupName: t._loopGroupName || null,
     _onError: t._onError || null,
   }
@@ -98,7 +98,7 @@ function createWorkflowEngine() {
       retries: 0,
       _loopGroup: t._loopGroup || null,
       _loopItem: t._loopItem || null,
-      _loopIndex: t._loopIndex,
+      _loopIndex: t._loopIndex ?? 0,
       _loopGroupName: t._loopGroupName || null,
       _onError: t._onError || null,
     }))
