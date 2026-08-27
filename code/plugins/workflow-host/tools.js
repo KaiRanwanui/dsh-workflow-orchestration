@@ -102,6 +102,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
       _loopGroupName: loopTask.name || loopTask.id,
       _loopItem: item,
       _loopIndex: i,
+      _onError: loopTask.onError || 'break',
     })
     prevId = iterId
   }

@@ -117,6 +117,8 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
       inputs: iterInputs,
       outputs: iterOutputs,
       gate: iterGate,
+      // 循环错误处理策略
+      _onError: loopTask.onError || 'break',
       // 循环组元数据（供 Client DAG 分组渲染）
       _loopGroup: loopTask.id,
       _loopGroupName: loopTask.name || loopTask.id,

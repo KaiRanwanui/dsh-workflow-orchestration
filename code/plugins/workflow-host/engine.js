@@ -26,6 +26,11 @@ function taskSnapshot(t) {
     gateResult: t.gateResult || null,
     gateOnFailure: t.gateOnFailure || null,
     retries: t.retries || 0,
+    _loopGroup: t._loopGroup || null,
+    _loopItem: t._loopItem || null,
+    _loopIndex: t._loopIndex,
+    _loopGroupName: t._loopGroupName || null,
+    _onError: t._onError || null,
   }
 }
 
@@ -91,6 +96,11 @@ function createWorkflowEngine() {
       gate: t.gate || null, // {checker, onFailure, maxRetries}
       gateResult: null,
       retries: 0,
+      _loopGroup: t._loopGroup || null,
+      _loopItem: t._loopItem || null,
+      _loopIndex: t._loopIndex,
+      _loopGroupName: t._loopGroupName || null,
+      _onError: t._onError || null,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -135,6 +145,22 @@ function createWorkflowEngine() {
 
   function setPersist(r) {
     state.persist = r
+  }
+
+  // 当 task FAILED 且 _onError === 'break' 时，将同 _loopGroup 的 PENDING 任务标记为 SKIPPED
+  function processBreak(taskId) {
+    const failed = state.tasks.find((x) => x.id === taskId)
+    if (!failed || !failed._loopGroup || failed._onError !== 'break') return false
+    let skipped = 0
+    state.tasks.forEach((t) => {
+      if (t._loopGroup === failed._loopGroup && t.status === E_TASK_STATUS.PENDING && t.id !== taskId) {
+        t.status = E_TASK_STATUS.SKIPPED
+        t.error = '循环中断：前序迭代 "' + failed.id + '" 失败'
+        skipped++
+      }
+    })
+    if (skipped > 0) log('BREAK', '循环 "' + failed._loopGroup + '" 中断，跳过 ' + skipped + ' 个任务')
+    return skipped > 0
   }
 
   function log(action, detail) {
@@ -189,6 +215,7 @@ function createWorkflowEngine() {
     clear,
     hydrate,
     updateTask,
+    processBreak,
     setStage,
     setGateResult,
     setRetries,

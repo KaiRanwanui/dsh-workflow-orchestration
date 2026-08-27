@@ -253,6 +253,12 @@ function normalizeTask(t, idx, errors) {
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    // 循环错误处理策略
+    const onError = t['on-error'] || 'break'
+    if (['break', 'continue'].indexOf(onError) === -1) {
+      errors.push('Task "' + id + '" 的 on-error 必须是 break|continue，实际: ' + onError)
+    }
+    base.onError = onError
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
     if (!base.prompt) errors.push('Task "' + id + '" 缺少必填字段: prompt')

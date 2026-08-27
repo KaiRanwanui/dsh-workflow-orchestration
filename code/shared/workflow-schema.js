@@ -30,7 +30,10 @@ const REQUIRED = {
   externalAgent: ['id', 'agent'],
 }
 
-// ── 支持 quality-gate on-failure 的策略值 ──────────────────────────────────
+// ── 循环错误处理策略 ──────────────────────────────────────────────────────────
+const ON_ERROR_VALUES = ['break', 'continue']
+
+// ─ 支持 uality-gate on-failure  的策略值 ──────────────────────────────────
 const ON_FAILURE_VALUES = ['retry', 'block', 'skip']
 
 // ── 参数模板正则（${param_name} / ${item}） ────────────────────────────────
@@ -61,6 +64,7 @@ if (typeof module !== 'undefined' && module.exports) {
     DEFAULTS,
     REQUIRED,
     ON_FAILURE_VALUES,
+    ON_ERROR_VALUES,
     PARAM_PATTERN,
     TASK_STATUS,
     STAGE,

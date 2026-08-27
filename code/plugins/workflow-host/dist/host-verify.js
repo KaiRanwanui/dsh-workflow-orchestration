@@ -17,6 +17,7 @@ loop: ['id', 'processor', 'items-from', 'item-var'],
 humanDecision: ['id', 'prompt'],
 externalAgent: ['id', 'agent'],
 }
+const ON_ERROR_VALUES = ['break', 'continue']
 const ON_FAILURE_VALUES = ['retry', 'block', 'skip']
 const PARAM_PATTERN = /\$\{(\w+)\}/g
 const TASK_STATUS = {
@@ -239,6 +240,11 @@ if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: 
 if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
 base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
 base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+const onError = t['on-error'] || 'break'
+if (['break', 'continue'].indexOf(onError) === -1) {
+errors.push('Task "' + id + '" 的 on-error 必须是 break|continue，实际: ' + onError)
+}
+base.onError = onError
 } else if (type === 'human-decision') {
 base.prompt = t.prompt != null ? String(t.prompt) : null
 if (!base.prompt) errors.push('Task "' + id + '" 缺少必填字段: prompt')
@@ -286,6 +292,11 @@ gateChecker: (t.gate && t.gate.checker) || null, // 门禁技能绝对路径
 gateResult: t.gateResult || null,
 gateOnFailure: t.gateOnFailure || null,
 retries: t.retries || 0,
+_loopGroup: t._loopGroup || null,
+_loopItem: t._loopItem || null,
+_loopIndex: t._loopIndex,
+_loopGroupName: t._loopGroupName || null,
+_onError: t._onError || null,
 }
 }
 function createWorkflowEngine() {
@@ -345,6 +356,11 @@ outputs: t.outputs || [],
 gate: t.gate || null, // {checker, onFailure, maxRetries}
 gateResult: null,
 retries: 0,
+_loopGroup: t._loopGroup || null,
+_loopItem: t._loopItem || null,
+_loopIndex: t._loopIndex,
+_loopGroupName: t._loopGroupName || null,
+_onError: t._onError || null,
 }))
 state.updatedAt = Date.now()
 log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -382,6 +398,20 @@ if (msg) log('ERROR', msg)
 }
 function setPersist(r) {
 state.persist = r
+}
+function processBreak(taskId) {
+const failed = state.tasks.find((x) => x.id === taskId)
+if (!failed || !failed._loopGroup || failed._onError !== 'break') return false
+let skipped = 0
+state.tasks.forEach((t) => {
+if (t._loopGroup === failed._loopGroup && t.status === E_TASK_STATUS.PENDING && t.id !== taskId) {
+t.status = E_TASK_STATUS.SKIPPED
+t.error = '循环中断：前序迭代 "' + failed.id + '" 失败'
+skipped++
+}
+})
+if (skipped > 0) log('BREAK', '循环 "' + failed._loopGroup + '" 中断，跳过 ' + skipped + ' 个任务')
+return skipped > 0
 }
 function log(action, detail) {
 state.logs.push({ ts: Date.now(), action, detail })
@@ -431,6 +461,7 @@ begin,
 clear,
 hydrate,
 updateTask,
+processBreak,
 setStage,
 setGateResult,
 setRetries,
@@ -601,6 +632,7 @@ _loopGroup: loopTask.id,
 _loopGroupName: loopTask.name || loopTask.id,
 _loopItem: item,
 _loopIndex: i,
+_onError: loopTask.onError || 'break',
 })
 prevId = iterId
 }

@@ -15,3 +15,19 @@ output/
 
 # Git
 *.orig
+
+# 调试残留（Iter-3 动态插件开发产物，不入库）
+code/plugins/workflow-client/_client-*
+code/plugins/workflow-client/_code-*
+code/plugins/workflow-client/_define-*
+code/plugins/workflow-client/_full-*
+code/plugins/workflow-client/_host-*
+code/plugins/workflow-client/_payload-*
+code/plugins/workflow-client/_test-*
+code/plugins/workflow-client/build-client.js
+code/plugins/workflow-client/build-json.js
+code/plugins/workflow-client/build-payload.js
+code/plugins/workflow-client/build-v8.js
+code/plugins/workflow-client/client-out.txt
+code/plugins/workflow-client/host-out.txt
+code/plugins/workflow-client/define.json

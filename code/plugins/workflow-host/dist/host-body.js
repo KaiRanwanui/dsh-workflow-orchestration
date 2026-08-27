@@ -34,7 +34,10 @@ const REQUIRED = {
   externalAgent: ['id', 'agent'],
 }
 
-// ── 支持 quality-gate on-failure 的策略值 ──────────────────────────────────
+// ── 循环错误处理策略 ──────────────────────────────────────────────────────────
+const ON_ERROR_VALUES = ['break', 'continue']
+
+// ─ 支持 uality-gate on-failure  的策略值 ──────────────────────────────────
 const ON_FAILURE_VALUES = ['retry', 'block', 'skip']
 
 // ── 参数模板正则（${param_name} / ${item}） ────────────────────────────────
@@ -316,6 +319,12 @@ function normalizeTask(t, idx, errors) {
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    // 循环错误处理策略
+    const onError = t['on-error'] || 'break'
+    if (['break', 'continue'].indexOf(onError) === -1) {
+      errors.push('Task "' + id + '" 的 on-error 必须是 break|continue，实际: ' + onError)
+    }
+    base.onError = onError
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
     if (!base.prompt) errors.push('Task "' + id + '" 缺少必填字段: prompt')
@@ -383,6 +392,11 @@ function taskSnapshot(t) {
     gateResult: t.gateResult || null,
     gateOnFailure: t.gateOnFailure || null,
     retries: t.retries || 0,
+    _loopGroup: t._loopGroup || null,
+    _loopItem: t._loopItem || null,
+    _loopIndex: t._loopIndex,
+    _loopGroupName: t._loopGroupName || null,
+    _onError: t._onError || null,
   }
 }
 
@@ -448,6 +462,11 @@ function createWorkflowEngine() {
       gate: t.gate || null, // {checker, onFailure, maxRetries}
       gateResult: null,
       retries: 0,
+      _loopGroup: t._loopGroup || null,
+      _loopItem: t._loopItem || null,
+      _loopIndex: t._loopIndex,
+      _loopGroupName: t._loopGroupName || null,
+      _onError: t._onError || null,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -492,6 +511,22 @@ function createWorkflowEngine() {
 
   function setPersist(r) {
     state.persist = r
+  }
+
+  // 当 task FAILED 且 _onError === 'break' 时，将同 _loopGroup 的 PENDING 任务标记为 SKIPPED
+  function processBreak(taskId) {
+    const failed = state.tasks.find((x) => x.id === taskId)
+    if (!failed || !failed._loopGroup || failed._onError !== 'break') return false
+    let skipped = 0
+    state.tasks.forEach((t) => {
+      if (t._loopGroup === failed._loopGroup && t.status === E_TASK_STATUS.PENDING && t.id !== taskId) {
+        t.status = E_TASK_STATUS.SKIPPED
+        t.error = '循环中断：前序迭代 "' + failed.id + '" 失败'
+        skipped++
+      }
+    })
+    if (skipped > 0) log('BREAK', '循环 "' + failed._loopGroup + '" 中断，跳过 ' + skipped + ' 个任务')
+    return skipped > 0
   }
 
   function log(action, detail) {
@@ -546,6 +581,7 @@ function createWorkflowEngine() {
     clear,
     hydrate,
     updateTask,
+    processBreak,
     setStage,
     setGateResult,
     setRetries,
@@ -775,6 +811,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
       _loopGroupName: loopTask.name || loopTask.id,
       _loopItem: item,
       _loopIndex: i,
+      _onError: loopTask.onError || 'break',
     })
     prevId = iterId
   }

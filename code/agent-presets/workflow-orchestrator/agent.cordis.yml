@@ -86,9 +86,18 @@
         backgroundMode: continuable
 
 # ── 工作流引擎本地插件（workflow_begin / workflow_status）────────────────
-# 构建自 code/scripts/build-preset.js；修改源码后请重新构建。
-- id: workflow-host
-  name: ./workflow-host.mjs
+# 已迁移至 desktop profile npm 包 @workflow-agent/workflow-host
+# 不再需要 preset 本地挂载 workflow-host.mjs
+# - id: workflow-host
+#   name: ./workflow-host.mjs
+
+# ── RPC 处理器（已停用 — Iter-5 由 webServer 路由替代）────────────────
+# 原 workflow-rpc.mjs 注册 wf:status / wf:skill / wf:config（harness.handle），
+# 依赖 harness Builtin（仅动态插件/preset 本地插件可用）。
+# Iter-5 起改为 workflow-host npm 包注册 webServer HTTP 路由（/wf/*），
+# Client 用 fetch 轮询，不再需要本插件。
+# - id: workflow-rpc
+#   name: ./workflow-rpc.mjs
 
 # ── 文件与技能工具（消费宿主 fs / skill 注册表）─────────────────────────
 - id: tool-fs

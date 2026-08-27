@@ -1,0 +1,403 @@
+// Workflow Agent DAG 监控面板 - npm 包版本
+// 从动态插件 wff-9/pkg-14 迁移而来
+
+export function register(ctx) {
+  const slots = ctx.get('slots')
+  if (!slots) return
+
+  // ── 模块级数据层（防止 remount 闪烁）────────────────────────────
+  let latest = null, lastError = null
+  const listeners = new Set()
+  let pollingActive = false, wfRoot = '', wfLoaded = false
+
+  function fingerprint(state) {
+    if (!state || !state.tasks) return ''
+    const t = state.tasks.map(x => x.id + ':' + x.status).join(',')
+    return [state.stage || '', state.gateResult || '', state.retries || 0, t].join('|')
+  }
+
+  function publish(state) {
+    const fp = state ? fingerprint(state) : ''
+    if (fp && latest && latest.__fp === fp) return
+    if (state) state.__fp = fp
+    latest = state; lastError = state ? null : 'disconnected'
+    listeners.forEach(fn => { try { fn() } catch(e) {} })
+  }
+
+  // ── 轮询逻辑 ───────────────────────────────────────────────────
+  ctx.effect(() => {
+    if (pollingActive) return
+    pollingActive = true
+    let stop = false
+
+    window.__wfSetRoot = r => { wfRoot = r }
+
+    const refresh = async () => {
+      if (stop) return
+      try {
+        // Iter-5：webServer HTTP 路由替代 harness RPC（host.call）
+        const resp = await fetch('/wf/status?workspaceRoot=' + encodeURIComponent(wfRoot || ''))
+        const s = await resp.json()
+        if (!stop) publish(s)
+      } catch(e) {
+        if (!stop) {
+          lastError = e && e.message ? e.message : String(e)
+          listeners.forEach(fn => { try { fn() } catch(e2) {} })
+        }
+      }
+    }
+
+    refresh()
+    // 浏览器原生定时器（npm 包 Client 半边无 timer 服务；官方 client 插件同用 setInterval）
+    const d = window.setInterval(refresh, 2000)
+
+    return () => {
+      stop = true
+      pollingActive = false
+      window.clearInterval(d)
+      delete window.__wfSetRoot
+    }
+  })
+
+  // ── 颜色映射 ────────────────────────────────────────────────────
+  const C = {
+    PENDING: '#9ca3af',
+    RUNNING: '#3b82f6',
+    DONE: '#22c55e',
+    FAILED: '#ef4444',
+    SKIPPED: '#f59e0b'
+  }
+
+  // ── LoopGroup 节点组件 ─────────────────────────────────────────
+  function LoopGroupNode(props) {
+    const { x, y, gW, gH, group, selectedId, onSelect, isExpanded, onToggle } = props
+    const items = group.items, total = items.length
+    const counts = { PENDING: 0, RUNNING: 0, DONE: 0, FAILED: 0, SKIPPED: 0 }
+    items.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1 })
+    const aggStatus = counts.RUNNING > 0 ? 'RUNNING' : counts.FAILED > 0 ? 'FAILED' : counts.SKIPPED > 0 ? 'SKIPPED' : counts.DONE === total ? 'DONE' : 'PENDING'
+    const mc = C[aggStatus] || C.PENDING
+    const isSel = selectedId === group.key
+
+    const segs = []
+    const segTypes = ['DONE','RUNNING','FAILED','SKIPPED','PENDING']
+    segTypes.forEach(st => { if (counts[st] > 0) segs.push({ c: C[st], n: counts[st] }) })
+
+    const tx = x + 8, ty = y + 16, barY = y + 33, countY = y + 45
+    const barW = gW - 16
+    const els = [
+      React.createElement('rect', {
+        key: 'bg', x, y, width: gW, height: gH, rx: 8,
+        fill: mc, opacity: 0.92,
+        stroke: isSel ? '#fff' : 'transparent',
+        strokeWidth: isSel ? 3 : 0,
+        cursor: 'pointer',
+        onClick: () => onSelect(group.key)
+      }),
+      React.createElement('text', {
+        key: 'tt', x: tx, y: ty, fill: '#fff', fontSize: 11, fontWeight: 600
+      }, '\u21BB ' + group.name + ' (' + total + ')'),
+    ]
+
+    // 进度条
+    if (segs.length > 0) {
+      els.push(
+        React.createElement('rect', {
+          key: 'pb', x: tx, y: barY, width: barW, height: 6, rx: 3,
+          fill: 'rgba(0,0,0,0.2)'
+        })
+      )
+      let segX = tx
+      segs.forEach((s, i) => {
+        const segW = Math.max(s.n / total * barW, 8)
+        els.push(React.createElement('rect', {
+          key: 'ps' + i, x: segX, y: barY, width: segW, height: 6, rx: 3, fill: s.c
+        }))
+        segX += segW
+      })
+    }
+
+    // 计数标签
+    const countStr = ['DONE','RUNNING','FAILED','SKIPPED'].map(st => {
+      const c = counts[st]
+      if (!c) return ''
+      const sym = st === 'DONE' ? '\u2713' : st === 'RUNNING' ? '\u25CF' : st === 'FAILED' ? '\u2717' : '\u23ED'
+      return c + sym
+    }).filter(Boolean).join(' ')
+    els.push(React.createElement('text', {
+      key: 'ct', x: tx, y: countY, fill: 'rgba(255,255,255,0.9)', fontSize: 9
+    }, countStr))
+
+    // 展开/折叠图标
+    els.push(
+      React.createElement('text', {
+        key: 'ex', x: x + gW - 8, y: ty, textAnchor: 'end', fill: '#fff', fontSize: 11, cursor: 'pointer',
+        onClick: (e) => { e.stopPropagation(); onToggle() }
+      }, isExpanded ? '\u25B2' : '\u25B6'),
+    )
+
+    return els
+  }
+
+  // ── DAG 画布组件 ───────────────────────────────────────────────
+  const DagCanvas = React.memo(function DagCanvas(props) {
+    const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
+    const mc = stage === 'COMPLETED' ? (gateResult === 'FAIL' ? C.FAILED : C.DONE) : stage === 'FAILED' ? C.FAILED : stage === 'RUNNING' ? C.RUNNING : C.PENDING
+
+    // 构建流程节点：普通 task + loop 组
+    const flat = Array.isArray(tasks) ? tasks : []
+    const flowNodes = [], loopGroups = []
+    for (let gi = 0; gi < flat.length;) {
+      const t = flat[gi]
+      if (t._loopGroup) {
+        const g = { key: t._loopGroup, name: t._loopGroupName || t._loopGroup, items: [] }
+        while (gi < flat.length && flat[gi]._loopGroup === g.key) { g.items.push(flat[gi]); gi++ }
+        loopGroups.push(g)
+        flowNodes.push({ type: 'loop', group: g })
+      } else {
+        flowNodes.push({ type: 'task', task: t })
+        gi++
+      }
+    }
+
+    const gW = 132, gH = 46, gHLoop = 64, gap = 44, pad = 24
+    let svgX = pad
+    const svgChildren = []
+
+    // 展开状态
+    const [expanded, setExpanded] = React.useState({})
+    const toggleGroup = React.useCallback(key => {
+      setExpanded(prev => {
+        const n = {}
+        for (const k in prev) n[k] = prev[k]
+        n[key] = !prev[key]
+        return n
+      })
+    }, [])
+
+    // 节点位置
+    const nodePositions = []
+
+    flowNodes.forEach((fn, fi) => {
+      const h = fn.type === 'loop' ? gHLoop : gH
+      const cy = 28
+
+      if (fn.type === 'task') {
+        const t = fn.task
+        const isSel = selectedId === t.id
+        svgChildren.push(
+          React.createElement('rect', {
+            key: 'r' + t.id, x: svgX, y: cy, width: gW, height: h, rx: 8,
+            fill: C[t.status] || C.PENDING, opacity: 0.92,
+            stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
+            cursor: 'pointer', onClick: () => onSelect(t.id)
+          }),
+          React.createElement('text', {
+            key: 't' + t.id, x: svgX + gW / 2, y: cy + h / 2 + 5,
+            textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600
+          }, t.name || t.id),
+          React.createElement('text', {
+            key: 'u' + t.id, x: svgX + gW / 2, y: cy + h / 2 + 18,
+            textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
+          }, t.id),
+        )
+      } else {
+        // Loop 组节点
+        const g = fn.group
+        const lgEls = LoopGroupNode({
+          x: svgX, y: cy, gW, gH: gHLoop, group: g,
+          selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
+        })
+        svgChildren.push(...lgEls)
+      }
+
+      nodePositions.push({
+        x: svgX, w: gW, h: fn.type === 'loop' ? gHLoop : gH,
+        type: fn.type, key: fn.type === 'loop' ? fn.group.key : fn.task.id
+      })
+      svgX += gW + gap
+
+      // 箭头
+      if (fi < flowNodes.length - 1) {
+        const cyArrow = cy + h / 2
+        svgChildren.push(
+          React.createElement('line', {
+            key: 'a' + fi,
+            x1: svgX - gap - gap / 2, y1: cyArrow,
+            x2: svgX - gap / 2, y2: cyArrow,
+            stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#da)'
+          }),
+        )
+      }
+    })
+
+    // 箭头标记
+    if (flowNodes.length > 0) {
+      svgChildren.push(
+        React.createElement('defs', { key: 'd' },
+          React.createElement('marker', {
+            id: 'da', viewBox: '0 0 10 10', refX: 9, refY: 5,
+            markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse'
+          },
+          React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' }))))
+    }
+
+    const svgW = flowNodes.length ? pad * 2 + flowNodes.reduce((s, fn, i) => s + (i > 0 ? gap : 0) + gW, 0) : 0
+    const maxH = flowNodes.reduce((mx, fn) => Math.max(mx, fn.type === 'loop' ? gHLoop : gH), 0)
+    const svgH = 28 * 2 + maxH
+
+    // 展开的列表（SVG 下方）
+    const listElems = []
+    loopGroups.forEach(g => {
+      if (!expanded[g.key]) return
+      const pos = nodePositions.find(p => p.type === 'loop' && p.key === g.key)
+      if (!pos) return
+      const listX = pos.x
+      const listW = gW
+      listElems.push(
+        React.createElement('div', {
+          key: 'll' + g.key,
+          style: {
+            marginLeft: listX + 'px',
+            width: listW + 'px',
+            background: 'rgba(148,163,184,0.05)',
+            border: '1px solid rgba(148,163,184,0.2)',
+            borderTop: 'none',
+            borderBottomLeftRadius: 8, borderBottomRightRadius: 8,
+            padding: '4px 0',
+            fontSize: 12,
+          },
+        }, g.items.map((t, i) => {
+          const sel = selectedId === t.id
+          return React.createElement('div', {
+            key: t.id, onClick: () => onSelect(t.id),
+            style: {
+              display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
+              cursor: 'pointer', background: sel ? 'rgba(59,130,246,0.1)' : 'transparent',
+            },
+          }, [
+            React.createElement('span', {
+              style: { width: 8, height: 8, borderRadius: 4, background: C[t.status] || C.PENDING, flexShrink: 0 }
+            }),
+            React.createElement('span', { style: { flex: 1, color: '#475569' } }, (i + 1) + '. ' + (t.name || t.id)),
+            React.createElement('span', { style: { color: '#64748b', fontSize: 11 } }, t.status),
+          ])
+        }))
+      )
+    })
+
+    return React.createElement('div', { style: { padding: '14px 18px 10px' } }, [
+      // 状态栏
+      React.createElement('div', {
+        key: 'sb',
+        style: { display: 'flex', alignItems: 'center', gap: 14, marginBottom: 8, fontSize: 12, color: '#64748b', flexWrap: 'wrap' },
+      }, [
+        React.createElement('span', { key: 'w', style: { fontWeight: 600, color: '#334155' } }, workflowName || '-'),
+        React.createElement('span', { key: 's' }, 'S: ', React.createElement('span', { style: { color: mc, fontWeight: 700 } },
+          (stage || '-') + ' ' + (stage === 'PENDING' ? 'Pd' : stage === 'RUNNING' ? 'Rn' : stage === 'COMPLETED' ? 'Cp' : 'Fl'))),
+        React.createElement('span', { key: 'g' }, 'G: ', gateResult
+          ? React.createElement('span', { style: { color: gateResult === 'PASS' ? C.DONE : C.FAILED, fontWeight: 700 } }, gateResult)
+          : '-'),
+        retries > 0 ? React.createElement('span', { key: 'r' }, 'R: ' + retries) : null,
+        error ? React.createElement('span', { key: 'e', style: { color: C.FAILED } }, error) : null,
+      ]),
+      // SVG 流程图
+      flowNodes.length > 0 ? React.createElement('svg', {
+        key: 'svg', width: svgW, height: svgH,
+        xmlns: 'http://www.w3.org/2000/svg',
+        style: { background: 'rgba(148,163,184,0.08)', borderRadius: 8, width: '100%', maxWidth: svgW, marginBottom: 0 },
+      }, svgChildren) : null,
+      // 展开的列表
+      React.createElement('div', { key: 'lx', style: { position: 'relative', marginTop: -4 } }, listElems),
+    ])
+  })
+
+  // ── Slot 注册 ──────────────────────────────────────────────────
+  slots.inject('conversation.view', () => {
+    return slots.register(
+      { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
+      function WorkflowViewFactory(props) {
+        const workspaceHook = props.useWorkspaces
+
+        function WorkflowView() {
+          const [, forceUpdate] = React.useReducer(x => x + 1, 0)
+          const [selectedId, setSelectedId] = React.useState(null)
+
+          React.useEffect(() => {
+            listeners.add(forceUpdate)
+            return () => listeners.delete(forceUpdate)
+          }, [])
+
+          React.useEffect(() => {
+            if (wfLoaded) return
+            try {
+              if (workspaceHook) {
+                const wsList = workspaceHook()
+                if (wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items.length > 0) {
+                  const r = String(wsList.data.items[0].path).replace(/\\/g, '/')
+                  wfRoot = r
+                  if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(r)
+                  wfLoaded = true
+                  return
+                }
+              }
+            } catch(e) {}
+
+            fetch('/wf/config?workspaceRoot=' + encodeURIComponent('C:/Users/ranwa/dsh_workspace'))
+              .then(r => r.json())
+              .then(r => {
+                if (r && r.valid) {
+                  wfRoot = r.workspaceRoot
+                  if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(r.workspaceRoot)
+                }
+                wfLoaded = true
+              })
+              .catch(() => { wfLoaded = true })
+          }, [workspaceHook])
+
+          const snap = latest
+          const stateData = (snap && snap.state) ? snap.state : null
+          const tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+          const hasData = stateData && stateData.workflow
+
+          if (!wfLoaded) {
+            return React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+            }, '...')
+          }
+
+          if (!wfRoot) {
+            return React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13, flexDirection: 'column', gap: 8 }
+            }, [
+              React.createElement('span', { key: 'a' }, 'No workspace'),
+              React.createElement('span', { key: 'b', style: { fontSize: 11 } }, 'Open a workspace first')
+            ])
+          }
+
+          if (!hasData) {
+            return React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
+            }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : 'Waiting for workflow...')
+          }
+
+          return React.createElement('div', {
+            style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
+          },
+            React.createElement(DagCanvas, {
+              stage: stateData.stage,
+              gateResult: stateData.gateResult || null,
+              tasks,
+              selectedId,
+              onSelect: id => setSelectedId(prev => prev === id ? null : id),
+              workflowName: stateData.workflow,
+              retries: stateData.retries || 0,
+              error: stateData.error || null,
+            })
+          )
+        }
+
+        return React.createElement(WorkflowView)
+      },
+    )
+  })
+}

@@ -1,0 +1,5 @@
+# Workflow Agent Client UI Monitor - Bundle Patch
+# 插入 DAG 监控面板插件到 composition
+- insert:
+    - id: ui-workflow-monitor
+      name: '@workflow-agent/client-ui-monitor'

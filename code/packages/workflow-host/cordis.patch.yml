@@ -1,0 +1,7 @@
+# Workflow Agent Host Plugin - Bundle Patch
+# 插入工作流引擎插件（工具注册：workflow_begin / workflow_status）
+# 注意：RPC 处理器（wf:status / wf:skill / wf:config）不在此包中，
+# 保留在 agent preset 的 workflow-rpc.mjs 本地插件中。
+- insert:
+    - id: workflow-host
+      name: '@workflow-agent/workflow-host'
