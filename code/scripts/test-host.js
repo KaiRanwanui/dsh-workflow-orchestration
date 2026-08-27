@@ -189,6 +189,53 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   const snap4 = engine3.snapshot()
   check('updateTask 用展开 ID', snap4.tasks[0].status === 'DONE')
 
+  // ── 用例 5：循环错误处理（Iter-6：onError=break/continue + hydrate 元数据 + begin 清 logs） ──
+  console.log('［用例 5］循环错误处理 — onError break/continue')
+
+  function makeLoopTasks(onError) {
+    return [
+      { id: 'req-analysis', name: '需求分析', type: 'llm-task', processor: '/x', outputs: [], gate: null, _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+      { id: 'module-review/login', name: 'x', type: 'llm-task', processor: '/y', outputs: [], gate: null, _loopGroup: 'module-review', _loopItem: 'login', _loopIndex: 0, _loopGroupName: '逐模块评审', _onError: onError },
+      { id: 'module-review/order', name: 'x', type: 'llm-task', processor: '/y', outputs: [], gate: null, _loopGroup: 'module-review', _loopItem: 'order', _loopIndex: 1, _loopGroupName: '逐模块评审', _onError: onError },
+      { id: 'module-review/payment', name: 'x', type: 'llm-task', processor: '/y', outputs: [], gate: null, _loopGroup: 'module-review', _loopItem: 'payment', _loopIndex: 2, _loopGroupName: '逐模块评审', _onError: onError },
+    ]
+  }
+
+  // 场景 1：break → 前序 DONE 不受影响，后续 PENDING 自动 SKIPPED
+  const eBreak = createWorkflowEngine()
+  eBreak.begin({ name: 'break-wf', version: '1', description: null, params: {}, tasks: makeLoopTasks('break') })
+  eBreak.updateTask('module-review/login', { status: 'DONE' })
+  eBreak.updateTask('module-review/order', { status: 'FAILED' })
+  const sBreak = eBreak.snapshot()
+  check('break: payment 自动 SKIPPED', sBreak.tasks.find(t => t.id === 'module-review/payment').status === 'SKIPPED')
+  check('break: login(DONE) 不受影响', sBreak.tasks.find(t => t.id === 'module-review/login').status === 'DONE')
+  check('break: 日志含 BREAK', sBreak.logs.some(l => l.action === 'BREAK'))
+
+  // 场景 2：continue → 后续 PENDING 保持
+  const eCont = createWorkflowEngine()
+  eCont.begin({ name: 'cont-wf', version: '1', description: null, params: {}, tasks: makeLoopTasks('continue') })
+  eCont.updateTask('module-review/login', { status: 'DONE' })
+  eCont.updateTask('module-review/order', { status: 'FAILED' })
+  const sCont = eCont.snapshot()
+  check('continue: payment 保持 PENDING', sCont.tasks.find(t => t.id === 'module-review/payment').status === 'PENDING')
+  check('continue: 日志无 BREAK', !sCont.logs.some(l => l.action === 'BREAK'))
+
+  // 场景 3：begin 清空历史日志
+  const eLogs = createWorkflowEngine()
+  eLogs.begin({ name: 'a', version: '1', description: null, params: {}, tasks: makeLoopTasks('break') })
+  eLogs.updateTask('req-analysis', { status: 'DONE' })
+  eLogs.begin({ name: 'b', version: '1', description: null, params: {}, tasks: makeLoopTasks('break') })
+  const sLogs = eLogs.snapshot()
+  check('begin 清空历史日志', sLogs.logs.length === 1 && sLogs.logs[0].action === 'BEGIN')
+
+  // 场景 4：hydrate 恢复循环元数据
+  const eHyd = createWorkflowEngine()
+  eHyd.hydrate(JSON.parse(JSON.stringify(sCont)))
+  const sHyd = eHyd.snapshot()
+  check('hydrate 恢复 _loopGroup', sHyd.tasks.find(t => t.id === 'module-review/payment')._loopGroup === 'module-review')
+  check('hydrate 恢复 _onError', sHyd.tasks.find(t => t.id === 'module-review/payment')._onError === 'continue')
+  check('hydrate 恢复 _loopIndex', sHyd.tasks.find(t => t.id === 'module-review/payment')._loopIndex === 2)
+
   console.log('')
   console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
   process.exit(fail > 0 ? 1 : 0)

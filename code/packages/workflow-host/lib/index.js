@@ -481,6 +481,7 @@ function createWorkflowEngine() {
     state.gateResult = null
     state.retries = 0
     state.error = null
+    state.logs = [] // Iter-6：重新 begin 时清除历史日志，避免跨实例残留
     state.tasks = parsed.tasks.map((t) => ({
       id: t.id,
       name: t.name,
