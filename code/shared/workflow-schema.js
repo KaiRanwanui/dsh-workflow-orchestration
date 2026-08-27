@@ -20,6 +20,7 @@ const DEFAULTS = {
   taskType: TASK_TYPES.LLM_TASK,
   retries: 0, // quality-gate max-retries 默认
   onFailure: 'block', // quality-gate on-failure 默认
+  maxConcurrency: 1, // 工作流级最大并发数（Iter-7，默认串行）
 }
 
 // ── 必填字段校验规则 ────────────────────────────────────────────────────────

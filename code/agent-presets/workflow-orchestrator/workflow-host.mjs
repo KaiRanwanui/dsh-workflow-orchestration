@@ -406,6 +406,7 @@ function taskSnapshot(t) {
     id: t.id,
     name: t.name,
     type: t.type,
+    dependsOn: t.dependsOn || [],
     status: t.status,
     processor: t.processor || null,       // 处理器技能绝对路径（Client 读取 skill 文本用）
     gateChecker: (t.gate && t.gate.checker) || null, // 门禁技能绝对路径
@@ -427,6 +428,7 @@ function createWorkflowEngine() {
     version: null,
     description: null,
     params: {},
+    maxConcurrency: 1, // Iter-7：工作流级最大并发数
     active: false, // 是否有进行中的实例
     stage: E_STAGE.PENDING,
     tasks: [], // Task 运行时状态数组
@@ -448,6 +450,7 @@ function createWorkflowEngine() {
       workflow: state.workflow,
       version: state.version,
       description: state.description,
+      maxConcurrency: state.maxConcurrency,
       active: state.active,
       stage: state.stage,
       tasks: state.tasks.map(taskSnapshot),
@@ -457,6 +460,7 @@ function createWorkflowEngine() {
       updatedAt: state.updatedAt,
       logs: state.logs.slice(-200), // 最多保留最近 200 条
       persist: state.persist,
+      runnable: getRunnableTasks(), // Iter-7：当前就绪可并发执行的任务
       fingerprint: fingerprint(),
     }
   }
@@ -467,6 +471,7 @@ function createWorkflowEngine() {
     state.version = parsed.version
     state.description = parsed.description
     state.params = parsed.params || {}
+    state.maxConcurrency = parsed.maxConcurrency || 1 // Iter-7：工作流级最大并发数
     state.active = true
     state.stage = E_STAGE.PENDING
     state.gateResult = null
@@ -477,6 +482,7 @@ function createWorkflowEngine() {
       id: t.id,
       name: t.name,
       type: t.type,
+      dependsOn: t.dependsOn || [], // Iter-7：前驱依赖，供 getRunnableTasks 计算就绪
       status: E_TASK_STATUS.PENDING,
       processor: t.processor || null, // 绝对路径（由 tools 层解析后写入）
       outputs: t.outputs || [],
@@ -512,11 +518,23 @@ function createWorkflowEngine() {
     return true
   }
 
-  // Iter-6：返回下一个可运行任务（跳过 SKIPPED 与非 PENDING 任务）
-  // 串行架构下由编排 Agent 调用 workflow_status 后自行推导；本函数供
-  // 未来并发引擎（Iter-7）复用，SKIPPED 任务天然不满足 status===PENDING。
-  function getNextRunnableTask() {
-    return state.tasks.find((t) => t.status === E_TASK_STATUS.PENDING) || null
+  // Iter-7：返回就绪任务列表（dependsOn 全部完成 + 受 max-concurrency 限制）。
+  // 就绪 = 所有前驱均 DONE 或 SKIPPED（FAILED 前驱不放行）；
+  // 可用并发槽位 = maxConcurrency - 当前 RUNNING 数。
+  function getRunnableTasks() {
+    const running = state.tasks.filter((t) => t.status === E_TASK_STATUS.RUNNING).length
+    const slots = Math.max(0, state.maxConcurrency - running)
+    if (slots === 0) return []
+    const finished = new Set(
+      state.tasks
+        .filter((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
+        .map((t) => t.id)
+    )
+    return state.tasks.filter((t) => {
+      if (t.status !== E_TASK_STATUS.PENDING) return false
+      const deps = t.dependsOn || []
+      return deps.every((d) => finished.has(d))
+    }).slice(0, slots)
   }
 
   function setStage(s) {
@@ -589,6 +607,7 @@ function createWorkflowEngine() {
     state.version = j.version
     state.description = j.description
     state.params = j.params || {}
+    state.maxConcurrency = j.maxConcurrency || 1 // Iter-7
     state.active = !!j.active
     state.stage = j.stage || E_STAGE.PENDING
     state.gateResult = j.gateResult || null
@@ -600,6 +619,7 @@ function createWorkflowEngine() {
       id: t.id,
       name: t.name,
       type: t.type,
+      dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [],
       status: t.status || E_TASK_STATUS.PENDING,
       processor: t.processor || null,
       outputs: Array.isArray(t.outputs) ? t.outputs : [],
@@ -622,7 +642,7 @@ function createWorkflowEngine() {
     hydrate,
     updateTask,
     processBreak,
-    getNextRunnableTask,
+    getRunnableTasks,
     setStage,
     setGateResult,
     setRetries,

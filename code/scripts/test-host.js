@@ -236,6 +236,64 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   check('hydrate 恢复 _onError', sHyd.tasks.find(t => t.id === 'module-review/payment')._onError === 'continue')
   check('hydrate 恢复 _loopIndex', sHyd.tasks.find(t => t.id === 'module-review/payment')._loopIndex === 2)
 
+  // ── 用例 6：并发执行引擎（Iter-7：getRunnableTasks + max-concurrency） ──
+  console.log('［用例 6］并发执行引擎 — getRunnableTasks + max-concurrency')
+
+  // 场景 1：2 个无依赖 Task + max-concurrency=2，第三个依赖 A+B
+  const eCon = createWorkflowEngine()
+  eCon.begin({
+    name: 'concurrent', version: '1', description: null, params: {}, maxConcurrency: 2,
+    tasks: [
+      { id: 'A', name: 'A', type: 'llm-task', processor: '/a', outputs: [], gate: null, dependsOn: [], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+      { id: 'B', name: 'B', type: 'llm-task', processor: '/b', outputs: [], gate: null, dependsOn: [], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+      { id: 'C', name: 'C', type: 'llm-task', processor: '/c', outputs: [], gate: null, dependsOn: ['A', 'B'], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+    ],
+  })
+  let r = eCon.snapshot().runnable
+  check('场景1: 同时就绪 A/B（max-concurrency=2）', r.length === 2 && r[0].id === 'A' && r[1].id === 'B', r.map(t => t.id).join(','))
+
+  eCon.updateTask('A', { status: 'RUNNING' })
+  eCon.updateTask('B', { status: 'RUNNING' })
+  check('场景1: A/B RUNNING 无剩余槽位', eCon.snapshot().runnable.length === 0)
+
+  eCon.updateTask('A', { status: 'DONE' })
+  check('场景1: A DONE 但 B RUNNING，C 不就绪', eCon.snapshot().runnable.length === 0)
+
+  eCon.updateTask('B', { status: 'DONE' })
+  r = eCon.snapshot().runnable
+  check('场景1: A/B 全 DONE 后 C 就绪', r.length === 1 && r[0].id === 'C')
+
+  // 场景 2：串行依赖链 + max-concurrency=2（循环迭代串行，仅首个就绪）
+  const eLoop = createWorkflowEngine()
+  const loop4 = ['i1', 'i2', 'i3', 'i4'].map((item, i) => ({
+    id: 'loop/' + item, name: item, type: 'llm-task', processor: '/x', outputs: [], gate: null,
+    dependsOn: i === 0 ? [] : ['loop/' + ['i1', 'i2', 'i3', 'i4'][i - 1]],
+    _loopGroup: 'loop', _loopItem: item, _loopIndex: i, _loopGroupName: '循环', _onError: 'break',
+  }))
+  eLoop.begin({ name: 'loop4', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: loop4 })
+  r = eLoop.snapshot().runnable
+  check('场景2: 串行依赖链仅 i1 就绪', r.length === 1 && r[0].id === 'loop/i1', r.map(t => t.id).join(','))
+
+  eLoop.updateTask('loop/i1', { status: 'DONE' })
+  r = eLoop.snapshot().runnable
+  check('场景2: i1 DONE 后 i2 就绪', r.length === 1 && r[0].id === 'loop/i2')
+
+  eLoop.updateTask('loop/i2', { status: 'FAILED' })
+  check('场景2: i2 FAILED 触发 break 后无就绪', eLoop.snapshot().runnable.length === 0)
+  check('场景2: i3/i4 自动 SKIPPED', eLoop.snapshot().tasks.filter(t => t.status === 'SKIPPED').length === 2)
+
+  // 场景 3：FAILED 前驱不放行（非循环）
+  const eFail = createWorkflowEngine()
+  eFail.begin({
+    name: 'fail', version: '1', description: null, params: {}, maxConcurrency: 2,
+    tasks: [
+      { id: 'X', name: 'X', type: 'llm-task', processor: '/x', outputs: [], gate: null, dependsOn: [], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+      { id: 'Y', name: 'Y', type: 'llm-task', processor: '/y', outputs: [], gate: null, dependsOn: ['X'], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null },
+    ],
+  })
+  eFail.updateTask('X', { status: 'FAILED' })
+  check('场景3: X FAILED 后 Y 不就绪', eFail.snapshot().runnable.length === 0)
+
   console.log('')
   console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
   process.exit(fail > 0 ? 1 : 0)
