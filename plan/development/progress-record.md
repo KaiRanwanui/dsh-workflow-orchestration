@@ -27,6 +27,14 @@
 
 ---
 
+| 今日 | **WSL2 迁移 — 插件打包/安装/端到端验证** | ✅ 完成（web profile + link 依赖，修复迁移残留 + _loopIndex bug） |
+
+---
+
+| 今日 | **Iter-6 循环错误处理 + 日志清理** | ✅ 完成（onError=break/continue，50 单测通过） |
+
+---
+
 ## 已完成工作
 
 ### 6. Iter-5: Host/Client 架构调整 — Client RPC 链路修复（✅ 完成）
@@ -79,54 +87,47 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ---
 
+### 7. Iter-6: 循环错误处理 + 日志清理（✅ 完成）
+
+**迭代报告**：`plan/development/iter6-report.md`
+
+**核心交付**：
+- `updateTask` 在任务 FAILED 时自动检查 `_onError`：`break` → 同组 PENDING 标记 SKIPPED；`continue` → 继续执行
+- `hydrate` 恢复循环元数据（消除重启后 processBreak 失效的隐患）
+- `getNextRunnableTask()`（跳过 SKIPPED，预留 Iter-7 并发引擎）
+- `begin()` 清空历史日志（避免重新 begin 工作流时日志跨实例残留）
+- DAG 布局（循环组折叠 + SKIPPED 琥珀色）在 Iter-4 已就绪，本轮仅做在线验证
+
+**验证**：单测 50/50（新增用例 5 共 9 断言）；在线验证 order FAILED → payment 自动 SKIPPED（BREAK 日志正确）。
+
+**提交**：`05f85aa`（核心）+ `00285ef`（测试 + 日志清理）
+
+---
+
+### 8. WSL2 迁移 — 插件打包/安装/端到端验证（✅ 完成）
+
+**背景**：项目从 Windows dsh-desktop 迁移到 WSL2，迁移后未做打包/安装，需验证 Windows 既有成果被完整继承。
+
+**环境差异**：
+- WSL2 无 desktop profile（Windows Electron 形态），实际是 web(3080) + headless profile，用 pnpm 管理（nodeLinker: hoisted）
+- 插件接入方式：link: 依赖 + `dsh.profile.bundles`（先例 `@yejiming/dsh-data-agent`）
+- DSH 用用户级 systemd 管理（`systemctl --user restart dsh.service` 重启 Host）
+
+**修复的迁移 bug**：
+- 硬编码 Windows 路径 `C:/Users/ranwa/dsh_workspace` → `/home/zhaokai/Projects/dsh_projects`（提交 `659d87e`）
+- `_loopIndex: undefined` 导致 workflow_begin 返回非 lossless JSON（提交 `fa9732f`）
+
+**验证**：打包 + 安装 + compose + 端到端（workflow_begin → DAG 循环组折叠 → HTTP 轮询）全部通过。
+
+---
+
 ## 待办（下次启动）
 
-### Iter-5 收尾：同步 preset 部署
+### Iter-7: 并发执行引擎（计划中）
 
-**背景**：`code/agent-presets/.../agent.cordis.yml` 已注释 workflow-rpc 行，但 `~/.dsh/.agent-presets/.../agent.cordis.yml`（部署副本）未同步（DSH 运行时被锁）。
+**迭代计划**：`plan/development/development-plan.md`（Iter-7）
 
-**操作**：DSH Desktop 完全退出后，将源码 agent.cordis.yml 复制到部署目录。
-
-### Iter-6: 循环错误处理 + DAG 布局优化（计划中）
-
-**迭代计划**：`plan/development/development-plan.md`（Iter-6，原 Iter-5 后延）
-
-**背景**：原来 Host 端插件（引擎 + 工具 + RPC）全部在 preset 的本地插件中。
-为统一管理和简化架构，决定将 Host 和 Client 插件都迁移到 desktop profile 的 npm 包中。
-
-**问题**：首次迁移失败。将完整代码（含 `harness.handle()` RPC）打包为 npm 包后，
-重启 DSH 时插件加载崩溃，系统自动回退。
-
-**根因分析**：
-- `harness` 是动态插件 Builtin（`Builtin.listBuiltins` 描述为 "dynamic Host half"）
-- npm 包由 Cordis Loader 直接加载，不经过动态插件沙箱
-- 因此 npm 包中 `harness` 为 `undefined`，`harness.handle(...)` 抛出 TypeError
-
-**解决方案 — 拆分架构**：
-
-| 组件 | 位置 | 说明 |
-|------|------|------|
-| `@workflow-agent/workflow-host` | profile npm 包 | 引擎 + 工具注册（`workflow_begin`/`workflow_status`） |
-| `@workflow-agent/client-ui-monitor` | profile npm 包 | Client DAG 监控面板 |
-| `workflow-rpc.mjs` | preset 本地插件 | RPC 处理器（需要 `harness` Builtin） |
-
-**修改清单**：
-
-| 文件 | 改动 |
-|------|------|
-| `code/packages/workflow-host/build.js` | 不再合并 RPC 代码，仅打包工具部分 |
-| `code/packages/workflow-host/package.json` | 添加 `dsh.bundle.patch`，版本升至 0.2.0 |
-| `code/packages/workflow-host/cordis.patch.yml` | 新建，声明 insert 行 |
-| `code/agent-presets/.../workflow-host.mjs` | 移除 `timer` 注入，改用 `tools` |
-| `code/agent-presets/.../agent.cordis.yml` | 注释掉 `workflow-host.mjs`（由 npm 包替代），保留 `workflow-rpc.mjs` |
-| `~/.dsh/profiles/desktop/cordis.patch.yml` | 添加 `workflow-host` insert 行 |
-| `code/scripts/build-and-install-all.ps1` | 新建统一构建安装脚本 |
-| `plan/architecture/architecture-decisions.md` | 更新架构决策文档 |
-
-**关键学习**：
-- `harness` Builtin 的作用域仅限于动态插件和 preset 本地插件
-- npm 包可用的 Host 能力：`ctx.tools.register()`、`ctx.get('fs')`、`ctx.provide()` 等
-- npm 包不可用的 Host 能力：`harness.handle()`（RPC）、`harness.defineTool()` 等
+**目标**：就绪队列 + 并发调度器；max-concurrency 生效；无依赖 Task 并行执行；循环迭代并发。
 
 ---
 
@@ -212,70 +213,6 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ---
 
-## 下次启动时的工作
-
-### 待完成：Client UI RPC 链路修复
-
-**问题**：DAG 面板标签页可见但内容为空白，RPC 调用失败。
-
-**根因**：`host.call` 是动态插件 Client 端的 Builtin，由 `@deepseek-ai/dsh-cordis-client-runner` 在闭包中注入（见 `dsh-cordis-client-runner/lib/client.js` 第 181 行）。它**不是**通过 `require` 导出的模块。
-
-**错误代码**：
-```js
-// ❌ 错误：@deepseek-ai/dsh-client-runtime 不导出 host 对象
-const { host } = require("@deepseek-ai/dsh-client-runtime")
-host.call('wf:status', { workspaceRoot: wfRoot })
-```
-
-**动态插件中的正确用法**（来自 `dsh-cordis-client-runner/lib/client.js` 第 173-181 行）：
-```js
-// ✅ 动态插件闭包注入
-const returned = await closure(
-  react,
-  taggedConsole(pluginId, ...),
-  styles,
-  { call: (method, args = null) => env.invoke(method, args) },  // host 对象
-  harnessTrap(),
-  ...
-)
-```
-
-**影响**：
-- ❌ Client UI 无法调用 `host.call('wf:status', ...)`
-- ❌ RPC 链路断裂，面板无法获取状态数据
-- ✅ Slot 注册正常（所以标签页能看到）
-- ✅ 轮询逻辑正常（但调用失败）
-
-### 备选方案
-
-#### 方案 1：HTTP 端点替代 RPC（推荐）
-- Host 端通过 `ctx.get('webServer').register()` 注册 HTTP 路由
-- Client 端通过 `fetch()` 调用
-- 参考：`@linxin666/dsh-tool-describe-image` 的 `/describe-image/attach` 端点
-- 优点：有成功案例，不依赖动态插件的 `harness` Builtin
-- 缺点：需要处理同源策略、认证等问题
-
-#### 方案 2：Cordis Service 通信
-- Host 端通过 `ctx.provide()` 提供服务
-- Client 端通过 `ctx.get()` 获取服务
-- 需要研究是否支持跨 Host-Client 边界
-- 优点：符合 Cordis 架构
-- 缺点：可能不支持跨边界
-
-#### 方案 3：保持动态插件架构（保守）
-- Client UI 继续使用动态插件（`cordis_define`）
-- 只有 Host 工具迁移到 npm 包
-- 优点：最小改动，立即可用
-- 缺点：架构不统一，动态插件有 JSON 转义问题
-
-### 下一步行动
-
-1. 研究 `@linxin666/dsh-tool-describe-image` 的 HTTP 端点实现
-2. 在 `workflow-rpc.mjs` 中添加 HTTP 路由注册（`webServer.register()`）
-3. 修改 Client UI 代码，用 `fetch()` 替代 `host.call()`
-4. 重新构建并安装 Client UI npm 包
-5. 验证 DAG 面板能正常显示状态
-
 ### 迭代报告
 
 | 文档 | 位置 |
@@ -284,6 +221,7 @@ const returned = await closure(
 | Iter-2 报告 | `plan/development/iter2-report.md` |
 | Iter-3 报告 | `plan/development/iter3-report.md` |
 | Iter-5 报告 | `plan/development/iter5-report.md` |
+| Iter-6 报告 | `plan/development/iter6-report.md` |
 
 ---
 
