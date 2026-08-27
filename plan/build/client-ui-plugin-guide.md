@@ -102,33 +102,20 @@ Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 
 ## 快速构建脚本
 
-创建 `workflow-agent/code/scripts/build-client-ui.ps1`：
-
-```powershell
-# 构建并安装 Client UI 插件
-$ErrorActionPreference = "Stop"
-
-$src = "C:\Users\ranwa\dsh_workspace\workflow-agent\code\packages\client-ui-monitor"
-$dst = "$env:LOCALAPPDATA\Programs\DSH Desktop\resources\app.asar.unpacked\node_modules\@workflow-agent\client-ui-monitor"
-
-Write-Host "Building client-ui-monitor..."
-Set-Location $src
-node build.js
-
-Write-Host "`nInstalling to DSH..."
-if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-New-Item -ItemType Directory -Path $dst -Force | Out-Null
-Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
-
-Write-Host "`n✓ Installed to: $dst"
-Write-Host "Please restart DSH Desktop to load the new plugin."
-```
-
-使用方式：
+使用当前脚本体系（`code/scripts/`）：
 
 ```powershell
 cd workflow-agent/code/scripts
-.\build-client-ui.ps1
+.\build-workflow-plugins.ps1                  # 构建所有插件
+.\install-workflow-plugins.ps1 -Profile desktop  # 安装到 desktop profile（DSH 需退出）
+.\verify-workflow-plugins.ps1 -Profile desktop   # 验证
+```
+
+单包构建（Node，跨平台）：
+
+```bash
+cd workflow-agent/code/packages/client-ui-monitor
+node build.js
 ```
 
 ## 调试技巧

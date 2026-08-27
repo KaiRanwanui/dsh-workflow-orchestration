@@ -56,10 +56,10 @@ packages/
 cd workflow-agent/code/packages/client-ui-<name>
 
 # 2. 构建
-node build.js
+.\workflow-agent\code\scripts\build-workflow-plugins.ps1
 
 # 3. 安装到 DSH（使用 PowerShell）
-.\workflow-agent\code\scripts\build-client-ui.ps1
+.\workflow-agent\code\scripts\install-workflow-plugins.ps1 -Profile desktop
 
 # 4. 重启 DSH Desktop
 ```
@@ -171,38 +171,13 @@ const result = await host.call('wf:status', { workspaceRoot: root })
 
 ### A. 快速构建脚本
 
-创建 `workflow-agent/code/scripts/build-client-ui.ps1`：
+使用当前脚本体系（`code/scripts/`）：
 
 ```powershell
-# 构建并安装所有 Client UI 插件
-$ErrorActionPreference = "Stop"
-
-$packages = @(
-    "client-ui-monitor"
-    # 添加更多插件...
-)
-
-foreach ($pkg in $packages) {
-    $src = "C:\Users\ranwa\dsh_workspace\workflow-agent\code\packages\$pkg"
-    $dst = "$env:LOCALAPPDATA\Programs\DSH Desktop\resources\app.asar.unpacked\node_modules\@workflow-agent\$pkg"
-    
-    Write-Host "`n=== Building $pkg ===" -ForegroundColor Cyan
-    
-    # 构建
-    Set-Location $src
-    node build.js
-    
-    # 安装
-    Write-Host "Installing to DSH..."
-    if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-    New-Item -ItemType Directory -Path $dst -Force | Out-Null
-    Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
-    
-    Write-Host "✓ $pkg installed" -ForegroundColor Green
-}
-
-Write-Host "`n=== All plugins installed ===" -ForegroundColor Cyan
-Write-Host "Please restart DSH Desktop to load the new plugins."
+cd workflow-agent/code/scripts
+.\build-workflow-plugins.ps1                    # 构建所有插件
+.\install-workflow-plugins.ps1 -Profile desktop # 安装到 desktop profile（DSH 需退出）
+.\verify-workflow-plugins.ps1 -Profile desktop  # 验证安装
 ```
 
 ### B. 常用命令
@@ -213,10 +188,16 @@ cd workflow-agent/code/packages/client-ui-monitor
 node build.js
 
 # 构建所有插件
-.\workflow-agent\code\scripts\build-client-ui.ps1
+.\workflow-agent\code\scripts\build-workflow-plugins.ps1
+
+# 安装到 profile（desktop/web）
+.\workflow-agent\code\scripts\install-workflow-plugins.ps1 -Profile desktop
+
+# 验证安装
+.\workflow-agent\code\scripts\verify-workflow-plugins.ps1 -Profile desktop
 
 # 检查插件是否安装
-ls "$env:LOCALAPPDATA\Programs\DSH Desktop\resources\app.asar.unpacked\node_modules\@workflow-agent"
+ls "$env:USERPROFILE\.dsh\profiles\desktop\node_modules\@workflow-agent"
 ```
 
 ### C. 参考插件

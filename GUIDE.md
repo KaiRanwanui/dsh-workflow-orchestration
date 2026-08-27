@@ -68,8 +68,9 @@ workflow-agent/
 │   ├── plugins/                           # 早期/动态插件开发残留（Iter-1~4 产物）
 │   ├── shared/                            # 共享模块（schema、parser）
 │   ├── scripts/                           # 构建/测试/部署脚本
-│   │   ├── build-and-install-all.ps1      # 构建+安装到 desktop profile
-│   │   ├── install-iter5.ps1              # Iter-5 专用安装（DSH 退出后执行）
+│   │   ├── build-workflow-plugins.ps1     # 构建 npm 包插件
+│   │   ├── install-workflow-plugins.ps1   # 安装到指定 profile
+│   │   ├── verify-workflow-plugins.ps1    # 验证已安装插件
 │   │   ├── test-host.js                   # Host 单元测试
 │   │   └── simulate-exec.js               # 模拟执行
 │   └── ui/                                # UI 相关（早期）
@@ -107,10 +108,10 @@ workflow-agent/
 ## 5. 开发流程（当前）
 
 1. 改源码（`code/packages/*/src/` 或 `code/agent-presets/.../workflow-host.mjs`）
-2. `node build.js` 打包（workflow-host 或 client-ui-monitor）
-3. 安装到 profile：
-   - Desktop：完全退出 DSH → `install-iter5.ps1` → 重启
-   - WSL2 web：`build-and-install-all.ps1` 改 profile 名后执行（或 bash 脚本）
+2. `.\build-workflow-plugins.ps1` 打包（或各包目录 `node build.js`）
+3. 安装到 profile：`.\install-workflow-plugins.ps1 -Profile <desktop|web>`
+   - Desktop：需完全退出 DSH（文件锁）；web 无此限制
+4. 验证：`.\verify-workflow-plugins.ps1 -Profile <desktop|web>`（或 `test-host.js`）
 4. 验证：DAG 面板显示 / 单元测试（`test-host.js`）
 
 ---

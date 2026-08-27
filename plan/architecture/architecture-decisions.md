@@ -210,10 +210,12 @@ workflow-agent/
 
 ## 参考命令
 
-### 构建并安装所有插件
+### 构建并安装所有插件（推荐）
 ```powershell
 cd workflow-agent/code/scripts
-.\build-and-install-all.ps1
+.\build-workflow-plugins.ps1          # 构建
+.\install-workflow-plugins.ps1 -Profile desktop   # 安装（DSH 需退出）
+.\verify-workflow-plugins.ps1 -Profile desktop    # 验证
 ```
 
 ### 单独构建 Host 插件

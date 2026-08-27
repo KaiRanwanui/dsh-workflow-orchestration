@@ -43,18 +43,6 @@
 
 ---
 
-## 旧脚本（保留参考，不推荐新用）
-
-| 脚本 | 说明 | 局限 |
-|------|------|------|
-| `build-and-install-all.ps1` | 构建+安装两包到 desktop profile | 写死 desktop profile |
-| `build-client-ui.ps1` | 构建+安装 Client UI | 硬编码 `C:\Users\ranwa\...` 路径 |
-| `install-iter5.ps1` | Iter-5 专用安装 | 硬编码路径 + 仅 desktop |
-
-> 旧脚本由新脚本体系替代；保留以便对照历史行为。
-
----
-
 ## Node.js 辅助脚本
 
 | 脚本 | 用途 |
