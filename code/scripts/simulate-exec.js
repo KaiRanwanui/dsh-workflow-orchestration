@@ -1,8 +1,9 @@
-﻿const fs = require('fs')
+const fs = require('fs')
 const { parseWorkflow } = require('../shared/workflow-parser')
 const { expandLoopTasks } = require('../plugins/workflow-host-preset/tools-preset')
-const SF = 'C:/Users/ranwa/dsh_workspace/.workflow-agent/state.json'
+const SF = '/home/zhaokai/Projects/dsh_projects/.workflow-agent/state.json'
 async function main() {
+  fs.mkdirSync('/home/zhaokai/Projects/dsh_projects/.workflow-agent', { recursive: true })
   const items = ['login','order','payment','shipping','inventory','notify','audit','archive']
   const tasks = items.map((item,i) => ({ id:'module-review/'+item, name:'\u9010\u6A21\u5757\u8BC4\u5BA1 - '+item, type:'llm-task', status:'PENDING', _loopGroup:'module-review', _loopGroupName:'\u9010\u6A21\u5757\u8BC4\u5BA1', _loopItem:item, _loopIndex:i, _onError:'break', gateResult:null, processor:'dummy', gateChecker:null, gateOnFailure:null, retries:0 }))
   const all = [{ id:'req-analysis', name:'\u9700\u6C42\u5206\u6790', type:'llm-task', status:'PENDING', processor:'dummy', gateChecker:'dummy', gateResult:null, gateOnFailure:null, retries:0 }, ...tasks]

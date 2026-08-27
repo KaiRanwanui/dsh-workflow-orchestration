@@ -358,7 +358,7 @@ function register(ctx) {
               }
             } catch(e) {}
 
-            fetch('/wf/config?workspaceRoot=' + encodeURIComponent('C:/Users/ranwa/dsh_workspace'))
+            fetch('/wf/config?workspaceRoot=' + encodeURIComponent('/home/zhaokai/Projects/dsh_projects'))
               .then(r => r.json())
               .then(r => {
                 if (r && r.valid) {
