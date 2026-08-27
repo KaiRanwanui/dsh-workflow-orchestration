@@ -9,6 +9,7 @@
 const TASK_TYPES = {
   LLM_TASK: 'llm-task',
   LOOP: 'loop',
+  CONCURRENT: 'concurrent', // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
   HUMAN_DECISION: 'human-decision', // 预留（后续迭代）
   EXTERNAL_AGENT: 'external-agent', // 预留（后续迭代）
 }
@@ -27,6 +28,7 @@ const DEFAULTS = {
 const REQUIRED = {
   llmTask: ['id', 'processor'],
   loop: ['id', 'processor', 'items-from', 'item-var'],
+  concurrent: ['id', 'processor', 'items-from', 'item-var'], // Iter-8
   humanDecision: ['id', 'prompt'],
   externalAgent: ['id', 'agent'],
 }

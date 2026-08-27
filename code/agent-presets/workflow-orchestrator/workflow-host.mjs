@@ -33,6 +33,7 @@ export function apply(ctx) {
 const TASK_TYPES = {
   LLM_TASK: 'llm-task',
   LOOP: 'loop',
+  CONCURRENT: 'concurrent', // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
   HUMAN_DECISION: 'human-decision', // 预留（后续迭代）
   EXTERNAL_AGENT: 'external-agent', // 预留（后续迭代）
 }
@@ -51,6 +52,7 @@ const DEFAULTS = {
 const REQUIRED = {
   llmTask: ['id', 'processor'],
   loop: ['id', 'processor', 'items-from', 'item-var'],
+  concurrent: ['id', 'processor', 'items-from', 'item-var'], // Iter-8
   humanDecision: ['id', 'prompt'],
   externalAgent: ['id', 'agent'],
 }
@@ -352,6 +354,14 @@ function normalizeTask(t, idx, errors) {
       errors.push('Task "' + id + '" 的 on-error 必须是 break|continue，实际: ' + onError)
     }
     base.onError = onError
+  } else if (type === 'concurrent') {
+    // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
+    if (!base.processorRaw) errors.push('Task "' + id + '" 缺少必填字段: processor')
+    if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
+    if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
+    base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
+    base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    base.maxConcurrency = t['max-concurrency'] != null ? Number(t['max-concurrency']) : null
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
     if (!base.prompt) errors.push('Task "' + id + '" 缺少必填字段: prompt')
@@ -425,6 +435,12 @@ function taskSnapshot(t) {
     _loopIndex: t._loopIndex ?? 0,
     _loopGroupName: t._loopGroupName || null,
     _onError: t._onError || null,
+    // Iter-8：并发组元数据（Client DAG 分组渲染）
+    _concurrentGroup: t._concurrentGroup || null,
+    _concurrentGroupName: t._concurrentGroupName || null,
+    _concurrentItem: t._concurrentItem || null,
+    _concurrentIndex: t._concurrentIndex ?? 0,
+    _concurrentMax: t._concurrentMax || null,
   }
 }
 
@@ -501,6 +517,12 @@ function createWorkflowEngine() {
       _loopIndex: t._loopIndex ?? 0,
       _loopGroupName: t._loopGroupName || null,
       _onError: t._onError || null,
+      // Iter-8：并发组元数据（engine 组级并发控制 + Client DAG 分组渲染）
+      _concurrentGroup: t._concurrentGroup || null,
+      _concurrentGroupName: t._concurrentGroupName || null,
+      _concurrentItem: t._concurrentItem || null,
+      _concurrentIndex: t._concurrentIndex ?? 0,
+      _concurrentMax: t._concurrentMax || null,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -537,11 +559,28 @@ function createWorkflowEngine() {
         .filter((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
         .map((t) => t.id)
     )
-    return state.tasks.filter((t) => {
-      if (t.status !== E_TASK_STATUS.PENDING) return false
+    // 预计算每个并发组：组内 RUNNING 数 + 组级 max（Iter-8）
+    const gRun = new Map()
+    const gMax = new Map()
+    state.tasks.forEach((t) => {
+      if (!t._concurrentGroup) return
+      gRun.set(t._concurrentGroup, (gRun.get(t._concurrentGroup) || 0) + (t.status === E_TASK_STATUS.RUNNING ? 1 : 0))
+      if (!gMax.has(t._concurrentGroup)) gMax.set(t._concurrentGroup, t._concurrentMax || 1)
+    })
+    const result = []
+    for (const t of state.tasks) {
+      if (result.length >= slots) break
+      if (t.status !== E_TASK_STATUS.PENDING) continue
       const deps = t.dependsOn || []
-      return deps.every((d) => finished.has(d))
-    }).slice(0, slots)
+      if (!deps.every((d) => finished.has(d))) continue
+      // Iter-8：并发组组级槽位——组内 RUNNING + 该组已列入 result 的数量 >= 组级 max 则不放行
+      if (t._concurrentGroup) {
+        const gInResult = result.filter((x) => x._concurrentGroup === t._concurrentGroup).length
+        if ((gRun.get(t._concurrentGroup) || 0) + gInResult >= (gMax.get(t._concurrentGroup) || 1)) continue
+      }
+      result.push(t)
+    }
+    return result
   }
 
   function setStage(s) {
@@ -639,6 +678,12 @@ function createWorkflowEngine() {
       _loopIndex: t._loopIndex ?? 0,
       _loopGroupName: t._loopGroupName || null,
       _onError: t._onError || null,
+      // Iter-8：并发组元数据（engine 组级并发控制 + Client DAG 分组渲染）
+      _concurrentGroup: t._concurrentGroup || null,
+      _concurrentGroupName: t._concurrentGroupName || null,
+      _concurrentItem: t._concurrentItem || null,
+      _concurrentIndex: t._concurrentIndex ?? 0,
+      _concurrentMax: t._concurrentMax || null,
     })) : []
     state.updatedAt = Date.now()
   }
@@ -908,6 +953,54 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
   return expanded
 }
 
+// Iter-8：并发展开——对 items 的每个 item 生成一个独立迭代，迭代之间无依赖（可并发，受组级 max 约束）
+async function expandConcurrentTasks(fs, task, items, itemVar, params) {
+  const expanded = []
+  const loopDeps = task.dependsOn || []
+  const gMax = task.maxConcurrency || items.length // 组级并发（默认 items 数量，全部并发）
+
+  for (let i = 0; i < items.length; i++) {
+    const item = String(items[i]).trim()
+    if (!item) continue
+
+    const iterParams = { ...params }
+    iterParams[itemVar] = item
+
+    const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+    const iterId = task.id + '/' + sanitized
+
+    const iterInputs = injectInputsMap(task.inputsRaw || {}, iterParams)
+    const iterOutputs = injectArray(task.outputsRaw || [], iterParams)
+    const iterProcessor = injectParams(task.processor || '', iterParams)
+
+    const iterGate = task.gate ? {
+      checker: task.gate.checker,
+      onFailure: task.gate.onFailure,
+      maxRetries: task.gate.maxRetries,
+    } : null
+
+    expanded.push({
+      id: iterId,
+      name: (task.name || task.id) + ' - ' + item,
+      type: 'llm-task',
+      dependsOn: loopDeps, // ← 关键：无串行依赖链，都依赖原始前驱 → 可并发
+      timeout: task.timeout || 600,
+      processor: iterProcessor,
+      inputs: iterInputs,
+      outputs: iterOutputs,
+      gate: iterGate,
+      // 并发组元数据（Client DAG 分组渲染 + engine 组级并发控制）
+      _concurrentGroup: task.id,
+      _concurrentGroupName: task.name || task.id,
+      _concurrentItem: item,
+      _concurrentIndex: i,
+      _concurrentMax: gMax,
+    })
+  }
+
+  return expanded
+}
+
 // 从工具执行上下文取会话工作区（preset 挂载后 exec.agent 可用）
 function sessionCwd(exec) {
   try {
@@ -999,7 +1092,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
         const finalTasks = []
         for (const t of tasks) {
           if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
-            // 读取 items-from 文件
+            // 循环：读取 items-from 文件，串行展开（迭代之间有依赖链）
             const text = await fs.readText(await fs.resolve(t.itemsFrom))
             const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
             if (items.length === 0) {
@@ -1008,6 +1101,17 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
               return engine.snapshot()
             }
             const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
+            finalTasks.push(...iterations)
+          } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
+            // Iter-8：并发——读取 items-from 文件，迭代之间无依赖（可并发，受组级 max 约束）
+            const text = await fs.readText(await fs.resolve(t.itemsFrom))
+            const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+            if (items.length === 0) {
+              engine.setError('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await storage.save()
+              return engine.snapshot()
+            }
+            const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, params)
             finalTasks.push(...iterations)
           } else {
             finalTasks.push(t)

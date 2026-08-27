@@ -265,6 +265,14 @@ function normalizeTask(t, idx, errors) {
       errors.push('Task "' + id + '" 的 on-error 必须是 break|continue，实际: ' + onError)
     }
     base.onError = onError
+  } else if (type === 'concurrent') {
+    // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
+    if (!base.processorRaw) errors.push('Task "' + id + '" 缺少必填字段: processor')
+    if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
+    if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
+    base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
+    base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    base.maxConcurrency = t['max-concurrency'] != null ? Number(t['max-concurrency']) : null
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
     if (!base.prompt) errors.push('Task "' + id + '" 缺少必填字段: prompt')

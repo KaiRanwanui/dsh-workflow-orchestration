@@ -32,6 +32,12 @@ function taskSnapshot(t) {
     _loopIndex: t._loopIndex ?? 0,
     _loopGroupName: t._loopGroupName || null,
     _onError: t._onError || null,
+    // Iter-8：并发组元数据（Client DAG 分组渲染）
+    _concurrentGroup: t._concurrentGroup || null,
+    _concurrentGroupName: t._concurrentGroupName || null,
+    _concurrentItem: t._concurrentItem || null,
+    _concurrentIndex: t._concurrentIndex ?? 0,
+    _concurrentMax: t._concurrentMax || null,
   }
 }
 
@@ -108,6 +114,12 @@ function createWorkflowEngine() {
       _loopIndex: t._loopIndex ?? 0,
       _loopGroupName: t._loopGroupName || null,
       _onError: t._onError || null,
+      // Iter-8：并发组元数据（engine 组级并发控制 + Client DAG 分组渲染）
+      _concurrentGroup: t._concurrentGroup || null,
+      _concurrentGroupName: t._concurrentGroupName || null,
+      _concurrentItem: t._concurrentItem || null,
+      _concurrentIndex: t._concurrentIndex ?? 0,
+      _concurrentMax: t._concurrentMax || null,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -144,11 +156,28 @@ function createWorkflowEngine() {
         .filter((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
         .map((t) => t.id)
     )
-    return state.tasks.filter((t) => {
-      if (t.status !== E_TASK_STATUS.PENDING) return false
+    // 预计算每个并发组：组内 RUNNING 数 + 组级 max（Iter-8）
+    const gRun = new Map()
+    const gMax = new Map()
+    state.tasks.forEach((t) => {
+      if (!t._concurrentGroup) return
+      gRun.set(t._concurrentGroup, (gRun.get(t._concurrentGroup) || 0) + (t.status === E_TASK_STATUS.RUNNING ? 1 : 0))
+      if (!gMax.has(t._concurrentGroup)) gMax.set(t._concurrentGroup, t._concurrentMax || 1)
+    })
+    const result = []
+    for (const t of state.tasks) {
+      if (result.length >= slots) break
+      if (t.status !== E_TASK_STATUS.PENDING) continue
       const deps = t.dependsOn || []
-      return deps.every((d) => finished.has(d))
-    }).slice(0, slots)
+      if (!deps.every((d) => finished.has(d))) continue
+      // Iter-8：并发组组级槽位——组内 RUNNING + 该组已列入 result 的数量 >= 组级 max 则不放行
+      if (t._concurrentGroup) {
+        const gInResult = result.filter((x) => x._concurrentGroup === t._concurrentGroup).length
+        if ((gRun.get(t._concurrentGroup) || 0) + gInResult >= (gMax.get(t._concurrentGroup) || 1)) continue
+      }
+      result.push(t)
+    }
+    return result
   }
 
   function setStage(s) {
@@ -246,6 +275,12 @@ function createWorkflowEngine() {
       _loopIndex: t._loopIndex ?? 0,
       _loopGroupName: t._loopGroupName || null,
       _onError: t._onError || null,
+      // Iter-8：并发组元数据（engine 组级并发控制 + Client DAG 分组渲染）
+      _concurrentGroup: t._concurrentGroup || null,
+      _concurrentGroupName: t._concurrentGroupName || null,
+      _concurrentItem: t._concurrentItem || null,
+      _concurrentIndex: t._concurrentIndex ?? 0,
+      _concurrentMax: t._concurrentMax || null,
     })) : []
     state.updatedAt = Date.now()
   }

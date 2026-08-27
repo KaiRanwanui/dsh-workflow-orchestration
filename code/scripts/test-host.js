@@ -8,6 +8,7 @@ const { parseWorkflow } = require('../shared/workflow-parser')
 const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
 const { expandLoopTasks } = require('../plugins/workflow-host/tools.js')
+const { expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
 
 let pass = 0
 let fail = 0
@@ -294,9 +295,50 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   eFail.updateTask('X', { status: 'FAILED' })
   check('场景3: X FAILED 后 Y 不就绪', eFail.snapshot().runnable.length === 0)
 
-  console.log('')
-  console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
-  process.exit(fail > 0 ? 1 : 0)
+  // ── 用例 7：concurrent 并发节点（Iter-8：无依赖展开 + 组级 max 限制） ──
+  console.log('［用例 7］concurrent 并发节点 — 无依赖 + 组级 max 限制')
+
+  const concItems = ['login', 'order', 'payment', 'shipping'].map((item, i) => ({
+    id: 'batch/' + item, name: item, type: 'llm-task', processor: '/x/skills/batch/SKILL.md',
+    outputs: [], gate: { checker: '/x/check', onFailure: 'retry', maxRetries: 2 },
+    dependsOn: [], _loopGroup: null, _loopItem: null, _loopIndex: undefined, _loopGroupName: null, _onError: null,
+    _concurrentGroup: 'batch', _concurrentGroupName: '批量', _concurrentItem: item, _concurrentIndex: i, _concurrentMax: 2,
+  }))
+
+  const eConc = createWorkflowEngine()
+  eConc.begin({ name: 'conc', version: '1', description: null, params: {}, maxConcurrency: 3, tasks: concItems })
+  let concR = eConc.snapshot().runnable
+  check('concurrent: 初始组级max=2 放行 2 个', concR.length === 2 && concR[0].id === 'batch/login' && concR[1].id === 'batch/order', concR.map(t => t.id).join(','))
+
+  eConc.updateTask('batch/login', { status: 'RUNNING' })
+  eConc.updateTask('batch/order', { status: 'RUNNING' })
+  check('concurrent: 2个RUNNING后组级占满', eConc.snapshot().runnable.length === 0)
+
+  eConc.updateTask('batch/login', { status: 'DONE' })
+  concR = eConc.snapshot().runnable
+  check('concurrent: login DONE 后释放槽位启下一个', concR.length === 1 && concR[0].id === 'batch/payment', concR.map(t => t.id).join(','))
+
+  // 验证 expandConcurrentTasks 展开（无依赖 + 元数据）
+  const concTask = {
+    id: 'batch', name: '批量', type: 'concurrent', dependsOn: [], timeout: 600,
+    processor: '/x/skills/batch/SKILL.md', inputsRaw: { req: 'spec/${module}/req.md' },
+    outputsRaw: ['output/${module}.md'], gate: null,
+    itemsFromRaw: 'config/modules.txt', itemVar: 'module', maxConcurrency: 2,
+  }
+  Promise.resolve(expandConcurrentTasks(null, concTask, ['login', 'order', 'payment', 'shipping'], 'module', {})).then((cexp) => {
+    check('concurrent: expand 展开 4 个迭代', cexp.length === 4, cexp.length)
+    check('concurrent: expand 迭代无依赖', cexp.every(t => t.dependsOn.length === 0))
+    check('concurrent: expand 组级 max=2 元数据', cexp[0]._concurrentMax === 2 && cexp[0]._concurrentGroup === 'batch')
+    console.log('')
+    console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
+    process.exit(fail > 0 ? 1 : 0)
+  }).catch((e) => {
+    console.log('  ✘ expandConcurrentTasks 异常: ' + e.message)
+    fail++
+    console.log('')
+    console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
+    process.exit(1)
+  })
 }).catch((e) => {
   console.log('  ✘ expandLoopTasks 异常: ' + e.message)
   fail++

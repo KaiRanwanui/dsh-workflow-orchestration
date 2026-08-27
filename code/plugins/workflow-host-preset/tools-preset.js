@@ -131,6 +131,54 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
   return expanded
 }
 
+// Iter-8：并发展开——对 items 的每个 item 生成一个独立迭代，迭代之间无依赖（可并发，受组级 max 约束）
+async function expandConcurrentTasks(fs, task, items, itemVar, params) {
+  const expanded = []
+  const loopDeps = task.dependsOn || []
+  const gMax = task.maxConcurrency || items.length // 组级并发（默认 items 数量，全部并发）
+
+  for (let i = 0; i < items.length; i++) {
+    const item = String(items[i]).trim()
+    if (!item) continue
+
+    const iterParams = { ...params }
+    iterParams[itemVar] = item
+
+    const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+    const iterId = task.id + '/' + sanitized
+
+    const iterInputs = injectInputsMap(task.inputsRaw || {}, iterParams)
+    const iterOutputs = injectArray(task.outputsRaw || [], iterParams)
+    const iterProcessor = injectParams(task.processor || '', iterParams)
+
+    const iterGate = task.gate ? {
+      checker: task.gate.checker,
+      onFailure: task.gate.onFailure,
+      maxRetries: task.gate.maxRetries,
+    } : null
+
+    expanded.push({
+      id: iterId,
+      name: (task.name || task.id) + ' - ' + item,
+      type: 'llm-task',
+      dependsOn: loopDeps, // ← 关键：无串行依赖链，都依赖原始前驱 → 可并发
+      timeout: task.timeout || 600,
+      processor: iterProcessor,
+      inputs: iterInputs,
+      outputs: iterOutputs,
+      gate: iterGate,
+      // 并发组元数据（Client DAG 分组渲染 + engine 组级并发控制）
+      _concurrentGroup: task.id,
+      _concurrentGroupName: task.name || task.id,
+      _concurrentItem: item,
+      _concurrentIndex: i,
+      _concurrentMax: gMax,
+    })
+  }
+
+  return expanded
+}
+
 // 从工具执行上下文取会话工作区（preset 挂载后 exec.agent 可用）
 function sessionCwd(exec) {
   try {
@@ -297,5 +345,5 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks }
+  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks }
 }
