@@ -206,7 +206,7 @@ export function register(ctx) {
       let h
       if (fn.type === 'loop') h = gHLoop
       else if (fn.type === 'vertgroup') h = 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-      else if (fn.type === 'concgroup') h = 26 + (fn.group.items.length * (gH + gapV)) + padV
+      else if (fn.type === 'concgroup') h = expanded['cc-' + fn.group.key] ? (26 + (fn.group.items.length * (gH + gapV)) + padV) : gH
       else h = gH
       const cy = 28
 
@@ -348,7 +348,7 @@ export function register(ctx) {
     const maxH = flowNodes.reduce((mx, fn) => {
       const h = fn.type === 'loop' ? gHLoop
         : fn.type === 'vertgroup' ? 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-        : fn.type === 'concgroup' ? 26 + (fn.group.items.length * (gH + gapV)) + padV
+        : fn.type === 'concgroup' ? (expanded['cc-' + fn.group.key] ? (26 + (fn.group.items.length * (gH + gapV)) + padV) : gH)
         : gH
       return Math.max(mx, h)
     }, 0)
