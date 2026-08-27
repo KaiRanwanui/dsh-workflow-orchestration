@@ -25,9 +25,9 @@
 ## 2. 迭代全景
 
 ```
-已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎)
-当前:   Iter-8(并发语义完善 + concurrent 节点 + DAG 增强)   ← 待开发
-后续:   Iter-9(多实例管理) → Iter-10(编排编辑器)
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善)
+当前:   Iter-9(多实例技术验证)   ← 待开发
+后续:   Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(编排编辑器)
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -39,9 +39,12 @@
 | **5** | **Host/Client 架构调整** | **Client RPC 链路修复：webServer HTTP 路由 + fetch 轮询，废弃 harness RPC** | **DAG 面板经 HTTP 显示工作流状态** | ✅ **完成** |
 | **6** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-5** |
 | **7** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | ✅ **完成** |
-| **8** | **并发语义完善 + concurrent 节点 + DAG 增强** | **组级/工作流级 max 取最严格；concurrent Task 类型；启动/结束节点；依赖同前驱节点垂直排列** | **concurrent 并发 + start/end 节点 + 垂直排列** | **Iter-7** |
-| **9** | 多实例管理 | 定义多个流、暂停/切换/恢复 | 2 个流切换执行 | Iter-8 |
-| **10** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-9 |
+| **8** | **并发语义完善 + concurrent 节点 + DAG 增强** | **组级/工作流级 max 取最严格；concurrent Task 类型；启动/结束节点；依赖同前驱节点垂直排列** | **concurrent 并发 + start/end 节点 + 垂直排列** | ✅ **完成** |
+| **9** | 多实例技术验证（DSH Session 探索） | 验证插件内创建/监听 session、session cwd 定位实例目录 | session 探针 + 技术验证报告 | Iter-8 |
+| **10** | 实例目录与存储（后台） | 实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ 按实例读写 state | 多实例独立 state.json | Iter-9 |
+| **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | Iter-10 |
+| **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | Iter-11 |
+| **13** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-12 |
 
 ---
 
@@ -298,34 +301,78 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-9: 多实例管理（1 人天）
+### Iter-9: 多实例技术验证（DSH Session 探索）（1 人天）
 
-**输入**：Iter-8 并发语义完善可用
+**输入**：Iter-8 完成
 
-**修改范围**：
+**背景**：多实例方案定稿为"复用 DSH Session"（见 `plan/design/multi-instance-session-design.md`），先做技术验证确认可行性。
 
-| 组件 | 改动 |
-|------|------|
-| engine.js | 多实例状态 Map + 切换逻辑（暂停→换出→入→恢复）|
-| tools.js | `workflow_list`、`workflow_switch` |
-| rpc.js | 实例查询 RPC|
-| system-prompt | 实例管理能力提示 |
-| client | 实例列表 + 切换按钮 + 志面版 |
+**范围**：探针验证插件内 `ctx.sessions.create(id,{meta:{cwd}})` 创建 session、监听 `session/created`、用 `session.cwd` 定位实例目录；多 session 并行确认。
 
 **验证标准**：
 
 ```
-定义 WFA(3 Task) 和 WF-B(2 Tsk)
-→ 启动 WFA，Task1 → 暂停
-→ 切换到 WFB，执行 Task1→Taks2→完成
-→ 切回 WFA，恢复 → Take→Tas3→完成
+探针创建 2 个 session（不同 cwd）→ 独立存在、list 可见
+监听 session/created → 事件触发
+用 session.cwd 定位实例目录 → 可映射
+输出技术验证报告（回注 development-plan / 架构决策）
 ```
 
 ---
 
-### Iter-10: 编排编辑器（1 人天）
+### Iter-10: 实例目录与存储（后台）（1 人天）
 
-**输入**：Iter-9 多实例可用
+**输入**：Iter-9 技术验证可用
+
+**范围**：实例目录结构（`<cwd>/.workflow-agent/instances/<id>/{instance.yaml,state.json,metadata.json,output/,logs/}`）；storage 按实例读写 state；workflow-host 管理 `Map<instanceId,{engine,storage}>`（engine 零改造）；实例目录 metadata.json 存 instanceId↔sessionId（主）。
+
+**验证标准**：
+
+```
+创建实例 A/B → 各自实例目录 + 独立 state.json
+A 运行写 A 的 state.json，B 写 B 的（互不干扰）
+metadata.json 能还原 instanceId↔sessionId 映射
+```
+
+---
+
+### Iter-11: 实例操控工具（后台）（1 人天）
+
+**输入**：Iter-10 实例目录可用
+
+**范围**：`workflow_create`（从定义+参数建实例）/ `workflow_start` / `workflow_stop` / `workflow_reset`（清实例目录重跑）/ `workflow_list`；system-prompt 实例管理与重置能力提示。
+
+**验证标准**：
+
+```
+workflow_create(A 定义) → A 实例目录生成
+workflow_start(A) → A 运行，写 A 的 state.json
+workflow_stop(A) → A 标记 stopped
+workflow_reset(A) → 清空 A 的 output/logs/state.json，重新可执行
+workflow_list → 列出所有实例 + 状态
+```
+
+---
+
+### Iter-12: 前台实例管理界面（1 人天）
+
+**输入**：Iter-11 实例操控可用
+
+**范围**：client DAG 用 `useSessions` + `sessionId` 取当前 session 的 `cwd` → 定位实例目录 → 读 state.json 渲染（跟随 session 切换）；实例列表 UI（复用 DSH session 列表）+ 创建/启动/停止/重置按钮。
+
+**验证标准**：
+
+```
+开 workflow preset 会话 → DAG 显示该实例状态
+前台切 session（另一实例）→ DAG 自动跟随切换
+实例列表可见所有实例 + 当前 active 状态
+```
+
+---
+
+### Iter-13: 编排编辑器（1 人天）
+
+**输入**：Iter-12 前台实例可切换
 
 **产出**：`code/plugins/workflow-client/editor/`
 
@@ -352,8 +399,10 @@ cordis_define(code.host=index.js) → cordis_run
 |--|------|------|--------------|
 | R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-7 |
 | R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-6 |
-| R3 | 多实例切换时的状态一致性 | 高 | Iter-9 |
+| R3 | 多实例切换时的状态一致性 | 高 | Iter-11/12 |
 | R4 | DSH 版本产生接口变化 | 中 | 随时 |
 | R5 | webServer 路由冲突（`/wf/*` 与既有路由） | 中 | Iter-5 |
 | R6 | fetch 轮询跨域/同源策略限制 | 中 | Iter-5 |
 | R7 | concurrent 组级/工作流级 max 取最严格的调度执行 | 中 | Iter-8 |
+| R8 | 实例=session 映射（sessionId↔instanceId via metadata）可靠性 | 中 | Iter-10 |
+| R9 | 多 session 并行资源占用 / DSH 前端 session 切换跟随 | 中 | Iter-12 |

@@ -162,11 +162,13 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-9: 多实例管理（计划中）
+### Iter-9: 多实例技术验证（DSH Session 探索）（计划中）
 
 **迭代计划**：`plan/development/development-plan.md`（Iter-9）
 
-**目标**：多个工作流实例并行管理（定义多个流、暂停/切换/恢复）。
+**技术方案**：`plan/design/multi-instance-session-design.md`（复用 DSH Session 多实例）
+
+**目标**：先做技术验证——探针确认插件内创建/监听 session、用 session.cwd 定位实例目录、多 session 并行。之后按 Iter-10~13 逐步落地（实例目录/操控工具/前台界面/编辑器）。
 
 ---
 

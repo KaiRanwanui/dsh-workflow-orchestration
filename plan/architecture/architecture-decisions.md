@@ -165,6 +165,35 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 
 ---
 
+## 6. 多实例管理：复用 DSH Session（决策）
+
+> 详见 `plan/design/multi-instance-session-design.md`（技术方案全文）
+
+### 背景
+当前为单实例：一个编排 Agent 会话运行一个工作流实例，`workflow_begin` 会覆盖旧状态。需求：多工作流实例独立运行、切换查看。
+
+### 决策
+**实例 = 一个 DSH Session（workflow preset）**，实例选择/切换完全复用 DSH 的 session 列表/切换：
+- 每实例一个 workflow-orchestrator session，实例目录按 session.cwd 隔离
+- DSH 支持多 session（agent）并行（每 agent 独立 sessionId/cwd/loop），多个实例**天然并行可切换查看**
+- 不再强制"一个活跃 + 人工 stop 再切换"
+- 实例运行状态记在实例目录 `state.json`；实例切换用 DSH session 列表；实例映射用实例目录 `metadata.json`（主），`session.header.meta` 后备
+
+### 依据
+1. DSH `sessions` 服务（dsh-session）是 event-sourced append-only log，支持 `create/list/get/fork`，`session.append` 记轨迹（官方 workflow 即用 session 事件流）
+2. `agents` 配置支持多 agent，每个独立 sessionId/cwd/agent loop，可并行（`const { session } = agent`，agent-session 一一绑定）
+3. `conversation.view` slot 提供 `useSessions` + `sessionId`，能取当前 session 的 `cwd`（`byId[sessionId].cwd`）——DAG 面板可用它跟随 session 切换
+
+### 被否决
+- 单引擎 + 多 state Map（engine 大改造，易破坏现有逻辑）
+- 依赖 DSH `session-switch` 全局事件（调研：无此事件）
+- 依赖 DSH `/new` 重置工作流（`/new` 是 UI 新建对话，不保证清空实例目录）
+
+### 重置工作流
+在 workflow 层实现 `workflow_reset`：清空实例目录 `output/`/`logs/`/`state.json` → 重读定义 → `workflow_begin` 重跑。
+
+---
+
 ## 总结
 
 ### 架构层次
