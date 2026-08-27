@@ -53,6 +53,7 @@ const DEFAULTS = {
   taskType: TASK_TYPES.LLM_TASK,
   retries: 0, // quality-gate max-retries 默认
   onFailure: 'block', // quality-gate on-failure 默认
+  maxConcurrency: 1, // 工作流级最大并发数（Iter-7，默认串行）
 }
 
 // ── 必填字段校验规则 ────────────────────────────────────────────────────────
@@ -245,13 +246,19 @@ function parseWorkflow(text) {
   const warnings = []
 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { name: null, version: null, description: null, params: {}, tasks: [], errors: ['工作流文件必须是一个 YAML 对象'] }
+    return { name: null, version: null, description: null, params: {}, tasks: [], errors: ['工作流文件必须是一个 YAML 对象'], maxConcurrency: 1 }
   }
 
   const name = raw.name != null ? String(raw.name) : null
   if (!name) errors.push('缺少必填字段: name')
 
   const version = raw.version != null ? String(raw.version) : null
+
+  // Iter-7：工作流级最大并发数（默认 1 = 串行）
+  const maxConcurrency = raw['max-concurrency'] != null ? Number(raw['max-concurrency']) : 1
+  if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
+    errors.push('max-concurrency 必须是 >= 1 的整数，实际: ' + raw['max-concurrency'])
+  }
 
   const params = {}
   if (raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params)) {
@@ -294,7 +301,7 @@ function parseWorkflow(text) {
     }
   }
 
-  return { name, version, description: raw.description || null, params, tasks, errors, warnings }
+  return { name, version, description: raw.description || null, params, tasks, errors, warnings, maxConcurrency }
 }
 
 function normalizeTask(t, idx, errors) {
