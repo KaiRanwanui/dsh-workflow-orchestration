@@ -1870,9 +1870,36 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
     if (!root) return { state: null, error: 'workspaceRoot not specified' }
     const instancesRoot = root + '/.workflow-agent/instances'
     if (instanceId) {
-      const resolved = await fs.resolve(instancesRoot + '/' + instanceId + '/state.json')
-      const state = JSON.parse(await fs.readText(resolved))
-      return { state, error: null, instanceId }
+      const instanceDir = instancesRoot + '/' + instanceId
+      // 尝试读取 state.json（RUNNING/COMPLETED/FAILED 状态）
+      try {
+        const resolved = await fs.resolve(instanceDir + '/state.json')
+        const state = JSON.parse(await fs.readText(resolved))
+        return { state, error: null, instanceId }
+      } catch (e) {
+        // state.json 不存在 → CREATED 状态，从 instance.yaml 构建默认状态
+        try {
+          const yamlPath = await fs.resolve(instanceDir + '/instance.yaml')
+          const yamlText = await fs.readText(yamlPath)
+          const parsed = parseWorkflow(yamlText)
+          if (parsed.errors && parsed.errors.length > 0) {
+            return { state: null, error: 'invalid instance.yaml: ' + parsed.errors.join(', '), instanceId }
+          }
+          return {
+            state: {
+              workflow: parsed.name,
+              stage: 'CREATED',
+              tasks: [],
+              runnable: [],
+              maxConcurrency: parsed.maxConcurrency || 1,
+            },
+            error: null,
+            instanceId,
+          }
+        } catch (e2) {
+          return { state: null, error: 'cannot read instance.yaml: ' + (e2 && e2.message ? e2.message : String(e2)), instanceId }
+        }
+      }
     }
     let dirs = []
     try {
@@ -1888,9 +1915,36 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
         } catch (e) { /* 残缺实例目录跳过 */ }
       }
       if (best) {
-        const resolved = await fs.resolve(instancesRoot + '/' + best.id + '/state.json')
-        const state = JSON.parse(await fs.readText(resolved))
-        return { state, error: null, instanceId: best.id }
+        const instanceDir = instancesRoot + '/' + best.id
+        // 尝试读取 state.json（RUNNING/COMPLETED/FAILED 状态）
+        try {
+          const resolved = await fs.resolve(instanceDir + '/state.json')
+          const state = JSON.parse(await fs.readText(resolved))
+          return { state, error: null, instanceId: best.id }
+        } catch (e) {
+          // state.json 不存在 → CREATED 状态，从 instance.yaml 构建默认状态
+          try {
+            const yamlPath = await fs.resolve(instanceDir + '/instance.yaml')
+            const yamlText = await fs.readText(yamlPath)
+            const parsed = parseWorkflow(yamlText)
+            if (parsed.errors && parsed.errors.length > 0) {
+              return { state: null, error: 'invalid instance.yaml: ' + parsed.errors.join(', '), instanceId: best.id }
+            }
+            return {
+              state: {
+                workflow: parsed.name,
+                stage: 'CREATED',
+                tasks: [],
+                runnable: [],
+                maxConcurrency: parsed.maxConcurrency || 1,
+              },
+              error: null,
+              instanceId: best.id,
+            }
+          } catch (e2) {
+            return { state: null, error: 'cannot read instance.yaml: ' + (e2 && e2.message ? e2.message : String(e2)), instanceId: best.id }
+          }
+        }
       }
     }
     // 旧单实例布局回退（demo 数据兼容）

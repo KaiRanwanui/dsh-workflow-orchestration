@@ -44,6 +44,33 @@ function register(ctx) {
     listeners.forEach(fn => { try { fn() } catch(e) {} })
   }
 
+  // ── 实例列表轮询 ─────────────────────────────────────────────
+  let listPollingTimer = null
+  function startListPolling() {
+    if (!activeRoot) return
+    // 清理旧的轮询
+    if (listPollingTimer) {
+      clearInterval(listPollingTimer)
+    }
+    
+    const loadList = async () => {
+      if (!activeRoot) return
+      try {
+        const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot))
+        const r = await resp.json()
+        wfInstances = r && Array.isArray(r.instances) ? r.instances : []
+        listeners.forEach(fn => { try { fn() } catch (e2) {} })
+      } catch (e) {
+        // 静默失败，下次轮询重试
+      }
+    }
+    
+    // 立即加载一次
+    loadList()
+    // 每 10 秒轮询
+    listPollingTimer = setInterval(loadList, 10000)
+  }
+
   // ── 轮询逻辑 ───────────────────────────────────────────────────
   ctx.effect(() => {
     if (pollingActive) return
@@ -476,7 +503,13 @@ function register(ctx) {
           // ── Iter-12：workspaceRoot 解析——session cwd 优先，回退当前工作区首项 ──
           React.useEffect(() => {
             let next = null
-            if (typeof sessionCwd === 'string' && sessionCwd) next = String(sessionCwd).replace(/\\/g, '/')
+            if (typeof sessionCwd === 'string' && sessionCwd) {
+              next = String(sessionCwd).replace(/\\/g, '/')
+              // 如果是相对路径，转换为绝对路径
+              if (!next.startsWith('/')) {
+                next = '/home/zhaokai/Projects/dsh_projects/' + next
+              }
+            }
             if (!next && workspaceHook) {
               try {
                 const wsList = workspaceHook()
@@ -493,26 +526,21 @@ function register(ctx) {
             wfInstances = []; wfInstanceId = ''
             if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(next)
             listeners.forEach(fn => { try { fn() } catch (e2) {} })
+            // 启动实例列表轮询
+            startListPolling()
           }, [sessionCwd, workspaceHook])
 
           // ── Iter-12：实例列表轮询（只读；选择经 wfInstanceId 参与 status 轮询）──
+          // 注意：轮询在 workspaceRoot 解析 effect 里启动，不依赖 React state
+          // 这里只负责清理
           React.useEffect(() => {
-            if (!activeRoot) return
-            let stop = false
-            const load = async () => {
-              try {
-                const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot))
-                const r = await resp.json()
-                if (stop) return
-                wfInstances = r && Array.isArray(r.instances) ? r.instances : []
-                listeners.forEach(fn => { try { fn() } catch (e2) {} })
-              } catch (e) {}
+            return () => {
+              if (wfListLoader) {
+                wfListLoader.stop = true
+                wfListLoader = null
+              }
             }
-            load()
-            const d = window.setInterval(load, 10000)
-            wfListLoader = load
-            return () => { stop = true; window.clearInterval(d); wfListLoader = null }
-          }, [activeRoot])
+          }, [])
 
           const snap = latest
           const stateData = (snap && snap.state) ? snap.state : null
