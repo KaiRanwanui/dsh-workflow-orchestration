@@ -190,21 +190,44 @@ function sessionCwd(exec) {
 }
 
 // 注册工具：preset 本地插件形态（ctx.tools.register），不依赖 harness
-function registerWorkflowToolsPreset(ctx, engine, storage) {
+// Iter-10：新增 registry 参数（instance-store 的 createInstanceRegistry 产物）。
+//   - 会话上下文 + 无显式 statePath/workspaceRoot 参数 → 实例布局：
+//     begin 时创建实例目录并绑定新 engine/storage；status 时按会话取活跃实例
+//     （重启后惰性 hydrate）。快照附 instanceId 供调用方/前端识别。
+//   - 显式 statePath/workspaceRoot 参数或无会话上下文 → 回退单实例绑定
+//     （engine/storage 形参，保持既有行为与旧布局兼容）。
+function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   const fs = ctx.get('fs')
+
+  // ── 每次工具调用解析绑定的引擎/存储（避免跨会话闭包串扰，多会话并行安全）──
+  async function bind(exec, args) {
+    if (args && (args.statePath || args.workspaceRoot)) {
+      return { engine, storage, instanceId: null }
+    }
+    if (registry) {
+      const entry = await registry.forSession(exec)
+      if (entry) return { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+    }
+    return { engine, storage, instanceId: null }
+  }
+
+  function withInstanceId(snapshot, b) {
+    if (b && b.instanceId) snapshot.instanceId = b.instanceId
+    return snapshot
+  }
 
   // ── workflow_begin ────────────────────────────────────────────────────────
   const beginTool = {
     name: 'workflow_begin',
-    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量。可选 workspaceRoot（推荐：传会话工作区根，如 C:/Users/<user>/dsh_workspace）决定状态文件默认落盘位置 <root>/.workflow-agent/state.json；或直接传 statePath 完全指定状态文件路径。未传 workspaceRoot 时自动使用当前会话工作区。成功返回解析出的任务列表（含处理技能绝对路径、门禁配置）与初始 PENDING 状态；定义不合法时返回 errors 列表。',
+    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（含处理技能绝对路径、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。',
     parameters: {
       type: 'object',
       additionalProperties: true,
       properties: {
         workflowPath: { type: 'string', description: '工作流 YAML 的绝对路径' },
         workflowText: { type: 'string', description: '工作流 YAML 文本（与 workflowPath 二选一）' },
-        workspaceRoot: { type: 'string', description: '状态落盘根目录（默认取会话工作区）' },
-        statePath: { type: 'string', description: '完全自定义的状态文件绝对路径（优先级高于 workspaceRoot）' },
+        workspaceRoot: { type: 'string', description: '（兼容旧布局）状态落盘根目录；默认走实例目录布局' },
+        statePath: { type: 'string', description: '（兼容旧布局）完全自定义的状态文件绝对路径' },
         params: {
           type: 'object',
           additionalProperties: true,
@@ -219,25 +242,27 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
       },
     },
     async execute(args, exec) {
+      // 初始绑定（错误路径也要能落盘）
+      let b = await bind(exec, args)
       try {
         if (!fs) throw new Error('fs service unavailable')
-        if (args && args.workspaceRoot && storage) storage.setWorkspaceRoot(String(args.workspaceRoot))
-        if (args && args.statePath && storage) storage.setStatePath(String(args.statePath))
-        // 未显式指定 workspaceRoot 时，从会话上下文取工作区
-        if ((!args || !args.workspaceRoot) && storage) {
+        if (args && args.workspaceRoot && b.storage) b.storage.setWorkspaceRoot(String(args.workspaceRoot))
+        if (args && args.statePath && b.storage) b.storage.setStatePath(String(args.statePath))
+        // 未显式指定 workspaceRoot 时，从会话上下文取工作区（legacy 单实例布局落点）
+        if ((!args || !args.workspaceRoot) && b.storage) {
           const cwd = sessionCwd(exec)
-          if (cwd) storage.setWorkspaceRoot(cwd)
+          if (cwd) b.storage.setWorkspaceRoot(cwd)
         }
         const src = await loadWorkflowSource(fs, args)
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const parsed = parseWorkflow(src.text)
         const params = (args && args.params) || {}
         if (parsed.errors && parsed.errors.length > 0) {
-          engine.setError('workflow 定义不合法: ' + parsed.errors.join('; '))
-          await storage.save()
-          const s = engine.snapshot()
+          b.engine.setError('workflow 定义不合法: ' + parsed.errors.join('; '))
+          await b.storage.save()
+          const s = b.engine.snapshot()
           s.workflowBeginErrors = parsed.errors
-          return s
+          return withInstanceId(s, b)
         }
         // 注入 params + 解析相对路径为绝对路径
         const tasks = await Promise.all(parsed.tasks.map(async (t) => {
@@ -266,34 +291,63 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
         }))
         parsed.tasks = tasks
 
-        // ── 循环展开：将 loop Task 替换为 N 个串行迭代实例 ──
+        // ── 循环/并发展开 ──
         const finalTasks = []
         for (const t of tasks) {
           if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
-            // 读取 items-from 文件
+            // 循环：读取 items-from 文件，串行展开（迭代之间有依赖链）
             const text = await fs.readText(await fs.resolve(t.itemsFrom))
             const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
             if (items.length === 0) {
-              engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-              await storage.save()
-              return engine.snapshot()
+              b.engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await b.storage.save()
+              return withInstanceId(b.engine.snapshot(), b)
             }
             const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
+            finalTasks.push(...iterations)
+          } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
+            // Iter-8：并发——读取 items-from 文件，迭代之间无依赖（可并发，受组级 max 约束）
+            const text = await fs.readText(await fs.resolve(t.itemsFrom))
+            const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+            if (items.length === 0) {
+              b.engine.setError('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await b.storage.save()
+              return withInstanceId(b.engine.snapshot(), b)
+            }
+            const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, params)
             finalTasks.push(...iterations)
           } else {
             finalTasks.push(t)
           }
         }
         parsed.tasks = finalTasks
-        engine.begin(parsed)
-        engine.setError(null)
-        const r = await storage.save()
-        engine.setPersist(r)
-        return engine.snapshot()
+
+        // ── Iter-10：多实例布局——成功路径创建实例目录并切换绑定 ──
+        // （解析/展开失败不建实例目录；显式 statePath/workspaceRoot 参数走旧布局）
+        if (registry && !args.statePath && !args.workspaceRoot) {
+          const cwd = sessionCwd(exec)
+          if (cwd) {
+            const entry = await registry.beginInstance({
+              cwd,
+              sessionId: registry.sessionIdOf(exec),
+              workflowName: parsed.name,
+              sourceText: src.text,
+              sourcePath: args.workflowPath || null,
+              params,
+            })
+            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+          }
+        }
+
+        b.engine.begin(parsed)
+        b.engine.setError(null)
+        const r = await b.storage.save()
+        b.engine.setPersist(r)
+        return withInstanceId(b.engine.snapshot(), b)
       } catch (error) {
-        engine.setError(error.message)
-        await storage.save()
-        return engine.snapshot()
+        b.engine.setError(error.message)
+        await b.storage.save()
+        return withInstanceId(b.engine.snapshot(), b)
       }
     },
   }
@@ -302,7 +356,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
   // ── workflow_status ───────────────────────────────────────────────────────
   const statusTool = {
     name: 'workflow_status',
-    description: '按编排进展更新工作流状态并同步持久化与 UI：stage（PENDING|RUNNING|COMPLETED|FAILED）、gateResult（PASS|FAIL）、task/tasktatus 更新单个任务（PENDING|RUNNING|DONE|FAILED|SKIPPED）、retries 重试计数、error 错误信息。每次调用返回最新快照。',
+    description: '按编排进展更新工作流状态并同步持久化与 UI：stage（PENDING|RUNNING|COMPLETED|FAILED）、gateResult（PASS|FAIL）、task/tasktatus 更新单个任务（PENDING|RUNNING|DONE|FAILED|SKIPPED）、retries 重试计数、error 错误信息。状态写入当前会话活跃实例目录的 state.json（重启后自动从实例目录恢复）。每次调用返回最新快照（含 instanceId）。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -322,21 +376,22 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
       },
     },
     async execute(args, exec) {
+      const b = await bind(exec, args)
       try {
         if (!args) args = {}
-        if (args.stage) engine.setStage(String(args.stage))
-        if (args.gateResult) engine.setGateResult(String(args.gateResult))
-        if (typeof args.retries === 'number') engine.setRetries(args.retries)
-        if (args.error !== undefined) engine.setError(args.error ? String(args.error) : null)
+        if (args.stage) b.engine.setStage(String(args.stage))
+        if (args.gateResult) b.engine.setGateResult(String(args.gateResult))
+        if (typeof args.retries === 'number') b.engine.setRetries(args.retries)
+        if (args.error !== undefined) b.engine.setError(args.error ? String(args.error) : null)
         if (args.task && args.taskStatus) {
-          engine.updateTask(String(args.task), { status: String(args.taskStatus) })
+          b.engine.updateTask(String(args.task), { status: String(args.taskStatus) })
         }
-        const r = await storage.save()
-        engine.setPersist(r)
-        return engine.snapshot()
+        const r = await b.storage.save()
+        b.engine.setPersist(r)
+        return withInstanceId(b.engine.snapshot(), b)
       } catch (error) {
-        engine.setError(error.message)
-        return engine.snapshot()
+        b.engine.setError(error.message)
+        return withInstanceId(b.engine.snapshot(), b)
       }
     },
   }

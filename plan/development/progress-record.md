@@ -41,6 +41,8 @@
 
 | 今日 | **Iter-9 多实例技术验证（DSH Session 探针）** | ✅ 完成（12 项探针全过，方案可行性确认，动态插件已清理） |
 
+| 今日 | **Iter-10 实例目录与存储** | ✅ 完成（实例注册表 + 会话绑定 + 路由实例布局，79 单测通过，v0.4.0 已部署） |
+
 ---
 
 ## 已完成工作
@@ -164,15 +166,30 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-10: 实例目录与存储（后台）（计划中）
+### Iter-11: 实例操控工具（后台）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-10）
+**迭代计划**：`plan/development/development-plan.md`（Iter-11）
 
 **技术方案**：`plan/design/multi-instance-session-design.md`（复用 DSH Session 多实例）
 
-**目标**：实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ storage 按实例读写 state；workflow-host 管理 `Map<instanceId,{engine,storage}>`（engine 零改造）。
+**目标**：`workflow_create` / `workflow_start` / `workflow_stop` / `workflow_reset` / `workflow_list`；system-prompt 实例管理与重置能力提示。
 
-**Iter-9 输入约束**：实例目录路径从 `exec.agent.session.header.cwd` 推导（动态插件上下文 `workspaceRoot`=HOME，不可依赖）；实例 session 生命周期用 `prepare+enter+announce` 持 detach（`create()` 无移除通道）。详见 `iter9-report.md` §5。
+**已就绪基础**：实例注册表 + 实例目录布局 + metadata 映射 + 惰性恢复（Iter-10）；实例 session 受控生命周期用 `prepare+enter+announce` 持 detach（Iter-9 约束）。
+
+---
+
+### 12. Iter-10 — 实例目录与存储（✅ 完成）
+
+**迭代报告**：`plan/development/iter10-report.md`
+
+**核心交付**：
+- 目录约束确认：session cwd 即沙箱 workspace-write 边界（dsh-sandbox-policy 源码），实例目录建在会话工作区内拥有完全读写权限
+- 新增 `instance-store.js`：实例注册表（beginInstance / forSession / hydrateLatest）+ 目录布局（instance.yaml/state.json/metadata.json/output/logs）
+- storage 实例目录模式（`setInstanceDir`）；tools 每次调用独立绑定（多会话并行安全）；`workflow_begin` 成功路径自动实例化（id=`workflowName-uuid8`）
+- `/wf/status` 支持 `?instanceId=` 精确读取 + 最新实例选择 + 旧布局回退；**Client 零改动**
+- 修复 tools-preset.js 源文件与 mjs 内联副本的 Iter-8 漂移（脚本化 section 同步）
+
+**验证**：单测 79/79（用例 8 共 14 断言：实例目录/metadata 映射/双实例隔离/惰性恢复）；部署 web profile v0.4.0 后路由验证 4 项全过（config 识别/最新实例/instanceId 精确/旧布局无回归）。
 
 ---
 
@@ -289,6 +306,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-7 报告 | `plan/development/iter7-report.md` |
 | Iter-8 报告 | `plan/development/iter8-report.md` |
 | Iter-9 报告 | `plan/development/iter9-report.md` |
+| Iter-10 报告 | `plan/development/iter10-report.md` |
 
 ---
 

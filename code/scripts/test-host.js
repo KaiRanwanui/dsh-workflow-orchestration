@@ -9,9 +9,87 @@ const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
 const { expandLoopTasks } = require('../plugins/workflow-host/tools.js')
 const { expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
+const { createInstanceRegistry, slugifyName, instanceDirPath } = require('../plugins/workflow-host/instance-store.js')
+const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
 
 let pass = 0
 let fail = 0
+
+// ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
+async function runCase8() {
+  console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
+
+  // mock fs：内存文件系统（resolve 返回 {path}，与 DSH fs 语义同构）
+  const files = new Map()
+  const mockFs = {
+    async resolve(p) { return { path: p } },
+    async writeText(t, content) { files.set(t.path, String(content)) },
+    async readText(t) {
+      const v = files.get(t.path)
+      if (v === undefined) throw new Error('not found: ' + t.path)
+      return v
+    },
+    async listDir(t) {
+      const prefix = t.path.replace(/\/+$/, '') + '/'
+      const seen = new Map()
+      for (const key of files.keys()) {
+        if (!key.startsWith(prefix)) continue
+        const rest = key.slice(prefix.length)
+        const seg = rest.split('/')[0]
+        if (!seg) continue
+        seen.set(seg, { name: seg, type: rest.includes('/') ? 'directory' : 'file', target: { path: prefix + seg } })
+      }
+      return Array.from(seen.values())
+    },
+  }
+  const ctx = { get() { return mockFs } }
+  const deps = { createWorkflowEngine, createWorkflowStorage }
+  const registry = createInstanceRegistry(ctx, deps)
+
+  const execA = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/workspace-a' } } } }
+  const execB = { agent: { session: { header: { id: 'sess-b', cwd: '/ws/workspace-b' } } } }
+
+  check('slug: 名称清洗 + 空名兜底', slugifyName('Demo Workflow!') === 'demo-workflow' && slugifyName('') === 'wf')
+
+  const parsed = { name: 'demo', version: '1.0', description: null, params: {}, maxConcurrency: 1, tasks: [
+    { id: 't1', name: 'T1', type: 'llm-task', status: 'PENDING', dependsOn: [], processor: '/x/s1', inputs: {}, outputs: [], gate: null },
+  ] }
+
+  // 实例 A：创建 → 目录结构 + metadata 映射
+  const a = await registry.beginInstance({ cwd: '/ws/workspace-a', sessionId: 'sess-a', workflowName: 'demo', sourceText: 'name: demo\n', sourcePath: '/x/demo.yaml', params: { p: 1 } })
+  check('实例A: id 形态 demo-<uuid8>', /^demo-[0-9a-f]{8}$/.test(a.instanceId), a.instanceId)
+  check('实例A: 目录锚点 session cwd', a.dir === instanceDirPath('/ws/workspace-a', a.instanceId))
+  const metaA = JSON.parse(files.get(a.dir + '/metadata.json'))
+  check('实例A: metadata 映射 instanceId↔sessionId', metaA.instanceId === a.instanceId && metaA.sessionId === 'sess-a' && metaA.sessionCwd === '/ws/workspace-a')
+  check('实例A: instance.yaml 快照含源文本+params', files.get(a.dir + '/instance.yaml').includes('name: demo') && files.get(a.dir + '/instance.yaml').includes('"p":1'))
+  check('实例A: output/logs 就绪', files.has(a.dir + '/output/.gitkeep') && files.has(a.dir + '/logs/.gitkeep'))
+
+  // A 引擎 begin + save → state.json 落在实例目录
+  a.engine.begin(parsed)
+  await a.storage.save()
+  check('实例A: state.json 落在实例目录', files.has(a.dir + '/state.json'))
+
+  // 实例 B：同一注册表，不同 cwd → 完全隔离
+  const b = await registry.beginInstance({ cwd: '/ws/workspace-b', sessionId: 'sess-b', workflowName: 'demo', sourceText: 'name: demo\n', sourcePath: null, params: {} })
+  b.engine.begin(parsed)
+  b.engine.updateTask('t1', { status: 'RUNNING' })
+  await b.storage.save()
+  check('实例B: 目录隔离（不同 cwd）', b.dir.startsWith('/ws/workspace-b/') && b.dir !== a.dir)
+  check('实例B: 独立 state.json（内容不同）', files.has(b.dir + '/state.json') && files.get(b.dir + '/state.json') !== files.get(a.dir + '/state.json'))
+
+  // 活跃映射：forSession 按会话返回各自实例
+  const ra = await registry.forSession(execA)
+  const rb = await registry.forSession(execB)
+  check('forSession: A 会话绑 A 实例', !!ra && ra.instanceId === a.instanceId)
+  check('forSession: B 会话绑 B 实例', !!rb && rb.instanceId === b.instanceId)
+
+  // 惰性恢复：新注册表（模拟 DSH 重启）→ sessionId 精确匹配恢复
+  const registry2 = createInstanceRegistry(ctx, deps)
+  const restored = await registry2.forSession(execB)
+  check('惰性恢复: 重启后按 sessionId 还原 B', !!restored && restored.instanceId === b.instanceId)
+  check('惰性恢复: B 任务状态 RUNNING 保留', restored.engine.snapshot().tasks.some(t => t.id === 't1' && t.status === 'RUNNING'))
+  check('惰性恢复: 恢复条目落点指向实例目录', !!restored.dir && files.has(restored.dir + '/metadata.json'))
+}
 
 function check(name, cond, extra) {
   if (cond) {
@@ -325,10 +403,14 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     outputsRaw: ['output/${module}.md'], gate: null,
     itemsFromRaw: 'config/modules.txt', itemVar: 'module', maxConcurrency: 2,
   }
-  Promise.resolve(expandConcurrentTasks(null, concTask, ['login', 'order', 'payment', 'shipping'], 'module', {})).then((cexp) => {
+  Promise.resolve(expandConcurrentTasks(null, concTask, ['login', 'order', 'payment', 'shipping'], 'module', {})).then(async (cexp) => {
     check('concurrent: expand 展开 4 个迭代', cexp.length === 4, cexp.length)
     check('concurrent: expand 迭代无依赖', cexp.every(t => t.dependsOn.length === 0))
     check('concurrent: expand 组级 max=2 元数据', cexp[0]._concurrentMax === 2 && cexp[0]._concurrentGroup === 'batch')
+
+    // ── 用例 8：实例注册表（Iter-10）──
+    await runCase8()
+
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
     process.exit(fail > 0 ? 1 : 0)

@@ -8,13 +8,16 @@ export const name = 'workflow-host'
 export const inject = ['fs', 'tools']
 
 export function apply(ctx) {
+  // Iter-10：多实例注册表（instanceId → engine/storage，sessionId → 活跃实例）
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage })
+  // 单实例兼容绑定（显式 statePath/workspaceRoot 参数或无会话上下文时回退）
   const engine = createWorkflowEngine()
   const storage = createWorkflowStorage(ctx, engine)
   if (storage) {
     storage.load().catch(() => {})
   }
   if (ctx.get('tools')) {
-    registerWorkflowToolsPreset(ctx, engine, storage)
+    registerWorkflowToolsPreset(ctx, engine, storage, registry)
   }
   // Iter-5：webServer HTTP 路由（替代 harness RPC，供 Client 面板轮询状态）
   registerWebRoutes(ctx)
@@ -718,6 +721,8 @@ function createWorkflowEngine() {
 //         - setStatePath(path)    ：完全自定义状态文件路径
 //       两者都未设置时 save() 返回错误、load() 返回 false（不抛异常、不写盘）。
 // 依赖：ctx（fs）、engine（snapshot/setPersist/hydrate）。
+// Iter-10：新增实例目录模式 setInstanceDir(dir)——落点 <dir>/state.json，
+//          优先级高于 workspaceRoot 旧布局（<root>/.workflow-agent/state.json）。
 // ============================================================================
 
 function createWorkflowStorage(ctx, engine) {
@@ -726,6 +731,7 @@ function createWorkflowStorage(ctx, engine) {
   let workspaceRoot = sandboxPolicy ? (sandboxPolicy.workspaceRoot || '') : ''
   let explicitStatePath = null
   let statePath = null
+  let instanceDir = null // Iter-10：实例目录（优先级最高，落点 <instanceDir>/state.json）
 
   // 由调用方（workflow_begin）在运行时设置，替代宿主 fallback root
   function setWorkspaceRoot(root) {
@@ -738,6 +744,12 @@ function createWorkflowStorage(ctx, engine) {
     statePath = null // 下次访问时重算
   }
 
+  // Iter-10：实例目录模式（由 instance-store 的 beginInstance/hydrateLatest 设置）
+  function setInstanceDir(dir) {
+    instanceDir = dir ? String(dir).replace(/\\/g, '/').replace(/\/+$/, '') : null
+    statePath = null
+  }
+
   // 延迟计算状态文件绝对路径（首次读写时解析）
   async function ensurePath() {
     if (statePath) return statePath
@@ -747,15 +759,19 @@ function createWorkflowStorage(ctx, engine) {
       statePath = await fs.resolve(explicitStatePath)
       return statePath
     }
+    if (instanceDir) {
+      statePath = await fs.resolve(instanceDir + '/state.json')
+      return statePath
+    }
     if (!workspaceRoot) return null
     const dir = (workspaceRoot + '/.workflow-agent').replace(/\/+/g, '/')
     statePath = await fs.resolve(dir + '/state.json')
     return statePath
   }
 
-  // 显式沙箱写策略：写策略根来自调用方指定的 workspaceRoot 或状态文件父目录
+  // 显式沙箱写策略：写策略根来自实例目录 > workspaceRoot > 状态文件父目录
   function writePolicy() {
-    let root = workspaceRoot
+    let root = instanceDir || workspaceRoot
     if (!root && explicitStatePath) {
       const idx = explicitStatePath.lastIndexOf('/')
       root = idx > 0 ? explicitStatePath.slice(0, idx) : explicitStatePath
@@ -815,9 +831,204 @@ function createWorkflowStorage(ctx, engine) {
     }
   }
 
-  return { save, load, setWorkspaceRoot, setStatePath }
+  return { save, load, setWorkspaceRoot, setStatePath, setInstanceDir }
 }
 
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { createWorkflowStorage }
+}
+
+
+// ---- module: instance-store ----
+// ============================================================================
+// workflow-agent — 实例注册表与目录布局（Iter-10 多实例存储）
+// 文件：code/plugins/workflow-host/instance-store.js
+// 说明：多实例的核心数据结构与目录约定。
+//       目录布局（锚点 = session cwd；DSH 沙箱按 session 解析，"A session cwd
+//       is its workspace-write boundary"，实例目录建在会话工作区内即拥有完全
+//       本地读写权限；Iter-9 探针证实 fs 嵌套写/读回可用）：
+//         <cwd>/.workflow-agent/instances/<instanceId>/
+//           ├── instance.yaml   # 实例定义快照（源 YAML + 参数注释头，源定义只读）
+//           ├── state.json      # engine snapshot（storage.setInstanceDir 落点）
+//           ├── metadata.json   # { instanceId, workflowName, sessionId, ... }
+//           ├── output/         # 每实例产物
+//           └── logs/           # 每实例日志
+//       实例 id = slug(workflowName) + '-' + uuid8（设计文档定稿；
+//       Iter-9 证实 session id 唯一 guard，uuid8 天然防撞）。
+//       metadata.json 是 instanceId↔sessionId 的主映射（重启后惰性 hydrate 依据：
+//       session id 跨重启稳定，按 sessionId 精确匹配优先、createdAt 最新兜底）。
+// 依赖：ctx（fs）；engine/storage 工厂由 deps 注入（便于 Node 单测）。
+// ============================================================================
+
+// ── 工作流名 → 实例 id 前缀（安全文件名片段）────────────────────────────────
+function slugifyName(name) {
+  const s = String(name || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  return s || 'wf'
+}
+
+// ── 8 位十六进制唯一后缀（时间尾 + 随机，实例级足够；目录重名由唯一性兜底）──
+function makeUuid8() {
+  return (Date.now().toString(16).slice(-4) + Math.random().toString(16).slice(2, 6)).slice(0, 8)
+}
+
+// ── 路径计算 ────────────────────────────────────────────────────────────────
+function normalizeDir(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '')
+}
+
+function instancesRootPath(cwd) {
+  return (normalizeDir(cwd) + '/.workflow-agent/instances').replace(/\/+/g, '/')
+}
+
+function instanceDirPath(cwd, instanceId) {
+  return instancesRootPath(cwd) + '/' + instanceId
+}
+
+// ── metadata.json 组装（lossless JSON；sessionId 缺省 null 而非 undefined）──
+function composeMetadata(m) {
+  return {
+    instanceId: m.instanceId,
+    workflowName: m.workflowName,
+    sessionId: m.sessionId === undefined ? null : m.sessionId,
+    sessionCwd: m.sessionCwd || null,
+    sourcePath: m.sourcePath || null,
+    params: m.params && typeof m.params === 'object' ? m.params : {},
+    createdAt: m.createdAt || new Date().toISOString(),
+  }
+}
+
+// ── 实例注册表：instanceId → {engine, storage, meta}；sessionId → 活跃实例 ──
+function createInstanceRegistry(ctx, deps) {
+  const engines = new Map()        // instanceId -> entry
+  const activeBySession = new Map() // sessionId -> instanceId
+
+  function get(instanceId) {
+    return engines.get(instanceId)
+  }
+
+  function activeIdFor(sessionId) {
+    return activeBySession.get(sessionId)
+  }
+
+  // 工具执行上下文 → sessionId（与 tools-preset 的 sessionCwd 同构）
+  function sessionIdOf(exec) {
+    try {
+      const id = exec && exec.agent && exec.agent.session && exec.agent.session.header && exec.agent.session.header.id
+      return typeof id === 'string' && id.length > 0 ? id : undefined
+    } catch (e) {
+      return undefined
+    }
+  }
+
+  // ── 创建实例目录 + 引擎条目（workflow_begin 成功路径调用）────────────────
+  async function beginInstance(opts) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    const cwd = normalizeDir(opts.cwd)
+    if (!cwd) throw new Error('session cwd 未提供，无法创建实例目录')
+    const workflowName = opts.workflowName || 'wf'
+    const instanceId = slugifyName(workflowName) + '-' + makeUuid8()
+    const dir = instanceDirPath(cwd, instanceId)
+    const meta = composeMetadata({
+      instanceId,
+      workflowName,
+      sessionId: opts.sessionId,
+      sessionCwd: cwd,
+      sourcePath: opts.sourcePath,
+      params: opts.params,
+    })
+    // 目录 + 固定文件（fs.writeText 自动建父目录；Iter-9 探针 P7 已验证嵌套写）
+    await fs.writeText(await fs.resolve(dir + '/metadata.json'), JSON.stringify(meta, null, 2))
+    const header = [
+      '# workflow 实例定义快照（参数化副本；源定义文件保持只读）',
+      '# source: ' + (opts.sourcePath || '(inline workflowText)'),
+      '# instanceId: ' + instanceId,
+      '# createdAt: ' + meta.createdAt,
+      '# params: ' + JSON.stringify(opts.params || {}),
+      '',
+    ].join('\n')
+    await fs.writeText(await fs.resolve(dir + '/instance.yaml'), header + String(opts.sourceText || ''))
+    await fs.writeText(await fs.resolve(dir + '/output/.gitkeep'), '')
+    await fs.writeText(await fs.resolve(dir + '/logs/.gitkeep'), '')
+    // 引擎 + 存储（engine 零改造；存储落点 = 实例目录 state.json）
+    const engine = deps.createWorkflowEngine()
+    const storage = deps.createWorkflowStorage(ctx, engine)
+    storage.setInstanceDir(dir)
+    const entry = { instanceId, dir, meta, engine, storage }
+    engines.set(instanceId, entry)
+    if (opts.sessionId) activeBySession.set(opts.sessionId, instanceId)
+    return entry
+  }
+
+  // ── 会话当前活跃实例；未命中则按实例目录惰性恢复（DSH 重启后首次调用）────
+  async function forSession(exec) {
+    const sessionId = sessionIdOf(exec)
+    const hit = sessionId ? activeBySession.get(sessionId) : undefined
+    if (hit && engines.get(hit)) return engines.get(hit)
+    const cwd = (function () {
+      try {
+        const c = exec && exec.agent && exec.agent.session && exec.agent.session.header && exec.agent.session.header.cwd
+        return typeof c === 'string' && c ? c : undefined
+      } catch (e) {
+        return undefined
+      }
+    })()
+    if (!cwd) return undefined
+    const restored = await hydrateLatest(cwd, sessionId)
+    if (!restored) return undefined
+    if (sessionId) activeBySession.set(sessionId, restored.instanceId)
+    return restored
+  }
+
+  // ── 扫描实例目录恢复最新实例（metadata.sessionId 精确匹配优先）────────────
+  async function hydrateLatest(cwd, sessionId) {
+    const fs = ctx.get('fs')
+    if (!fs) return undefined
+    let dirs = []
+    try {
+      const entries = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      dirs = entries.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      return undefined // 无 instances 目录（该 cwd 从未运行过实例）
+    }
+    const candidates = []
+    for (const id of dirs) {
+      try {
+        const meta = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/metadata.json')))
+        if (!meta || meta.instanceId !== id) continue
+        const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
+        if (!state || !state.workflow) continue
+        candidates.push({ meta, state })
+      } catch (e) { /* 残缺实例目录跳过 */ }
+    }
+    if (candidates.length === 0) return undefined
+    const matched = sessionId ? candidates.find(c => c.meta.sessionId === sessionId) : null
+    const best = matched || candidates.sort((a, b) => String(b.meta.createdAt || '').localeCompare(String(a.meta.createdAt || '')))[0]
+    const dir = instanceDirPath(cwd, best.meta.instanceId)
+    const engine = deps.createWorkflowEngine()
+    const storage = deps.createWorkflowStorage(ctx, engine)
+    storage.setInstanceDir(dir)
+    engine.hydrate(best.state)
+    const entry = { instanceId: best.meta.instanceId, dir, meta: best.meta, engine, storage }
+    engines.set(entry.instanceId, entry)
+    return entry
+  }
+
+  return {
+    beginInstance,
+    forSession,
+    hydrateLatest,
+    get,
+    activeIdFor,
+    sessionIdOf,
+    engines,
+    activeBySession,
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, composeMetadata, createInstanceRegistry }
+}
 
 // ---- module: tools-preset ----
 // ============================================================================
@@ -1012,21 +1223,44 @@ function sessionCwd(exec) {
 }
 
 // 注册工具：preset 本地插件形态（ctx.tools.register），不依赖 harness
-function registerWorkflowToolsPreset(ctx, engine, storage) {
+// Iter-10：新增 registry 参数（instance-store 的 createInstanceRegistry 产物）。
+//   - 会话上下文 + 无显式 statePath/workspaceRoot 参数 → 实例布局：
+//     begin 时创建实例目录并绑定新 engine/storage；status 时按会话取活跃实例
+//     （重启后惰性 hydrate）。快照附 instanceId 供调用方/前端识别。
+//   - 显式 statePath/workspaceRoot 参数或无会话上下文 → 回退单实例绑定
+//     （engine/storage 形参，保持既有行为与旧布局兼容）。
+function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   const fs = ctx.get('fs')
+
+  // ── 每次工具调用解析绑定的引擎/存储（避免跨会话闭包串扰，多会话并行安全）──
+  async function bind(exec, args) {
+    if (args && (args.statePath || args.workspaceRoot)) {
+      return { engine, storage, instanceId: null }
+    }
+    if (registry) {
+      const entry = await registry.forSession(exec)
+      if (entry) return { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+    }
+    return { engine, storage, instanceId: null }
+  }
+
+  function withInstanceId(snapshot, b) {
+    if (b && b.instanceId) snapshot.instanceId = b.instanceId
+    return snapshot
+  }
 
   // ── workflow_begin ────────────────────────────────────────────────────────
   const beginTool = {
     name: 'workflow_begin',
-    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量。可选 workspaceRoot（推荐：传会话工作区根，如 C:/Users/<user>/dsh_workspace）决定状态文件默认落盘位置 <root>/.workflow-agent/state.json；或直接传 statePath 完全指定状态文件路径。未传 workspaceRoot 时自动使用当前会话工作区。成功返回解析出的任务列表（含处理技能绝对路径、门禁配置）与初始 PENDING 状态；定义不合法时返回 errors 列表。',
+    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（含处理技能绝对路径、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。',
     parameters: {
       type: 'object',
       additionalProperties: true,
       properties: {
         workflowPath: { type: 'string', description: '工作流 YAML 的绝对路径' },
         workflowText: { type: 'string', description: '工作流 YAML 文本（与 workflowPath 二选一）' },
-        workspaceRoot: { type: 'string', description: '状态落盘根目录（默认取会话工作区）' },
-        statePath: { type: 'string', description: '完全自定义的状态文件绝对路径（优先级高于 workspaceRoot）' },
+        workspaceRoot: { type: 'string', description: '（兼容旧布局）状态落盘根目录；默认走实例目录布局' },
+        statePath: { type: 'string', description: '（兼容旧布局）完全自定义的状态文件绝对路径' },
         params: {
           type: 'object',
           additionalProperties: true,
@@ -1041,25 +1275,27 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
       },
     },
     async execute(args, exec) {
+      // 初始绑定（错误路径也要能落盘）
+      let b = await bind(exec, args)
       try {
         if (!fs) throw new Error('fs service unavailable')
-        if (args && args.workspaceRoot && storage) storage.setWorkspaceRoot(String(args.workspaceRoot))
-        if (args && args.statePath && storage) storage.setStatePath(String(args.statePath))
-        // 未显式指定 workspaceRoot 时，从会话上下文取工作区
-        if ((!args || !args.workspaceRoot) && storage) {
+        if (args && args.workspaceRoot && b.storage) b.storage.setWorkspaceRoot(String(args.workspaceRoot))
+        if (args && args.statePath && b.storage) b.storage.setStatePath(String(args.statePath))
+        // 未显式指定 workspaceRoot 时，从会话上下文取工作区（legacy 单实例布局落点）
+        if ((!args || !args.workspaceRoot) && b.storage) {
           const cwd = sessionCwd(exec)
-          if (cwd) storage.setWorkspaceRoot(cwd)
+          if (cwd) b.storage.setWorkspaceRoot(cwd)
         }
         const src = await loadWorkflowSource(fs, args)
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const parsed = parseWorkflow(src.text)
         const params = (args && args.params) || {}
         if (parsed.errors && parsed.errors.length > 0) {
-          engine.setError('workflow 定义不合法: ' + parsed.errors.join('; '))
-          await storage.save()
-          const s = engine.snapshot()
+          b.engine.setError('workflow 定义不合法: ' + parsed.errors.join('; '))
+          await b.storage.save()
+          const s = b.engine.snapshot()
           s.workflowBeginErrors = parsed.errors
-          return s
+          return withInstanceId(s, b)
         }
         // 注入 params + 解析相对路径为绝对路径
         const tasks = await Promise.all(parsed.tasks.map(async (t) => {
@@ -1088,7 +1324,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
         }))
         parsed.tasks = tasks
 
-        // ── 循环展开：将 loop Task 替换为 N 个串行迭代实例 ──
+        // ── 循环/并发展开 ──
         const finalTasks = []
         for (const t of tasks) {
           if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
@@ -1096,9 +1332,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
             const text = await fs.readText(await fs.resolve(t.itemsFrom))
             const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
             if (items.length === 0) {
-              engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-              await storage.save()
-              return engine.snapshot()
+              b.engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await b.storage.save()
+              return withInstanceId(b.engine.snapshot(), b)
             }
             const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
             finalTasks.push(...iterations)
@@ -1107,9 +1343,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
             const text = await fs.readText(await fs.resolve(t.itemsFrom))
             const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
             if (items.length === 0) {
-              engine.setError('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-              await storage.save()
-              return engine.snapshot()
+              b.engine.setError('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+              await b.storage.save()
+              return withInstanceId(b.engine.snapshot(), b)
             }
             const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, params)
             finalTasks.push(...iterations)
@@ -1118,15 +1354,33 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
           }
         }
         parsed.tasks = finalTasks
-        engine.begin(parsed)
-        engine.setError(null)
-        const r = await storage.save()
-        engine.setPersist(r)
-        return engine.snapshot()
+
+        // ── Iter-10：多实例布局——成功路径创建实例目录并切换绑定 ──
+        // （解析/展开失败不建实例目录；显式 statePath/workspaceRoot 参数走旧布局）
+        if (registry && !args.statePath && !args.workspaceRoot) {
+          const cwd = sessionCwd(exec)
+          if (cwd) {
+            const entry = await registry.beginInstance({
+              cwd,
+              sessionId: registry.sessionIdOf(exec),
+              workflowName: parsed.name,
+              sourceText: src.text,
+              sourcePath: args.workflowPath || null,
+              params,
+            })
+            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+          }
+        }
+
+        b.engine.begin(parsed)
+        b.engine.setError(null)
+        const r = await b.storage.save()
+        b.engine.setPersist(r)
+        return withInstanceId(b.engine.snapshot(), b)
       } catch (error) {
-        engine.setError(error.message)
-        await storage.save()
-        return engine.snapshot()
+        b.engine.setError(error.message)
+        await b.storage.save()
+        return withInstanceId(b.engine.snapshot(), b)
       }
     },
   }
@@ -1135,7 +1389,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
   // ── workflow_status ───────────────────────────────────────────────────────
   const statusTool = {
     name: 'workflow_status',
-    description: '按编排进展更新工作流状态并同步持久化与 UI：stage（PENDING|RUNNING|COMPLETED|FAILED）、gateResult（PASS|FAIL）、task/tasktatus 更新单个任务（PENDING|RUNNING|DONE|FAILED|SKIPPED）、retries 重试计数、error 错误信息。每次调用返回最新快照。',
+    description: '按编排进展更新工作流状态并同步持久化与 UI：stage（PENDING|RUNNING|COMPLETED|FAILED）、gateResult（PASS|FAIL）、task/tasktatus 更新单个任务（PENDING|RUNNING|DONE|FAILED|SKIPPED）、retries 重试计数、error 错误信息。状态写入当前会话活跃实例目录的 state.json（重启后自动从实例目录恢复）。每次调用返回最新快照（含 instanceId）。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -1155,25 +1409,31 @@ function registerWorkflowToolsPreset(ctx, engine, storage) {
       },
     },
     async execute(args, exec) {
+      const b = await bind(exec, args)
       try {
         if (!args) args = {}
-        if (args.stage) engine.setStage(String(args.stage))
-        if (args.gateResult) engine.setGateResult(String(args.gateResult))
-        if (typeof args.retries === 'number') engine.setRetries(args.retries)
-        if (args.error !== undefined) engine.setError(args.error ? String(args.error) : null)
+        if (args.stage) b.engine.setStage(String(args.stage))
+        if (args.gateResult) b.engine.setGateResult(String(args.gateResult))
+        if (typeof args.retries === 'number') b.engine.setRetries(args.retries)
+        if (args.error !== undefined) b.engine.setError(args.error ? String(args.error) : null)
         if (args.task && args.taskStatus) {
-          engine.updateTask(String(args.task), { status: String(args.taskStatus) })
+          b.engine.updateTask(String(args.task), { status: String(args.taskStatus) })
         }
-        const r = await storage.save()
-        engine.setPersist(r)
-        return engine.snapshot()
+        const r = await b.storage.save()
+        b.engine.setPersist(r)
+        return withInstanceId(b.engine.snapshot(), b)
       } catch (error) {
-        engine.setError(error.message)
-        return engine.snapshot()
+        b.engine.setError(error.message)
+        return withInstanceId(b.engine.snapshot(), b)
       }
     },
   }
   ctx.tools.register(statusTool)
+}
+
+// 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks }
 }
 
 // ---- module: webserver-routes ----
@@ -1239,15 +1499,42 @@ function writeJson(res, status, body) {
 }
 
 // ── 从指定工作区读取 state.json（与 workflow-rpc.mjs 的 loadState 同构）────
-async function loadStateFromFile(fs, workspaceRoot) {
+// Iter-10：支持实例布局。优先级：instances/<instanceId>（精确）→
+// instances/ 下 metadata.createdAt 最新的实例 → 旧单实例布局回退。
+async function loadStateFromFile(fs, workspaceRoot, instanceId) {
   if (!fs) return { state: null, error: 'fs service unavailable' }
   try {
     const root = (workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
     if (!root) return { state: null, error: 'workspaceRoot not specified' }
+    const instancesRoot = root + '/.workflow-agent/instances'
+    if (instanceId) {
+      const resolved = await fs.resolve(instancesRoot + '/' + instanceId + '/state.json')
+      const state = JSON.parse(await fs.readText(resolved))
+      return { state, error: null, instanceId }
+    }
+    let dirs = []
+    try {
+      const entries = await fs.listDir(await fs.resolve(instancesRoot))
+      dirs = entries.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) { dirs = [] } // 无 instances 目录
+    if (dirs.length > 0) {
+      let best = null
+      for (const id of dirs) {
+        try {
+          const meta = JSON.parse(await fs.readText(await fs.resolve(instancesRoot + '/' + id + '/metadata.json')))
+          if (!best || String(meta.createdAt || '') > String(best.createdAt || '')) best = { id, createdAt: meta.createdAt }
+        } catch (e) { /* 残缺实例目录跳过 */ }
+      }
+      if (best) {
+        const resolved = await fs.resolve(instancesRoot + '/' + best.id + '/state.json')
+        const state = JSON.parse(await fs.readText(resolved))
+        return { state, error: null, instanceId: best.id }
+      }
+    }
+    // 旧单实例布局回退（demo 数据兼容）
     const statePath = root + '/.workflow-agent/state.json'
     const resolved = await fs.resolve(statePath)
-    const text = await fs.readText(resolved)
-    const state = JSON.parse(text)
+    const state = JSON.parse(await fs.readText(resolved))
     return { state, error: null }
   } catch (e) {
     return { state: null, error: e && e.message ? e.message : String(e) }
@@ -1285,7 +1572,7 @@ function registerWebRoutes(ctx) {
       const query = new URLSearchParams(search)
 
       if (pathname === '/wf/status') {
-        const result = await loadStateFromFile(fs, query.get('workspaceRoot') || '')
+        const result = await loadStateFromFile(fs, query.get('workspaceRoot') || '', query.get('instanceId') || '')
         writeJson(res, 200, result)
         return
       }
@@ -1314,10 +1601,25 @@ function registerWebRoutes(ctx) {
         const root = (query.get('workspaceRoot') || '').replace(/\\/g, '/').replace(/\/+$/, '')
         if (root && fs) {
           try {
-            await fs.resolve(root + '/.workflow-agent/state.json')
-            writeJson(res, 200, { valid: true, workspaceRoot: root })
+            let valid = false
+            let error = null
+            try {
+              await fs.resolve(root + '/.workflow-agent/state.json')
+              valid = true
+            } catch (eLegacy) {
+              // Iter-10：实例布局也算有效工作区（存在实例目录即可）
+              try {
+                const entries = await fs.listDir(await fs.resolve(root + '/.workflow-agent/instances'))
+                valid = entries.some(en => en.type === 'directory')
+                if (!valid) error = 'no instance directories under ' + root + '/.workflow-agent/instances'
+              } catch (eInst) {
+                error = 'state.json not found at ' + root + '/.workflow-agent/state.json'
+              }
+            }
+            if (valid) writeJson(res, 200, { valid: true, workspaceRoot: root })
+            else writeJson(res, 200, { valid: false, workspaceRoot: root, error })
           } catch (e) {
-            writeJson(res, 200, { valid: false, workspaceRoot: root, error: 'state.json not found at ' + root + '/.workflow-agent/state.json' })
+            writeJson(res, 200, { valid: false, workspaceRoot: root, error: e && e.message ? e.message : String(e) })
           }
         } else {
           writeJson(res, 200, { valid: false, workspaceRoot: root, error: 'workspaceRoot not provided' })
@@ -1330,4 +1632,5 @@ function registerWebRoutes(ctx) {
   })
 }
 
-// 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, registerWebRoutes, loadStateFromFile }
+// 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, registerWebRoutes, loadStateFromFile, createWorkflowStorage, slugifyName, makeUuid8, instancesRootPath, instanceDirPath, composeMetadata, createInstanceRegistry }
+// （Iter-10 起实例注册表源码在 code/plugins/workflow-host/instance-store.js，Node 测试直接 require 源模块）

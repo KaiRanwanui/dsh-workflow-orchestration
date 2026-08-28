@@ -10,6 +10,8 @@
 //         - setStatePath(path)    ：完全自定义状态文件路径
 //       两者都未设置时 save() 返回错误、load() 返回 false（不抛异常、不写盘）。
 // 依赖：ctx（fs）、engine（snapshot/setPersist/hydrate）。
+// Iter-10：新增实例目录模式 setInstanceDir(dir)——落点 <dir>/state.json，
+//          优先级高于 workspaceRoot 旧布局（<root>/.workflow-agent/state.json）。
 // ============================================================================
 
 function createWorkflowStorage(ctx, engine) {
@@ -18,6 +20,7 @@ function createWorkflowStorage(ctx, engine) {
   let workspaceRoot = sandboxPolicy ? (sandboxPolicy.workspaceRoot || '') : ''
   let explicitStatePath = null
   let statePath = null
+  let instanceDir = null // Iter-10：实例目录（优先级最高，落点 <instanceDir>/state.json）
 
   // 由调用方（workflow_begin）在运行时设置，替代宿主 fallback root
   function setWorkspaceRoot(root) {
@@ -30,6 +33,12 @@ function createWorkflowStorage(ctx, engine) {
     statePath = null // 下次访问时重算
   }
 
+  // Iter-10：实例目录模式（由 instance-store 的 beginInstance/hydrateLatest 设置）
+  function setInstanceDir(dir) {
+    instanceDir = dir ? String(dir).replace(/\\/g, '/').replace(/\/+$/, '') : null
+    statePath = null
+  }
+
   // 延迟计算状态文件绝对路径（首次读写时解析）
   async function ensurePath() {
     if (statePath) return statePath
@@ -39,15 +48,19 @@ function createWorkflowStorage(ctx, engine) {
       statePath = await fs.resolve(explicitStatePath)
       return statePath
     }
+    if (instanceDir) {
+      statePath = await fs.resolve(instanceDir + '/state.json')
+      return statePath
+    }
     if (!workspaceRoot) return null
     const dir = (workspaceRoot + '/.workflow-agent').replace(/\/+/g, '/')
     statePath = await fs.resolve(dir + '/state.json')
     return statePath
   }
 
-  // 显式沙箱写策略：写策略根来自调用方指定的 workspaceRoot 或状态文件父目录
+  // 显式沙箱写策略：写策略根来自实例目录 > workspaceRoot > 状态文件父目录
   function writePolicy() {
-    let root = workspaceRoot
+    let root = instanceDir || workspaceRoot
     if (!root && explicitStatePath) {
       const idx = explicitStatePath.lastIndexOf('/')
       root = idx > 0 ? explicitStatePath.slice(0, idx) : explicitStatePath
@@ -107,7 +120,7 @@ function createWorkflowStorage(ctx, engine) {
     }
   }
 
-  return { save, load, setWorkspaceRoot, setStatePath }
+  return { save, load, setWorkspaceRoot, setStatePath, setInstanceDir }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
