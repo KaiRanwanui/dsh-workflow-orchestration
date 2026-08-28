@@ -5,7 +5,7 @@
 //       落盘根默认取 exec.agent.session.header.cwd（会话工作区）。
 
 export const name = 'workflow-host'
-export const inject = ['fs', 'tools', 'subagents', 'agents']
+export const inject = ['fs', 'tools', 'subagents', 'agents', 'sessionPersistence']
 
 export function apply(ctx) {
   // Iter-10：多实例注册表（instanceId → engine/storage，sessionId → 活跃实例）
@@ -2340,6 +2340,42 @@ function registerWebRoutes(ctx, registry) {
               entry.hasState = true // 更新 hasState 标记
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
+              
+              // Iter-15：向目标 session 注入消息，触发编排 Agent 执行
+              const sessionId = args.sessionId
+              if (sessionId) {
+                const sessionPersistence = ctx.get('sessionPersistence')
+                if (sessionPersistence) {
+                  try {
+                    // 获取当前 session 的最新 seq
+                    const sessionData = await sessionPersistence.load(sessionId)
+                    const currentSeq = sessionData && sessionData.events ? sessionData.events.length : 0
+                    
+                    // 构造 user/message 事件
+                    const message = {
+                      id: 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+                      role: 'user',
+                      content: [{ type: 'text', text: `请启动工作流实例 ${instanceId}` }],
+                      source: { kind: 'user' }
+                    }
+                    
+                    const event = {
+                      type: 'user/message',
+                      seq: currentSeq + 1,
+                      time: Date.now(),
+                      data: message,
+                      surfaceOp: 'append'
+                    }
+                    
+                    await sessionPersistence.append(sessionId, [event])
+                    snap.messageInjected = true
+                  } catch (e) {
+                    // 注入失败不影响启动结果
+                    snap.messageInjectionError = e && e.message ? e.message : String(e)
+                  }
+                }
+              }
+              
               writeJson(res, 200, snap)
               return
             }

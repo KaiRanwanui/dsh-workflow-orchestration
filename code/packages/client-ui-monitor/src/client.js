@@ -610,7 +610,11 @@ export function register(ctx) {
                   const resp = await fetch('/wf/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                    body: JSON.stringify({ 
+                      workspaceRoot: activeRoot, 
+                      instanceId: currentInstanceId,
+                      sessionId: sessionId // 传递当前 session ID
+                    })
                   })
                   if (!resp.ok) {
                     const err = await resp.json()
