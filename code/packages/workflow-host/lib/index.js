@@ -29,7 +29,8 @@ function applyInternal(ctx) {
     registerWorkflowToolsPreset(ctx, engine, storage, registry)
   }
   // Iter-5：webServer HTTP 路由（替代 harness RPC，供 Client 面板轮询状态）
-  registerWebRoutes(ctx)
+  // Iter-12：传入 registry（/wf/list 实例列表）
+  registerWebRoutes(ctx, registry)
   ctx.effect(() => () => {})
 }
 
@@ -1915,7 +1916,7 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 // GET /wf/status?workspaceRoot=...   → 工作流状态快照 {state, error}
 // GET /wf/skill?path=...             → 技能文件全文 {text, error}
 // GET /wf/config?workspaceRoot=...   → 验证工作区 {valid, workspaceRoot, error}
-function registerWebRoutes(ctx) {
+function registerWebRoutes(ctx, registry) {
   const webserver = ctx.get('webServer')
   if (!webserver) return // 可选能力：webServer 不存在时静默跳过
   const fs = ctx.get('fs')
@@ -1944,6 +1945,20 @@ function registerWebRoutes(ctx) {
       if (pathname === '/wf/status') {
         const result = await loadStateFromFile(fs, query.get('workspaceRoot') || '', query.get('instanceId') || '')
         writeJson(res, 200, result)
+        return
+      }
+      // Iter-12：实例列表（只读）——Client 面板实例切换条数据源
+      if (pathname === '/wf/list') {
+        const root = query.get('workspaceRoot') || ''
+        let instances = []
+        if (registry && root) {
+          try {
+            instances = await registry.listInstances(root)
+          } catch (e) {
+            instances = []
+          }
+        }
+        writeJson(res, 200, { workspaceRoot: root, instances })
         return
       }
 

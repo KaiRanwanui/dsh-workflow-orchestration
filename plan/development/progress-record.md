@@ -45,6 +45,8 @@
 
 | 今日 | **Iter-11 实例操控工具** | ✅ 完成（workflow_list/create/start/stop/reset + expandDefinition 共用重构，93 单测通过，v0.5.0 待重启部署） |
 
+| 今日 | **Iter-12 前台实例界面** | ✅ 代码完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；待重启+刷新验证） |
+
 ---
 
 ## 已完成工作
@@ -310,6 +312,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-9 报告 | `plan/development/iter9-report.md` |
 | Iter-10 报告 | `plan/development/iter10-report.md` |
 | Iter-11 报告 | `plan/development/iter11-report.md` |
+| Iter-12 报告 | `plan/development/iter12-report.md` |
 
 ---
 

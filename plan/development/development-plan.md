@@ -25,9 +25,9 @@
 ## 2. 迭代全景
 
 ```
-已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具)
-当前:   Iter-12(前台实例界面)   ← 待开发
-后续:   Iter-13(编排编辑器)
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面)
+当前:   Iter-13(编排编辑器)   ← 待开发
+后续:   （规划已到 Iter-13）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -43,7 +43,7 @@
 | **9** | 多实例技术验证（DSH Session 探索） | 验证插件内创建/监听 session、session cwd 定位实例目录 | session 探针 + 技术验证报告 | ✅ **完成** |
 | **10** | 实例目录与存储（后台） | 实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ 按实例读写 state | 多实例独立 state.json | ✅ **完成** |
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | ✅ **完成** |
-| **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | Iter-11 |
+| **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | ✅ **完成**（待部署验证） |
 | **13** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-12 |
 
 ---
@@ -362,7 +362,7 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-12: 前台实例管理界面（1 人天）
+### Iter-12: 前台实例管理界面（1 人天）✅ 代码完成（2026-08-28，v0.2.0，待部署验证）
 
 **输入**：Iter-11 实例操控可用
 

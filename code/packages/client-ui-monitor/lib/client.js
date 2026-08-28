@@ -25,6 +25,8 @@ function register(ctx) {
   let latest = null, lastError = null
   const listeners = new Set()
   let pollingActive = false, wfRoot = '', wfLoaded = false
+  // Iter-12：cwd 跟随 + 实例列表（activeRoot=当前轮询锚点；wfInstanceId=面板选择）
+  let activeRoot = null, wfInstances = [], wfInstanceId = ''
 
   function fingerprint(state) {
     if (!state || !state.tasks) return ''
@@ -52,7 +54,9 @@ function register(ctx) {
       if (stop) return
       try {
         // Iter-5：webServer HTTP 路由替代 harness RPC（host.call）
-        const resp = await fetch('/wf/status?workspaceRoot=' + encodeURIComponent(wfRoot || ''))
+        // Iter-12：面板选择的实例（wfInstanceId）参与轮询；空=最新实例
+        const q = '/wf/status?workspaceRoot=' + encodeURIComponent(wfRoot || '') + (wfInstanceId ? '&instanceId=' + encodeURIComponent(wfInstanceId) : '')
+        const resp = await fetch(q)
         const s = await resp.json()
         if (!stop) publish(s)
       } catch(e) {
@@ -451,6 +455,12 @@ function register(ctx) {
       { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
       function WorkflowViewFactory(props) {
         const workspaceHook = props.useWorkspaces
+        const sessionId = props.sessionId
+        const useSessions = props.useSessions
+        // Iter-12：跟随当前 session 的 cwd（切 session → 实例目录跟随）
+        const sessionCwd = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
+          : undefined
 
         function WorkflowView() {
           const [, forceUpdate] = React.useReducer(x => x + 1, 0)
@@ -461,32 +471,45 @@ function register(ctx) {
             return () => listeners.delete(forceUpdate)
           }, [])
 
+          // ── Iter-12：workspaceRoot 解析——session cwd 优先，回退当前工作区首项 ──
           React.useEffect(() => {
-            if (wfLoaded) return
-            try {
-              if (workspaceHook) {
+            let next = null
+            if (typeof sessionCwd === 'string' && sessionCwd) next = String(sessionCwd).replace(/\\/g, '/')
+            if (!next && workspaceHook) {
+              try {
                 const wsList = workspaceHook()
                 if (wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items.length > 0) {
-                  const r = String(wsList.data.items[0].path).replace(/\\/g, '/')
-                  wfRoot = r
-                  if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(r)
-                  wfLoaded = true
-                  return
+                  next = String(wsList.data.items[0].path).replace(/\\/g, '/')
                 }
-              }
-            } catch(e) {}
+              } catch (e) {}
+            }
+            if (!next || next === activeRoot) return
+            activeRoot = next
+            wfRoot = next
+            wfLoaded = true
+            latest = null; lastError = null
+            wfInstances = []; wfInstanceId = ''
+            if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(next)
+            listeners.forEach(fn => { try { fn() } catch (e2) {} })
+          }, [sessionCwd, workspaceHook])
 
-            fetch('/wf/config?workspaceRoot=' + encodeURIComponent('/home/zhaokai/Projects/dsh_projects'))
-              .then(r => r.json())
-              .then(r => {
-                if (r && r.valid) {
-                  wfRoot = r.workspaceRoot
-                  if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(r.workspaceRoot)
-                }
-                wfLoaded = true
-              })
-              .catch(() => { wfLoaded = true })
-          }, [workspaceHook])
+          // ── Iter-12：实例列表轮询（只读；选择经 wfInstanceId 参与 status 轮询）──
+          React.useEffect(() => {
+            if (!activeRoot) return
+            let stop = false
+            const load = async () => {
+              try {
+                const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot))
+                const r = await resp.json()
+                if (stop) return
+                wfInstances = r && Array.isArray(r.instances) ? r.instances : []
+                listeners.forEach(fn => { try { fn() } catch (e2) {} })
+              } catch (e) {}
+            }
+            load()
+            const d = window.setInterval(load, 10000)
+            return () => { stop = true; window.clearInterval(d) }
+          }, [activeRoot])
 
           const snap = latest
           const stateData = (snap && snap.state) ? snap.state : null
@@ -514,9 +537,32 @@ function register(ctx) {
             }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : 'Waiting for workflow...')
           }
 
+          // ── Iter-12：实例切换条（>1 个实例才显示；空选=最新实例）────────
+          const selectInstance = (id) => {
+            wfInstanceId = id
+            latest = null
+            listeners.forEach(fn => { try { fn() } catch (e2) {} })
+          }
+          const defaultSel = wfInstanceId || (wfInstances[0] ? wfInstances[0].instanceId : '')
+          const instBar = wfInstances.length > 1 ? React.createElement('div', {
+            key: 'ib', style: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px 0', alignItems: 'center' }
+          }, wfInstances.map(it => {
+            const isSel = defaultSel === it.instanceId
+            return React.createElement('button', {
+              key: it.instanceId,
+              onClick: () => selectInstance(it.instanceId),
+              style: {
+                border: '1px solid ' + (isSel ? 'rgba(59,130,246,0.8)' : 'rgba(148,163,184,0.35)'),
+                background: isSel ? 'rgba(59,130,246,0.12)' : 'transparent',
+                color: 'inherit', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer'
+              }
+            }, it.workflowName + ' · ' + String(it.instanceId).slice(-6) + (it.stage ? ' · ' + it.stage : ''))
+          })) : null
+
           return React.createElement('div', {
             style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
           },
+            instBar,
             React.createElement(DagCanvas, {
               stage: stateData.stage,
               gateResult: stateData.gateResult || null,
