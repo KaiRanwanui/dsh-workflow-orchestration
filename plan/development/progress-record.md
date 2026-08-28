@@ -45,9 +45,9 @@
 
 | 今日 | **Iter-11 实例操控工具** | ✅ 完成（workflow_list/create/start/stop/reset + expandDefinition 共用重构，93 单测通过，v0.5.0 待重启部署） |
 
-| 今日 | **Iter-12 前台实例界面** | ✅ 代码完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；待重启+刷新验证） |
+| 今日 | **Iter-12 前台实例界面** | ✅ 完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；已部署验证） |
 
-| 今日 | **Iter-13 面板创建按钮 + 模板库 v1** | ✅ 代码完成（POST /wf/create + 内置模板×2 + 表单 UI，104 单测通过，host v0.6.0 / client v0.3.0；待重启刷新验证） |
+| 今日 | **Iter-13 面板创建按钮 + 模板库 v1** | ✅ 完成（POST /wf/create + 内置模板×2 + 表单 UI，104 单测通过，host v0.6.0 / client v0.3.0；已部署验证） |
 
 | 今日 | **实例创建语义定稿 v2 + 迭代重排** | ✅ 文档落档（7 步产品流程映射、模板/实例严格区分、面板控制走注入通道；迭代按执行顺序重排：13 创建按钮+模板库v1 → 14 注入穿刺 → 15 面板控制 → 16 编辑器拆分推进；见 plan/design/instance-creation-semantics.md） |
 
@@ -169,6 +169,31 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 **提交**：`898ce53` + `8ca2ac0` + `127ec86` + `af7ce10` + `916a2ea` + `d508a15`
 
 **遗留**（用户确认延后修）：① 箭头 x 左右未连接图元边缘 ② 节点内长文字覆盖 ▶/▼ 图标 ③ 图元宽度偏窄——后续增加文字内容时统一调整。
+
+---
+
+### 11. Iter-13: 面板创建按钮 + 模板库 v1（✅ 完成）
+
+**迭代报告**：`plan/development/iter13-report.md`
+
+**核心交付**：
+- **Host 端**：POST /wf/create（只 create 不 start）+ GET /wf/templates + 内置模板×2（serial-gate / concurrent-summary）
+- **Client 端**："+"按钮 + 表单 overlay（模板选择/参数配置）+ 实例列表轮询 + 实例切换
+- **修复**：ESM→CommonJS（DSH cordis 不支持 ESM 插件）、loadStateFromFile 处理 CREATED 状态、activeRoot 轮询逻辑
+
+**验证**：单测 104/104（用例 10 共 11 断言）；部署验证通过（面板创建/列表/切换功能正常）。
+
+**提交**：`2b6a874` + `c506820`
+
+**部署修复记录**：
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| DSH 启动失败 `SyntaxError: Unexpected token 'export'` | workflow-host 包使用 ESM 格式 | 改回 CommonJS（`module.exports`） |
+| client-ui-monitor 未加载 | 同上 ESM 问题 | 改回 CommonJS |
+| 插件未在 bundle 中 | `dsh.profile.bundles` 未包含 workflow-host | 添加到 package.json |
+| `/wf/list` 请求未发出 | `activeRoot` 是模块级变量，useEffect 不触发 | 改用模块级函数 `startListPolling()` 显式调用 |
+| `/wf/status` 返回错误 | CREATED 状态无 state.json | `loadStateFromFile` 从 instance.yaml 构建默认状态 |
+| 面板显示 "Waiting for workflow..." | `hasData` 依赖 `/wf/status` 返回 workflow 字段 | 同上，CREATED 状态返回 `{workflow, stage: 'CREATED', ...}` |
 
 ---
 

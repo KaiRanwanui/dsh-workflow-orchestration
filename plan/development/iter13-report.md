@@ -44,12 +44,29 @@
 
 dynamic import mjs 直测路由（mock webServer/fs/registry，模拟 POST chunk 流）：templates 内置 2 + 工作区扫描、create 成功（CREATED + id 形态 + 五件套 + params 入 metadata）、非法定义 400、缺参 400×2、workflowPath 读取、404 回退。
 
-### 部署验证清单（重启后）
+### 部署验证（✅ 全部通过）
 
-1. `systemctl --user restart dsh.service` + 浏览器刷新
-2. `curl 'http://127.0.0.1:3080/wf/templates?workspaceRoot=/home/zhaokai/Projects/dsh_projects/workflow_test_ws'` → builtin 2 个
-3. 面板 Workflow Tab → "+" → 选 [内置] serial-gate → 创建 → 切换条出现 chip（或在空工作区首次创建）
-4. orchestrator session 里 `workflow_start` 该实例 → DAG 驱动
+1. `systemctl --user restart dsh.service` + 浏览器硬刷新（Ctrl+Shift+R）
+2. `curl 'http://127.0.0.1:3080/wf/templates?workspaceRoot=/home/zhaokai/Projects/dsh_projects/workflow_test_ws'` → builtin 2 个 ✅
+3. 面板 Workflow Tab → "+" → 选 [内置] serial-gate → 创建 → 切换条出现 chip ✅
+4. 实例列表正常显示，点击切换实例 ✅
+5. 新建实例后列表自动刷新 ✅
+
+### 部署修复记录
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| DSH 启动失败 `SyntaxError: Unexpected token 'export'` | workflow-host 包使用 ESM 格式，DSH cordis 不支持 | 改回 CommonJS（`module.exports`） |
+| client-ui-monitor 未加载 | 同上 ESM 问题 | 改回 CommonJS |
+| 插件未在 bundle 中 | `dsh.profile.bundles` 未包含 workflow-host | 添加到 package.json |
+| `/wf/list` 请求未发出 | `activeRoot` 是模块级变量，useEffect 不触发 | 改用模块级函数 `startListPolling()` 显式调用 |
+| `/wf/status` 返回错误 | CREATED 状态无 state.json | `loadStateFromFile` 从 instance.yaml 构建默认状态 |
+| 面板显示 "Waiting for workflow..." | `hasData` 依赖 `/wf/status` 返回 workflow 字段 | 同上，CREATED 状态返回 `{workflow, stage: 'CREATED', ...}` |
+
+## 提交
+
+- `2b6a874` feat(iter-13): 面板创建按钮+模板库v1 完整验证通过
+- `c506820` docs(iter-13): 标记完成（面板功能验证通过）
 
 ## 下一步
 
