@@ -15,10 +15,14 @@
 
 1. **启动**：调用 `workflow_begin` 解析工作流。
    - 参数：`workflowPath`（YAML 绝对路径）或 `workflowText`（YAML 文本）；
-     `params`（替换 `${param_name}`）；建议传 `workspaceRoot` = 当前会话工作区
-     （不传会自动取会话工作区）。
+     `params`（替换 `${param_name}`）。**不要传 `workspaceRoot`/`statePath`**
+     （多实例布局）：默认在当前会话工作区自动创建实例目录
+     `<cwd>/.workflow-agent/instances/<workflowName-uuid8>/`
+     （instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录，
+     DSH 重启后按会话自动恢复。
    - 返回：`tasks[]`（每个含 id/name/type/status=PENDING/processor（绝对路径）/
-     inputs（命名字典，key→路径 或 路径列表）/outputs/gate）+ `stage=PENDING`。
+     inputs（命名字典，key→路径 或 路径列表）/outputs/gate）+ `stage=PENDING`
+     + `instanceId`（本次实例 id）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
 
 2. **就绪推导**：Task 的 `dependsOn` 全部 DONE 后该 Task 才就绪。
