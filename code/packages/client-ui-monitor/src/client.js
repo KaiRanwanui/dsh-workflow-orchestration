@@ -598,7 +598,7 @@ export function register(ctx) {
           // Iter-15：面板控制按钮（Start/Stop/Reset）
           const controlBtns = []
           const currentStage = stateData && stateData.stage
-          const currentInstanceId = stateData && stateData.instanceId
+          const currentInstanceId = (snap && snap.instanceId) || wfInstanceId || (wfInstances[0] && wfInstances[0].instanceId) || ''
           
           // Start 按钮（CREATED 或无状态时显示）
           if (!currentStage || currentStage === 'CREATED') {
