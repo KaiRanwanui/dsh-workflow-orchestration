@@ -26,7 +26,9 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面)
-当前:   Iter-13(创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制)
+已完成追加: → Iter-13(面板创建按钮+模板库v1)
+当前:   Iter-14(消息注入技术穿刺)   ← 待开发
+后续:   Iter-15(面板控制) → Iter-16(编排编辑器，拆分推进)
 后续:   Iter-16(编排编辑器——体量最大，启动时将拆分为多个子迭代顺序推进；远期注记：局部任务重跑，指令通道通用化)
 ```
 
@@ -44,7 +46,7 @@
 | **10** | 实例目录与存储（后台） | 实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ 按实例读写 state | 多实例独立 state.json | ✅ **完成** |
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | ✅ **完成** |
 | **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | ✅ **完成**（待部署验证） |
-| **13** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | Iter-11/12 |
+| **13** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | ✅ **完成**（待部署验证） |
 | **14** | 消息注入技术穿刺 | 验证插件向指定 session 注入指令（动态插件探针，先例 Iter-9；按通用指令消息形态验证） | go/no-go 结论 + API 形态报告 | Iter-12 |
 | **15** | 面板控制（start/stop/继续） | 走 Iter-14 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | Iter-14 go |
 | **16** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-13 |
@@ -381,7 +383,7 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-13: 面板"新建 workflow 实例"按钮 + 模板库 v1（0.5~1 人天）
+### Iter-13: 面板"新建 workflow 实例"按钮 + 模板库 v1（0.5~1 人天）✅ 代码完成（2026-08-28，v0.6.0/v0.3.0，待部署验证）
 
 **输入**：Iter-11 create 工具语义、Iter-12 /wf/list + 切换条
 **语义定稿**：`plan/design/instance-creation-semantics.md` §6.3——**按钮只 create 不 start**（start 驱动者是 session 内编排 Agent；面板 start 待 Iter-14/15 通道打通后再议）

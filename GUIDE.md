@@ -22,7 +22,7 @@
 | 顺序 | 文档 | 内容 |
 |------|------|------|
 | 1 | `plan/development/progress-record.md` | **最新进度**：已完成工作、当前待办、最近迭代细节 |
-| 2 | `plan/development/iter12-report.md` | **最近迭代报告**：Iter-12 交付内容（DAG 跟随 session + 实例列表）、验证结果、关键决策 |
+| 2 | `plan/development/iter13-report.md` | **最近迭代报告**：Iter-13 交付内容（面板创建按钮 + 模板库 v1）、验证结果、关键决策 |
 
 ### 第 2 层：理解方案与约束（5 篇）
 | 顺序 | 文档 | 内容 |

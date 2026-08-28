@@ -27,6 +27,8 @@ function register(ctx) {
   let pollingActive = false, wfRoot = '', wfLoaded = false
   // Iter-12：cwd 跟随 + 实例列表（activeRoot=当前轮询锚点；wfInstanceId=面板选择）
   let activeRoot = null, wfInstances = [], wfInstanceId = ''
+  // Iter-13：列表加载器引用（面板创建成功后即时刷新）
+  let wfListLoader = null
 
   function fingerprint(state) {
     if (!state || !state.tasks) return ''
@@ -508,13 +510,109 @@ function register(ctx) {
             }
             load()
             const d = window.setInterval(load, 10000)
-            return () => { stop = true; window.clearInterval(d) }
+            wfListLoader = load
+            return () => { stop = true; window.clearInterval(d); wfListLoader = null }
           }, [activeRoot])
 
           const snap = latest
           const stateData = (snap && snap.state) ? snap.state : null
           const tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
           const hasData = stateData && stateData.workflow
+
+          // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
+          const [formOpen, setFormOpen] = React.useState(false)
+          const [tplOpts, setTplOpts] = React.useState([])
+          const [tplSel, setTplSel] = React.useState('custom')
+          const [yamlText, setYamlText] = React.useState('')
+          const [pathText, setPathText] = React.useState('')
+          const [paramsText, setParamsText] = React.useState('{}')
+          const [busy, setBusy] = React.useState(false)
+          const [formErr, setFormErr] = React.useState('')
+
+          React.useEffect(() => {
+            if (!formOpen || !activeRoot) return
+            let stop = false
+            fetch('/wf/templates?workspaceRoot=' + encodeURIComponent(activeRoot))
+              .then(r => r.json())
+              .then(r => {
+                if (stop) return
+                const opts = [{ v: 'custom', label: '自定义路径…' }]
+                ;(r.builtin || []).forEach(t => opts.push({ v: 'builtin:' + t.name, label: '[内置] ' + (t.description || t.name), t }))
+                ;(r.workspace || []).forEach(w => opts.push({ v: 'ws:' + w.path, label: '[工作区] ' + w.name }))
+                setTplOpts(opts)
+                if (opts.length > 1) { setTplSel(opts[1].v); setYamlText(opts[1].t ? opts[1].t.yaml : '') }
+              })
+              .catch(() => {})
+            return () => { stop = true }
+          }, [formOpen, activeRoot])
+
+          const openForm = () => { setFormErr(''); setFormOpen(true) }
+          const pickTpl = (v) => {
+            setTplSel(v)
+            const opt = tplOpts.find(o => o.v === v)
+            setYamlText(opt && opt.t ? opt.t.yaml : '')
+          }
+          const submitCreate = async () => {
+            setFormErr(''); setBusy(true)
+            try {
+              let params = {}
+              try { params = paramsText.trim() ? JSON.parse(paramsText) : {} } catch (e) { throw new Error('params 不是合法 JSON') }
+              const payload = { workspaceRoot: activeRoot, params }
+              if (tplSel === 'custom') {
+                if (!pathText.trim()) throw new Error('请填写 workflowPath')
+                payload.workflowPath = pathText.trim()
+              } else if (tplSel.startsWith('ws:')) {
+                payload.workflowPath = tplSel.slice(3)
+              } else if (tplSel.startsWith('builtin:')) {
+                if (!yamlText.trim()) throw new Error('模板内容为空')
+                payload.workflowText = yamlText
+              }
+              const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+              const r = await resp.json()
+              if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
+              setFormOpen(false)
+              if (typeof wfListLoader === 'function') wfListLoader()
+            } catch (e) {
+              setFormErr(e && e.message ? e.message : String(e))
+            } finally {
+              setBusy(false)
+            }
+          }
+
+          const fieldStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 6, padding: '4px 8px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
+          const monoStyle = Object.assign({}, fieldStyle, { fontFamily: 'monospace', resize: 'vertical' })
+          const btnStyle = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
+
+          const plusBtn = React.createElement('button', {
+            key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
+            style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
+          }, '+')
+          const toolbar = React.createElement('div', {
+            key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
+          }, [plusBtn])
+
+          const formOverlay = !formOpen ? null : React.createElement('div', {
+            style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
+            onClick: () => setFormOpen(false)
+          }, React.createElement('div', {
+            style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 460, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
+            onClick: (e) => e.stopPropagation()
+          }, [
+            React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
+            React.createElement('label', { key: 'l1' }, '模板 / 来源'),
+            React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
+              tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v }, o.label))
+            ),
+            tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
+            tplSel.indexOf('builtin:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
+            React.createElement('label', { key: 'l2' }, 'params（JSON，可选）'),
+            React.createElement('textarea', { key: 'pj', value: paramsText, onChange: e => setParamsText(e.target.value), rows: 3, style: monoStyle, spellCheck: false }),
+            formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
+            React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
+              React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
+              React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
+            ]),
+          ]))
 
           if (!wfLoaded) {
             return React.createElement('div', {
@@ -533,8 +631,14 @@ function register(ctx) {
 
           if (!hasData) {
             return React.createElement('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
-            }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : 'Waiting for workflow...')
+              style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
+            },
+              toolbar,
+              formOverlay,
+              React.createElement('div', {
+                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
+              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : 'Waiting for workflow...')
+            )
           }
 
           // ── Iter-12：实例切换条（>1 个实例才显示；空选=最新实例）────────
@@ -562,6 +666,7 @@ function register(ctx) {
           return React.createElement('div', {
             style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
           },
+            toolbar,
             instBar,
             React.createElement(DagCanvas, {
               stage: stateData.stage,
@@ -572,7 +677,8 @@ function register(ctx) {
               workflowName: stateData.workflow,
               retries: stateData.retries || 0,
               error: stateData.error || null,
-            })
+            }),
+            formOverlay
           )
         }
 

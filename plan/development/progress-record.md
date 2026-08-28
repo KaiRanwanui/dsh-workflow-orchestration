@@ -47,6 +47,8 @@
 
 | 今日 | **Iter-12 前台实例界面** | ✅ 代码完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；待重启+刷新验证） |
 
+| 今日 | **Iter-13 面板创建按钮 + 模板库 v1** | ✅ 代码完成（POST /wf/create + 内置模板×2 + 表单 UI，104 单测通过，host v0.6.0 / client v0.3.0；待重启刷新验证） |
+
 | 今日 | **实例创建语义定稿 v2 + 迭代重排** | ✅ 文档落档（7 步产品流程映射、模板/实例严格区分、面板控制走注入通道；迭代按执行顺序重排：13 创建按钮+模板库v1 → 14 注入穿刺 → 15 面板控制 → 16 编辑器拆分推进；见 plan/design/instance-creation-semantics.md） |
 
 ---
@@ -315,6 +317,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-10 报告 | `plan/development/iter10-report.md` |
 | Iter-11 报告 | `plan/development/iter11-report.md` |
 | Iter-12 报告 | `plan/development/iter12-report.md` |
+| Iter-13 报告 | `plan/development/iter13-report.md` |
 
 ---
 

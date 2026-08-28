@@ -1907,6 +1907,84 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 // GET /wf/status?workspaceRoot=...   → 工作流状态快照 {state, error}
 // GET /wf/skill?path=...             → 技能文件全文 {text, error}
 // GET /wf/config?workspaceRoot=...   → 验证工作区 {valid, workspaceRoot, error}
+// Iter-13：
+// GET /wf/templates?workspaceRoot=.. → 模板列表 {builtin[], workspace[]}
+// POST /wf/create {workspaceRoot, workflowPath|workflowText, params}
+//                                    → 建实例目录（只 create 不 start）
+// ── Iter-13：内置基础流程模板（随包分发；实例=模板+配置，模板保持只读）────
+// 占位路径 /TODO/... 与 ${output_dir} 参数由用户在 start 前编辑/提供；
+// 内容数据内联于此（webserver-routes 为内联-only section，既定例外）。
+const BUILTIN_TEMPLATES = [
+  {
+    name: 'serial-gate',
+    description: '两任务串行 + 质量门禁（最小骨架）',
+    yaml: [
+      '# 内置模板：serial-gate（两任务串行 + 质量门禁）',
+      '# 使用前：把 /TODO/... 替换为真实技能路径，提供 output_dir 参数',
+      'name: serial-demo',
+      'version: "1.0"',
+      'description: "串行双任务 + 质量门禁"',
+      'params:',
+      '  output_dir:',
+      '    type: string',
+      '    default: "output"',
+      'tasks:',
+      '  - id: draft',
+      '    name: "起草"',
+      '    processor: /TODO/skills/draft/SKILL.md',
+      '    outputs: ["${output_dir}/draft.md"]',
+      '    depends-on: []',
+      '    quality-gate:',
+      '      checker: /TODO/skills/review/SKILL.md',
+      '      on-failure: retry',
+      '      max-retries: 2',
+      '',
+      '  - id: finalize',
+      '    name: "定稿"',
+      '    processor: /TODO/skills/finalize/SKILL.md',
+      '    outputs: ["${output_dir}/final.md"]',
+      '    depends-on: [draft]',
+      '',
+    ].join('\n'),
+  },
+  {
+    name: 'concurrent-summary',
+    description: '并发两任务 + 汇总依赖（最小骨架）',
+    yaml: [
+      '# 内置模板：concurrent-summary（并发 + 汇总）',
+      '# 使用前：把 /TODO/... 替换为真实技能路径，提供 output_dir 参数',
+      'name: concurrent-demo',
+      'version: "1.0"',
+      'description: "并发两任务 + 汇总"',
+      'max-concurrency: 2',
+      'params:',
+      '  output_dir:',
+      '    type: string',
+      '    default: "output"',
+      'tasks:',
+      '  - id: task-a',
+      '    name: "任务A"',
+      '    processor: /TODO/skills/a/SKILL.md',
+      '    outputs: ["${output_dir}/a.md"]',
+      '    depends-on: []',
+      '  - id: task-b',
+      '    name: "任务B"',
+      '    processor: /TODO/skills/b/SKILL.md',
+      '    outputs: ["${output_dir}/b.md"]',
+      '    depends-on: []',
+      '  - id: summary',
+      '    name: "汇总"',
+      '    processor: /TODO/skills/summary/SKILL.md',
+      '    inputs:',
+      '      a: "${output_dir}/a.md"',
+      '      b: "${output_dir}/b.md"',
+      '    outputs: ["${output_dir}/summary.md"]',
+      '    depends-on: [task-a, task-b]',
+      '',
+    ].join('\n'),
+  },
+]
+
 function registerWebRoutes(ctx, registry) {
   const webserver = ctx.get('webServer')
   if (!webserver) return // 可选能力：webServer 不存在时静默跳过
@@ -1950,6 +2028,75 @@ function registerWebRoutes(ctx, registry) {
           }
         }
         writeJson(res, 200, { workspaceRoot: root, instances })
+        return
+      }
+
+      // Iter-13：模板列表（内置 + <workspaceRoot>/templates/*.yaml，只读）
+      if (pathname === '/wf/templates') {
+        const root = (query.get('workspaceRoot') || '').replace(/\\/g, '/')
+        let workspace = []
+        if (root && fs) {
+          try {
+            const entries = await fs.listDir(await fs.resolve(root + '/templates'))
+            for (const en of entries) {
+              if (en.type !== 'file' || !/\.ya?ml$/i.test(en.name)) continue
+              workspace.push({ name: en.name.replace(/\.ya?ml$/i, ''), path: root + '/templates/' + en.name })
+            }
+          } catch (e) { /* 无 templates 目录 → 仅内置模板 */ }
+        }
+        writeJson(res, 200, { builtin: BUILTIN_TEMPLATES, workspace })
+        return
+      }
+
+      // Iter-13：面板创建实例（只 create 不 start；写操作 POST）
+      if (req.method === 'POST' && pathname === '/wf/create') {
+        let body = ''
+        let oversized = false
+        req.on('data', (chunk) => {
+          body += chunk
+          if (body.length > 1048576) { oversized = true; req.destroy() }
+        })
+        req.on('end', async () => {
+          try {
+            if (oversized) return
+            let args = {}
+            try { args = JSON.parse(body || '{}') } catch (e) {
+              writeJson(res, 400, { error: 'invalid json body' })
+              return
+            }
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            const srcText = args.workflowText ? String(args.workflowText) : null
+            const srcPath = args.workflowPath ? String(args.workflowPath) : null
+            if (!srcText && !srcPath) { writeJson(res, 400, { error: 'workflowPath or workflowText required' }); return }
+            let text = srcText
+            if (!text && srcPath) {
+              try {
+                text = await fs.readText(await fs.resolve(srcPath))
+              } catch (e) {
+                writeJson(res, 400, { error: 'cannot read workflowPath: ' + (e && e.message ? e.message : String(e)) })
+                return
+              }
+            }
+            const parsed = parseWorkflow(text)
+            if (parsed.errors && parsed.errors.length > 0) {
+              writeJson(res, 400, { error: 'invalid workflow definition', workflowBeginErrors: parsed.errors })
+              return
+            }
+            const entry = await registry.beginInstance({
+              cwd: root,
+              sessionId: null,
+              workflowName: parsed.name,
+              sourceText: text,
+              sourcePath: srcPath || null,
+              params: args.params || {},
+            })
+            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root })
+          } catch (e) {
+            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+          }
+        })
         return
       }
 
@@ -2010,3 +2157,5 @@ function registerWebRoutes(ctx, registry) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, registerWebRoutes, loadStateFromFile, createWorkflowStorage, slugifyName, makeUuid8, instancesRootPath, instanceDirPath, composeMetadata, createInstanceRegistry }
 // （Iter-10 起实例注册表源码在 code/plugins/workflow-host/instance-store.js，Node 测试直接 require 源模块）
+// Iter-13：ESM 侧补具名导出（test-host 用例 10 经 dynamic import 直测路由）
+export { registerWebRoutes, loadStateFromFile }

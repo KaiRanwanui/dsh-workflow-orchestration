@@ -128,6 +128,76 @@ tasks:
   check('重启后: reset 按 sessionId 精确恢复并重置', r.instanceId === iid && r.stage === 'PENDING')
 }
 
+// ── 用例 10：HTTP 路由（Iter-13：POST /wf/create + GET /wf/templates）────────
+async function runCase10() {
+  console.log('［用例 10］HTTP 路由 — templates / create（POST body）/ 404')
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+
+  const { files, fs: mockFs } = makeMockFs()
+  let routeHandler = null
+  const ctx = {
+    get(name) {
+      if (name === 'webServer') return { register(def) { routeHandler = def.handler } }
+      if (name === 'fs') return mockFs
+      return undefined
+    },
+  }
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage })
+  mjs.registerWebRoutes(ctx, registry)
+  check('路由注册：/wf prefix handler 已捕获', typeof routeHandler === 'function')
+
+  const call = (method, url, body) => new Promise((resolve, reject) => {
+    const res = {
+      code: 0, headers: null, payload: '',
+      writeHead(c, h) { this.code = c; this.headers = h },
+      end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } },
+    }
+    const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+    if (method === 'POST') {
+      const chunks = [JSON.stringify(body)]
+      req.on = (ev, fn) => {
+        if (ev === 'data') chunks.forEach(c => fn(c))
+        if (ev === 'end') Promise.resolve().then(() => fn())
+      }
+    }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+
+  // templates：内置 2 个；workspace 扫描 <root>/templates/*.yaml
+  let r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
+  check('templates: 内置 2 个模板', r.code === 200 && Array.isArray(r.body.builtin) && r.body.builtin.length === 2 && r.body.builtin[0].yaml.includes('name: serial-demo'))
+  await mockFs.writeText({ path: '/ws/t13/templates/my-tpl.yaml' }, 'name: my-tpl\n')
+  r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
+  check('templates: 工作区模板被扫描', r.body.workspace.length === 1 && r.body.workspace[0].name === 'my-tpl', JSON.stringify(r.body.workspace))
+
+  // create：workflowText 成功路径
+  const WF13 = 'name: t13demo\nversion: "1.0"\ndescription: d\nmax-concurrency: 2\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/t13/output/a.md"]\n    depends-on: []\n'
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: WF13, params: { output_dir: 'out' } })
+  const iid = r.body.instanceId
+  check('create: 200 + CREATED + id 形态', r.code === 200 && r.body.phase === 'CREATED' && /^t13demo-[0-9a-f]{8}$/.test(iid), JSON.stringify(r.body).slice(0, 140))
+  check('create: 快照目录五件套落盘', files.has('/ws/t13/.workflow-agent/instances/' + iid + '/instance.yaml') && files.has('/ws/t13/.workflow-agent/instances/' + iid + '/output/.gitkeep'))
+  check('create: params 记入 metadata', JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).params.output_dir === 'out')
+
+  // create：非法定义 → 400 + workflowBeginErrors
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: 'tasks: []\n' })
+  check('create: 非法定义 400', r.code === 400 && Array.isArray(r.body.workflowBeginErrors) && r.body.workflowBeginErrors.length > 0)
+
+  // create：缺 workspaceRoot / 缺定义来源
+  r = await call('POST', '/wf/create', { workflowText: WF13 })
+  check('create: 缺 workspaceRoot 400', r.code === 400)
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13' })
+  check('create: 缺定义来源 400', r.code === 400)
+
+  // workflowPath 读取创建
+  await mockFs.writeText({ path: '/ws/t13/wfs/from-file.yaml' }, WF13.replace('t13demo', 'fromfile'))
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowPath: '/ws/t13/wfs/from-file.yaml' })
+  check('create: workflowPath 读取成功', r.code === 200 && r.body.workflowName === 'fromfile', JSON.stringify(r.body).slice(0, 120))
+
+  // 404 回退
+  r = await call('GET', '/wf/nothing')
+  check('404 回退', r.code === 404)
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -503,6 +573,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase8()
     // ── 用例 9：实例操控工具（Iter-11）──
     await runCase9()
+    // ── 用例 10：HTTP 路由（Iter-13）──
+    await runCase10()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
