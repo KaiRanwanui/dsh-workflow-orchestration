@@ -2,7 +2,7 @@
 
 > 迭代计划：`plan/development/development-plan.md`（Iter-9 及之后）
 > 本文记录 Iter-9（多实例管理）从需求到方案的技术讨论与决策，是后续迭代的依据。
-> 状态：方案定稿（待按小步可验证原则拆分为多个迭代）。
+> 状态：方案已通过 Iter-9 探针技术验证（12/12 通过，见 `plan/development/iter9-report.md`），按 Iter-10~13 逐步落地。
 
 ---
 
@@ -111,9 +111,10 @@
 
 ## 6. 待确认 / 后续迭代
 
-- 实例 id = `workflowName-uuid8`（已定）
-- 实例 directory 与 DSH session 的目录绑定细则
-- 前台 DAG 如何精确跟随 session 切换（`useSessions+sessionId+cwd` 已验证）
+- ~~实例 id = `workflowName-uuid8`~~（已定；Iter-9 证实 id 唯一 guard，uuid8 天然防撞）
+- ~~实例 directory 与 DSH session 的目录绑定细则~~（Iter-9 证实：存储按 `header.cwd` 键控，metadata.json 定位链路读写验证通过）
+- ~~前台 DAG 如何精确跟随 session 切换~~（`useSessions+sessionId+cwd` 已验证；存储侧 cwd 键控亦确认）
+- Iter-9 补充约束：实例存储路径从 session cwd 推导（动态插件上下文 `workspaceRoot`=HOME）；实例 session 生命周期用 `prepare+enter+announce` 持 detach（`create()` 无移除通道）
 - 按小步可验证原则拆分到多个迭代（见 development-plan Iter-9~ 重新规划）
 
 ---

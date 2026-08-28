@@ -25,9 +25,9 @@
 ## 2. 迭代全景
 
 ```
-已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善)
-当前:   Iter-9(多实例技术验证)   ← 待开发
-后续:   Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(编排编辑器)
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证)
+当前:   Iter-10(实例目录与存储)   ← 待开发
+后续:   Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(编排编辑器)
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -40,7 +40,7 @@
 | **6** | **循环错误处理 + DAG 布局优化** | **onError(break/continue) + >4 items 折叠/展开** | **中断/继续 + 折叠布局验证** | **Iter-5** |
 | **7** | 并发执行引擎 | max-concurrency 生效，无依赖 Task 并行 | 并行 Task + 并发循环迭代 | ✅ **完成** |
 | **8** | **并发语义完善 + concurrent 节点 + DAG 增强** | **组级/工作流级 max 取最严格；concurrent Task 类型；启动/结束节点；依赖同前驱节点垂直排列** | **concurrent 并发 + start/end 节点 + 垂直排列** | ✅ **完成** |
-| **9** | 多实例技术验证（DSH Session 探索） | 验证插件内创建/监听 session、session cwd 定位实例目录 | session 探针 + 技术验证报告 | Iter-8 |
+| **9** | 多实例技术验证（DSH Session 探索） | 验证插件内创建/监听 session、session cwd 定位实例目录 | session 探针 + 技术验证报告 | ✅ **完成** |
 | **10** | 实例目录与存储（后台） | 实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ 按实例读写 state | 多实例独立 state.json | Iter-9 |
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | Iter-10 |
 | **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | Iter-11 |
@@ -301,7 +301,7 @@ cordis_define(code.host=index.js) → cordis_run
 
 ---
 
-### Iter-9: 多实例技术验证（DSH Session 探索）（1 人天）
+### Iter-9: 多实例技术验证（DSH Session 探索）（1 人天 — ✅ 完成）
 
 **输入**：Iter-8 完成
 
@@ -318,6 +318,8 @@ cordis_define(code.host=index.js) → cordis_run
 输出技术验证报告（回注 development-plan / 架构决策）
 ```
 
+**验证结果**（✅）：12 项探针全部通过（创建/事件监听/cwd 定位/并行共存/id 与 cwd guard/受控生命周期/flush 持久化），详见 `plan/development/iter9-report.md`。关键输入修正：实例存储路径必须从 session cwd 推导（动态插件上下文 `workspaceRoot`=HOME）；实例 session 生命周期用 `prepare+enter+announce` 持 detach（`create()` 无移除通道）。
+
 ---
 
 ### Iter-10: 实例目录与存储（后台）（1 人天）
@@ -325,6 +327,8 @@ cordis_define(code.host=index.js) → cordis_run
 **输入**：Iter-9 技术验证可用
 
 **范围**：实例目录结构（`<cwd>/.workflow-agent/instances/<id>/{instance.yaml,state.json,metadata.json,output/,logs/}`）；storage 按实例读写 state；workflow-host 管理 `Map<instanceId,{engine,storage}>`（engine 零改造）；实例目录 metadata.json 存 instanceId↔sessionId（主）。
+
+**Iter-9 约束**：目录路径从 `exec.agent.session.header.cwd` 推导，禁止依赖 `sandboxPolicy.workspaceRoot`；metadata.json 读写模式已被探针 P7 证实。
 
 **验证标准**：
 
@@ -341,6 +345,8 @@ metadata.json 能还原 instanceId↔sessionId 映射
 **输入**：Iter-10 实例目录可用
 
 **范围**：`workflow_create`（从定义+参数建实例）/ `workflow_start` / `workflow_stop` / `workflow_reset`（清实例目录重跑）/ `workflow_list`；system-prompt 实例管理与重置能力提示。
+
+**Iter-9 约束**：实例 session 用 `prepare+enter+announce` 创建并持有 detach disposer（`workflow_stop/reset` 需要移除通道；`create()` 便捷路径无 detach）；实例 id 用 `workflowName-uuid8`（id 唯一 guard 已证实，天然防撞）。
 
 **验证标准**：
 

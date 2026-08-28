@@ -1,0 +1,181 @@
+{
+  "plugin": "wf9p-iter9-probe",
+  "startedAt": "2026-08-28T01:07:15.396Z",
+  "probes": {
+    "serviceAvailable": true,
+    "methodNames": [
+      "ctx",
+      "name",
+      "store",
+      "counter",
+      "create",
+      "prepare",
+      "enter",
+      "detachEntered",
+      "announce",
+      "emitDisposed",
+      "flush",
+      "liveEntryFor",
+      "get",
+      "list",
+      "fork",
+      "_forkSeed",
+      "_resolveForkSource",
+      "__defineGetter__",
+      "__defineSetter__",
+      "hasOwnProperty",
+      "__lookupGetter__",
+      "__lookupSetter__",
+      "isPrototypeOf",
+      "propertyIsEnumerable",
+      "toString",
+      "valueOf",
+      "__proto__",
+      "toLocaleString"
+    ],
+    "listenersRegistered": true,
+    "createA": {
+      "ok": true,
+      "id": "wf9p-iter9-a",
+      "cwd": "/home/zhaokai/.wf-probe-iter9/instance-a",
+      "version": 0,
+      "createdAt": 1787879235407
+    },
+    "createB": {
+      "ok": true
+    },
+    "list": {
+      "total": 4,
+      "probeSessions": [
+        {
+          "id": "wf9p-iter9-a",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-a"
+        },
+        {
+          "id": "wf9p-iter9-b",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-b"
+        }
+      ],
+      "hasA": true,
+      "hasB": true
+    },
+    "getA": true,
+    "getB": true,
+    "parallelOk": true,
+    "appendCustom": {
+      "ok": true,
+      "seqBefore": 3,
+      "seqAfter": 4,
+      "type": "wf-probe/step",
+      "feedSeen": true
+    },
+    "mappingA": {
+      "ok": true,
+      "path": "/home/zhaokai/.wf-probe-iter9/instance-a/.workflow-agent/instances/wf-probe-demo-a/metadata.json"
+    },
+    "mappingB": {
+      "ok": true,
+      "path": "/home/zhaokai/.wf-probe-iter9/instance-b/.workflow-agent/instances/wf-probe-demo-b/metadata.json"
+    },
+    "duplicateId": {
+      "threwExpected": true,
+      "error": "session \"wf9p-iter9-a\" already exists"
+    },
+    "relativeCwd": {
+      "threwExpected": true,
+      "error": "session header cwd must be an absolute path, got \"relative/path\""
+    },
+    "lifecycle": {
+      "ok": true,
+      "inStoreBeforeEnter": false,
+      "announcedInStore": true,
+      "afterDetach": false,
+      "disposedEventFired": true
+    },
+    "flushDurability": {
+      "ok": true,
+      "flushed": true
+    },
+    "summary": {
+      "createOk": true,
+      "parallelOk": true,
+      "createdEventsFired": [
+        {
+          "id": "wf9p-iter9-a",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-a"
+        },
+        {
+          "id": "wf9p-iter9-b",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-b"
+        },
+        {
+          "id": "wf9p-iter9-c",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-c"
+        }
+      ],
+      "disposedEventsFired": [
+        {
+          "id": "wf9p-iter9-c",
+          "cwd": "/home/zhaokai/.wf-probe-iter9/instance-c"
+        }
+      ],
+      "eventFeed": [
+        {
+          "sid": "wf9p-iter9-a",
+          "type": "permission/preset",
+          "seq": 0
+        },
+        {
+          "sid": "wf9p-iter9-a",
+          "type": "sandbox/mode",
+          "seq": 1
+        },
+        {
+          "sid": "wf9p-iter9-a",
+          "type": "approval/policy",
+          "seq": 2
+        },
+        {
+          "sid": "wf9p-iter9-b",
+          "type": "permission/preset",
+          "seq": 0
+        },
+        {
+          "sid": "wf9p-iter9-b",
+          "type": "sandbox/mode",
+          "seq": 1
+        },
+        {
+          "sid": "wf9p-iter9-b",
+          "type": "approval/policy",
+          "seq": 2
+        },
+        {
+          "sid": "wf9p-iter9-a",
+          "type": "wf-probe/step",
+          "seq": 3
+        },
+        {
+          "sid": "wf9p-iter9-c",
+          "type": "permission/preset",
+          "seq": 0
+        },
+        {
+          "sid": "wf9p-iter9-c",
+          "type": "sandbox/mode",
+          "seq": 1
+        },
+        {
+          "sid": "wf9p-iter9-c",
+          "type": "approval/policy",
+          "seq": 2
+        }
+      ],
+      "cwdInstanceMappingOk": true,
+      "lifecycleControlled": true
+    }
+  },
+  "workspaceRoot": "/home/zhaokai",
+  "lastFlush": "done",
+  "finishedAt": "2026-08-28T01:07:15.521Z"
+}

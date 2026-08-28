@@ -192,6 +192,13 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 ### 重置工作流
 在 workflow 层实现 `workflow_reset`：清空实例目录 `output/`/`logs/`/`state.json` → 重读定义 → `workflow_begin` 重跑。
 
+### 验证结论（✅ Iter-9 探针）
+12 项探针全部通过，决策可行（详见 `plan/development/iter9-report.md`）：
+1. `sessions` 服务全链路可用：create（id 唯一 + cwd 绝对路径 guard）、list/get 多 session 并行共存、`prepare+enter+announce+detach` 受控生命周期、flush 持久化检查点
+2. `session.header.cwd → <cwd>/.workflow-agent/instances/<id>/metadata.json` 定位链路读写验证一致
+3. 自定义 session 事件类型可直接 append（轨迹记录可用）
+4. **约束**：实例存储路径必须从 session cwd 推导（动态插件上下文 `workspaceRoot`=HOME）；实例 session 生命周期必须用 `prepare+enter+announce` 持 detach（`create()` 无移除通道）
+
 ---
 
 ## 总结

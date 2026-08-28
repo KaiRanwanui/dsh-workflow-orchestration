@@ -39,6 +39,8 @@
 
 | 今日 | **Iter-8 并发语义完善 + concurrent 节点 + DAG 增强** | ✅ 完成（组级/工作流级 max 最严格，65 单测通过） |
 
+| 今日 | **Iter-9 多实例技术验证（DSH Session 探针）** | ✅ 完成（12 项探针全过，方案可行性确认，动态插件已清理） |
+
 ---
 
 ## 已完成工作
@@ -162,13 +164,34 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-9: 多实例技术验证（DSH Session 探索）（计划中）
+### Iter-10: 实例目录与存储（后台）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-9）
+**迭代计划**：`plan/development/development-plan.md`（Iter-10）
 
 **技术方案**：`plan/design/multi-instance-session-design.md`（复用 DSH Session 多实例）
 
-**目标**：先做技术验证——探针确认插件内创建/监听 session、用 session.cwd 定位实例目录、多 session 并行。之后按 Iter-10~13 逐步落地（实例目录/操控工具/前台界面/编辑器）。
+**目标**：实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ storage 按实例读写 state；workflow-host 管理 `Map<instanceId,{engine,storage}>`（engine 零改造）。
+
+**Iter-9 输入约束**：实例目录路径从 `exec.agent.session.header.cwd` 推导（动态插件上下文 `workspaceRoot`=HOME，不可依赖）；实例 session 生命周期用 `prepare+enter+announce` 持 detach（`create()` 无移除通道）。详见 `iter9-report.md` §5。
+
+---
+
+### 11. Iter-9 — 多实例技术验证（✅ 完成）
+
+**迭代报告**：`plan/development/iter9-report.md`（含探针原始数据 `iter9-probe-results.json`）
+
+**核心交付**：
+- Host-only 动态插件探针（probe-1，验证后已 undefine）执行 12 项探针，全部通过
+- 验证 `sessions` 服务全链路：create（id 唯一 + cwd 绝对路径 guard）/ list/get 并行共存 / append 自定义事件类型 / `prepare+enter+announce+detach` 受控生命周期 / flush 持久化检查点
+- 验证 cwd 定位链路：`session.header.cwd → <cwd>/.workflow-agent/instances/<id>/metadata.json` 写入读回一致
+- 确认持久化布局 `~/.dsh/sessions/<cwd 键控目录>/<sessionId>/`
+
+**关键发现**：
+- ⚠️ 动态插件上下文 `sandboxPolicy.workspaceRoot` = HOME（非 agent 会话工作区）→ 实例存储路径必须从 session cwd 推导
+- `create()` 创建的 session 无 detach 通道（无法插件侧移除）；受控生命周期必须走 `prepare+enter+announce`
+- session 创建自动写 `permission/preset`、`sandbox/mode`、`approval/policy` 3 个 epoch 事件
+
+**验证**：12/12 探针通过（创建/监听/定位/并行/生命周期/持久化），探针执行 ~125ms。
 
 ---
 
@@ -265,6 +288,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-6 报告 | `plan/development/iter6-report.md` |
 | Iter-7 报告 | `plan/development/iter7-report.md` |
 | Iter-8 报告 | `plan/development/iter8-report.md` |
+| Iter-9 报告 | `plan/development/iter9-report.md` |
 
 ---
 

@@ -22,7 +22,7 @@
 | 顺序 | 文档 | 内容 |
 |------|------|------|
 | 1 | `plan/development/progress-record.md` | **最新进度**：已完成工作、当前待办、最近迭代细节 |
-| 2 | `plan/development/iter8-report.md` | **最近迭代报告**：Iter-8 交付内容、验证结果、踩坑记录 |
+| 2 | `plan/development/iter9-report.md` | **最近迭代报告**：Iter-9 交付内容（DSH Session 探针）、验证结果、关键发现 |
 
 ### 第 2 层：理解方案与约束（4 篇）
 | 顺序 | 文档 | 内容 |
