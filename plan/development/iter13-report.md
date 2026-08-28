@@ -3,7 +3,7 @@
 **日期**：2026-08-28
 **版本**：@workflow-agent/workflow-host **v0.6.0**、@workflow-agent/client-ui-monitor **v0.3.0**
 **前置**：Iter-11/12（已部署验证）、设计语义 v2（instance-creation-semantics.md）
-**状态**：代码与单测完成（104/104），**待重启 + 刷新验证**
+**状态**：✅ **完成**（2b6a874，104/104 单测通过，面板功能验证通过）
 
 ---
 
