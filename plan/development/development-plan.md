@@ -26,8 +26,8 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面)
-当前:   Iter-14(实例创建按钮，小步可先做) → Iter-13(编排编辑器)
-后续:   （规划已到 Iter-13/14）
+当前:   Iter-14(创建按钮+模板库v1，小步可先做) → Iter-15(消息注入技术穿刺) → Iter-16(面板控制)
+后续:   Iter-13(编排编辑器，范围已修订：双模式)；远期注记：局部任务重跑（指令通道通用化）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -45,7 +45,9 @@
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | ✅ **完成** |
 | **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | ✅ **完成**（待部署验证） |
 | **13** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-12 |
-| **14** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单（**只 create 不 start**，语义见 instance-creation-semantics.md） | 面板建实例 → session 启动编排 | Iter-11/12 |
+| **14** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | Iter-11/12 |
+| **15** | 消息注入技术穿刺 | 验证插件向指定 session 注入指令（动态插件探针，先例 Iter-9；按通用指令消息形态验证） | go/no-go 结论 + API 形态报告 | Iter-12 |
+| **16** | 面板控制（start/stop/继续） | 走 Iter-15 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | Iter-15 go |
 
 ---
 
@@ -379,7 +381,9 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-13: 编排编辑器（1 人天）
+### Iter-13: 编排编辑器（1 人天）——范围已修订（v2，见 instance-creation-semantics.md §2）
+
+**修订要点**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。
 
 **输入**：Iter-12 前台实例可切换
 
@@ -400,26 +404,42 @@ workflow_list → 列出所有实例 + 状态
 → 切换到监控式 → 启动 → 运行成功
 ```
 
-### Iter-14: 面板"新建 workflow 实例"按钮（0.5 人天，可先于 Iter-13 执行）
+### Iter-14: 面板"新建 workflow 实例"按钮 + 模板库 v1（0.5~1 人天，可先于 Iter-13 执行）
 
 **输入**：Iter-11 create 工具语义、Iter-12 /wf/list + 切换条
-**语义定稿**：`plan/design/instance-creation-semantics.md` §4.2——**按钮只 create 不 start**（启动的驱动者是 session 内编排 Agent loop，面板 start 会制造无驱动者的僵尸实例）
+**语义定稿**：`plan/design/instance-creation-semantics.md` §6.3——**按钮只 create 不 start**（start 驱动者是 session 内编排 Agent；面板 start 待 Iter-15/16 通道打通后再议）
 
 **产出**：
 
 | 项 | 职能 |
 |------|------|
-| Host `POST /wf/create` | 写操作 HTTP 化：loopback 校验 → parseWorkflow 校验 → `beginInstance`（sessionId=null）→ `{instanceId, dir, phase:"CREATED"}`；现有 /wf/* prefix handler 增加 method 判断 + POST body 收集 |
-| Client "+" 按钮 | 切换条旁入口 → 表单（workflowPath + params JSON）→ 创建后 /wf/list 轮询自动带出 chip |
-| 不做 | 面板 start/stop/reset（驱动者约束，见语义文档 §4.3） |
+| Host `POST /wf/create` | 写操作 HTTP 化：loopback 校验 → parseWorkflow 校验 → `beginInstance`（sessionId=null）→ `{instanceId, dir, phase:"CREATED"}`；prefix handler 增加 method 判断 + POST body 收集 |
+| 模板库 v1 | 内置基础流程模板（随插件分发）+ 可选扫描 `<cwd>/templates/*.yaml`；面板"从模板新建"入口（模板 → params 替换 → create；模板保持只读，实例=模板+配置严格区分） |
+| Client "+" 按钮 | 切换条旁入口 → 表单（选模板或填 workflowPath + params JSON）→ 创建后 /wf/list 轮询自动带出 chip |
+| 不做 | 面板 start/stop/reset（驱动者约束，Iter-15/16 处理）；模板 UI 指定目录/git 下载（后置） |
 
 **验证标准**：
 
 ```
-面板点"+" → 填 workflowPath → 创建成功
+面板点"+" → 选模板（或填路径）→ 创建成功
 → 切换条出现 CREATED chip（无需 session 调工具）
 → 在 orchestrator session 里 workflow_start 该实例 → 编排正常驱动
 ```
+
+### Iter-15: 消息注入技术穿刺（0.5 人天）
+
+**输入**：Iter-12 面板就绪；用户拍板"要做技术穿刺，稳妥点"
+**形态**：动态插件探针（先例 Iter-9，用后即 stop+undefine）
+
+**验证目标**：插件能否向指定 session 注入用户消息/指令；API 形态是否支持**通用指令消息**（`{type, taskId, ...}` 而非硬编码 start/stop）——为远期"局部任务重跑"（对失败任务单独启动 subAgent、局部刷新总状态）预留架构。
+
+**产出**：探针报告（go/no-go + API 形态 + 约束）；no-go 则面板维持"只 create，控制走 session"。
+
+### Iter-16: 面板控制 start/stop/继续（1 人天，依赖 Iter-15 = go）
+
+**输入**：Iter-15 通道
+**产出**：面板 start/stop/继续按钮（注入指令驱动编排 session）；"继续"= hydrate 续跑（不清进度，persona 补教学）；产物列表（实例 output/ 列表展示，读侧小迭代可并入）
+**验证**：面板启动 → DAG 展示执行 → 面板停止 → 面板继续 → 完成
 
 ---
 

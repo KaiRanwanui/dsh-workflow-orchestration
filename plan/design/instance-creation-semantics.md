@@ -1,8 +1,8 @@
 # 实例创建语义与生命周期决策
 
-**日期**：2026-08-28
-**状态**：已定稿（Iter-11/12 部署验证通过后与用户讨论形成）
-**关联**：`multi-instance-session-design.md`（实例=session 总方案）、`architecture-decisions.md` §6、Iter-11/12 报告
+**日期**：2026-08-28（v2：并入产品流程映射与用户拍板决策）
+**状态**：v2 已定稿（用户审查通过）
+**关联**：`multi-instance-session-design.md`、`architecture-decisions.md` §6、Iter-11/12 报告
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```
 instances/<workflowName>-<uuid8>/
-├── instance.yaml   ← 当次运行的定义快照（源 YAML + params 注释头）
+├── instance.yaml   ← 当次运行的定义快照（源 + params 注释头）
 ├── metadata.json   ← 溯源：sourcePath / params / sessionId / sessionCwd / createdAt
 ├── state.json      ← 运行状态
 └── output/ logs/   ← 产物与日志
@@ -18,76 +18,91 @@ instances/<workflowName>-<uuid8>/
 
 实例目录不是"会话的工作区"，而是**一次编排运行的完整种子**。关键性质是**可复现性**：
 
-- 源 YAML 后来被修改甚至删除，实例目录里的 `instance.yaml` 快照不变；
-- `workflow_start` / `workflow_reset` 重跑的是"当时固化的定义+参数"，而非磁盘上可能已变的源文件；
-- `workflow_reset` 能"清状态重跑"正因快照独立于源存在（Iter-11：重读 instance.yaml → 全新 PENDING）。
+- 源 YAML 后来被修改甚至删除，实例快照不变；`workflow_start` / `workflow_reset` 重跑的是"当时固化的定义+参数"；
+- `workflow_reset` 能"清状态重跑"正因快照独立于源存在。
 
-**推论（惰性创建的依据）**：创建目录这个动作 = 固化一次运行的定义。session 刚创建时只有 cwd——没有定义、没有参数，`instance.yaml` 无内容可写、`workflowName` 未知、连 `slug(workflowName)-uuid8` 的实例 id 都无法生成。因此**实例目录跟随首次创建动作出现，而非 session 创建时出现**。
+**推论（惰性创建）**：创建目录 = 固化一次运行的定义。session 刚创建时没有定义与参数，无东西可固化——因此实例目录跟随显式创建动作出现，而非 session 创建时出现。
 
-## 2. 实例生命周期状态机
+## 2. 模板与实例严格区分（v2 定稿）
+
+**实例 = 模板 + 配置**。两者是不同的东西，全程不混用：
+
+| | 模板（template） | 实例（instance） |
+|--|--|--|
+| 本质 | 只读的流程定义源头 | 模板的一次固化运行种子 |
+| 载体 | YAML 文件（位置不强制约定） | 实例目录（`instance.yaml` 快照 + 状态 + 产物） |
+| 可变性 | 可被编辑器编辑，但**已建实例不受影响** | CREATED 状态可编辑写回快照；RUNNING 禁编辑 |
+| 关系 | 编辑器读模板 → 创建实例 | metadata.sourcePath 反向溯源到模板 |
+
+编辑器双模式（Iter-13 范围修订）：
+1. **模板模式**：打开模板 YAML 编辑 → 保存后用"创建实例"实例化；
+2. **实例模式**：打开实例的 `instance.yaml` 编辑 → CREATED 状态写回快照（metadata 记 `updatedAt`）；RUNNING 状态禁止保存（提示先 stop/reset）。
+
+## 3. 实例生命周期状态机
 
 ```
 （不存在）
-   │ workflow_create / workflow_begin   ← 创建动作（唯一入口）
+   │ 创建动作（workflow_create / workflow_begin / 面板按钮）
    ▼
-CREATED        有定义快照，未启动过（无 state.json）
-   │ workflow_start / workflow_begin
+CREATED        有快照，未启动（无 state.json）；可编辑快照
+   │ start / begin
    ▼
 PENDING ──→ RUNNING ──→ COMPLETED / FAILED
-               │
-               ▼ workflow_stop
-            STOPPED（编排 Agent 不得继续执行；reset 重跑或重新 start）
+               │ stop
+               ▼
+            STOPPED ── 用户说"继续"→ 编排 Agent hydrate 续跑（不清进度）
+                     ── 用户说"重跑"→ workflow_reset（全新 PENDING）
 ```
 
-- 状态判定以**磁盘**为准：`CREATED` = 目录有 metadata 无 state.json；其余读 state.json（`entryStateOnDisk`，内存标记会过期）。
-- 同一 cwd 多实例并存（uuid8 防撞）；同一 session 重复 begin 产生新实例（begin 是"新建并启动"的快捷方式，create+start 是显式生命周期）。
+- 状态判定以**磁盘**为准（`entryStateOnDisk`）。
+- **"继续"语义**：无需新工具——引擎 hydrate 已支持从磁盘状态恢复（DSH 重启后的惰性恢复即同机制），编排 Agent 读 `workflow_status` 快照按 runnable 继续推进。缺的只是 persona 教学（v0.5.0 persona 第 7 步已含 STOPPED 约束，续跑教学在 Iter-16 面板控制时一并补）。
 
-## 3. 为什么不在 session 创建时自动建实例目录
+## 4. 为什么不在 session 创建时自动建实例目录
 
-两个独立理由，任一都足以否决：
+（v1 结论维持）双重否决：**信息不完备**（无定义可固化）+ **preset 判断耦合链**（依赖方向反转 / 静默失效面 / 职责越界）。**显式调用是唯一不需要耦合的身份信号。**
 
-### 3.1 信息不完备（语义层）
+## 5. 产品流程映射（v2 新增，用户 7 步愿景）
 
-session 创建时刻没有定义和参数——只能建违背快照语义的空壳目录，且引入复杂状态机（"CREATED 无定义" vs "CREATED 有定义"），弱化可复现性。当前状态机里 CREATED 的含义是干净的："**有快照、未启动**"。
+| # | 流程 | 底座 | 缺口/迭代 |
+|--|------|------|----------|
+| 1 | 创建编排 Session | preset（session 创建零磁盘副作用） | 无 |
+| 2 | 面板创建 workflow，可选模板 | Iter-14 create 按钮 | 模板库 v1（§6.1） |
+| 3 | 编辑节点/关系/参数/技能/门控/输入输出 | Iter-13 编辑器 | 双模式 + 严格区分（§2，Iter-13 范围修订） |
+| 4 | 面板启动执行 | — | **Iter-15 技术穿刺** → Iter-16 面板控制（§6.2） |
+| 5 | DAG 展示 + 停止/继续/重跑 | Iter-12 展示；stop/reset 工具有 | 面板控制走 §6.2 通道；"继续"见 §3 |
+| 6 | 获取输出/过程文件 | 文件已在实例目录落盘 | 面板产物列表（小，随 Iter-16 或独立小迭代） |
+| 7 | 归档/删 session 不删文件 | 天然自洽（文件在用户工作区） | 孤儿实例语义（§7） |
 
-### 3.2 preset 判断耦合（架构层）
+## 6. 面板控制与模板库（v2 定稿）
 
-自动建目录必须回答"这个新建 session 是编排会话吗"。workflow-host 能接触的身份线索只有 preset id / persona / 工具集，于是必须内置"名为 workflow-orchestrator 的 preset 才建目录"的规则。耦合链：
+### 6.1 模板库：v1 从简，演进留路
 
-1. **依赖方向反转**：现在是 preset → 引擎（preset 消费引擎工具），干净；加监听后引擎 → preset（引擎知道具体 preset 存在），通用插件被具体业务身份污染。
-2. **静默失效面**：复制 preset 变体、改名 → 判断悄悄失效（不建目录，无报错）；轻量编排变体 → 漏判/误判，往普通会话 cwd 撒目录。
-3. **职责越界**：preset 是用户的会话配置选择（会话身份层）；引擎解读它 = 把编排业务管理策略塞进存储层。
+**v1 实现（并入 Iter-14）**：
+- 内置少量基础流程模板（随插件分发，用户编辑创建）；
+- 约定可选扫描目录 `<cwd>/templates/*.yaml`——用户自行放入，或从指定 git 仓下载（下载能力后置）；
+- 面板表单提供"从模板新建"入口：选模板 → 参数替换 → 走 POST /wf/create。
 
-**正面原则**：`workflow_create` 是会话内**显式动作**——会话通过调用行为自证"我是编排会话，要这个定义的实例"。零猜测、零配置、任何 preset 可用。**显式调用是唯一不需要耦合的身份信号。**
+**演进路径（不设时限）**：UI 指定本地目录 / git 仓拉取 / 服务端模板管理。涉及本地文件读取、上传服务端等问题，均后置。
 
-## 4. 创建工作流的动作定义（定稿）
+### 6.2 面板控制通道：Client → Host → session 指令注入
 
-### 4.1 会话内（已实现，v0.5.0）
+**决策（用户拍板）**：做**技术穿刺**，稳妥优先。面板 start/stop/继续在原理上同构：Client 发消息 → Host → 向指定 session 注入指令。
 
-| 动作 | 工具 | 语义 |
+- **Iter-15（技术穿刺，动态插件形态，先例 Iter-9）**：验证 DSH 是否支持插件向指定 session 注入用户消息/指令。产出 go/no-go 结论 + 可用 API 形态。
+- **Iter-16（面板控制，依赖 Iter-15 = go）**：面板 start/stop/继续按钮，走注入通道驱动编排 session；"继续"按 §3 语义。no-go → 维持"面板只 create，控制走 session"。
+- **架构预留（后话，已立项注记）**：任务失败后对**局部任务**启动 subAgent 重新执行、执行状态局部刷新总状态——要求注入通道是**通用指令消息**（如 `{type: "rerun-task", taskId}`）而非硬编码 start/stop。Iter-15 穿刺时按通用消息形态验证。
+
+### 6.3 创建动作定稿
+
+**边界：面板按钮只 create，不 start**（start 的驱动者是 session 内编排 Agent；面板 start 待 Iter-15/16 通道打通后再议）。
+
+| 动作 | 载体 | 语义 |
 |------|------|------|
-| 预建（不启动） | `workflow_create {workflowPath\|workflowText, params}` | 校验定义 → 建快照目录 → `phase: CREATED` |
-| 新建并启动 | `workflow_begin {workflowPath\|workflowText, params}` | create + start 一步到位（兼容既有编排主路径） |
-| 启动已有 | `workflow_start {instanceId?}` | 读实例快照 → 解析展开 → PENDING，返回 runnable（编排循环起点） |
+| 预建（不启动） | `workflow_create` 工具 / 面板 POST /wf/create | 校验定义 → 建快照目录 → CREATED |
+| 新建并启动 | `workflow_begin` | create + start 一步到位（编排主路径） |
+| 启动已有 | `workflow_start` | 读实例快照 → PENDING + runnable；RUNNING 拒绝 |
+| 从模板新建 | 面板"模板→实例"（v1 §6.1） | 模板内容经 params 替换后走 create；模板不受影响 |
 
-### 4.2 面板按钮（Iter-14 规划）
+## 7. 孤儿实例语义（v2 新增）
 
-**动作边界：按钮只 create，不 start。** 理由：启动编排必须有驱动者（编排 Agent loop 在 session 内）；面板 start 会制造"有 RUNNING 状态却没有驱动者"的僵尸实例。启动永远由用户在 session 里发起（或未来明确引入"面板 start → 通知 session 驱动"的通道后再议）。
-
-| 项 | 定义 |
-|------|------|
-| HTTP | `POST /wf/create`（写操作用 POST；现有 /wf/* prefix handler 增加 method 判断 + POST body chunk 收集） |
-| Body | `{ workspaceRoot, workflowPath \| workflowText, params }` |
-| 行为 | 校验 loopback → 校验定义（parseWorkflow）→ `registry.beginInstance`（复用 workflow_create 工具语义，sessionId 记 null）→ 返回 `{ instanceId, dir, workflowName, phase: "CREATED" }` |
-| 失败 | 400（参数缺失/定义不合法，附 workflowBeginErrors） |
-| UI | 实例切换条旁"+"按钮 → 弹出表单（工作流路径 + params JSON）→ 创建后切换条即时可见（现有 /wf/list 轮询自动带出） |
-| 不做 | 面板 start/stop/reset 按钮（同样受"驱动者"约束；STOPPED 语义不变） |
-
-### 4.3 决策记录
-
-| 决策 | 结论 |
-|------|------|
-| session 创建自动建目录 | ❌ 否决（信息不完备 + preset 耦合，见 §3） |
-| 编排 Agent 开场 create | ✅ persona 约定即可（v0.5.0 已支持） |
-| 面板创建按钮 | ✅ 采纳为 Iter-14（只 create 不 start） |
-| 面板启动按钮 | ❌ 暂缓（驱动者问题未解，见 §4.2） |
+**实例所有权 = cwd，session 只是"当前驱动者"**。归档/删除 session 后：文件不动（工作区文件，DSH 删 session 不触文件系统）；实例仍在 `/wf/list` 中列出；同 cwd 新 session 可接管（forSession 惰性恢复按 createdAt 最新兜底）。metadata.sessionId 记录的是"创建/最后绑定它的 session"，仅供溯源，不构成所有权。
