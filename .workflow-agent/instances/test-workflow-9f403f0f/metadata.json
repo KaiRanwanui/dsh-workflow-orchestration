@@ -1,0 +1,9 @@
+{
+  "instanceId": "test-workflow-9f403f0f",
+  "workflowName": "test-workflow",
+  "sessionId": null,
+  "sessionCwd": "/home/zhaokai/Projects/dsh_projects/workflow-agent",
+  "sourcePath": "/home/zhaokai/Projects/dsh_projects/workflow-agent/test-workflow.yaml",
+  "params": {},
+  "createdAt": "2026-08-28T12:52:18.880Z"
+}

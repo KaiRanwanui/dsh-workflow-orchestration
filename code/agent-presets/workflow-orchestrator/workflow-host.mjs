@@ -5,7 +5,7 @@
 //       落盘根默认取 exec.agent.session.header.cwd（会话工作区）。
 
 export const name = 'workflow-host'
-export const inject = ['fs', 'tools']
+export const inject = ['fs', 'tools', 'subagents', 'agents']
 
 export function apply(ctx) {
   // Iter-10：多实例注册表（instanceId → engine/storage，sessionId → 活跃实例）
@@ -2201,6 +2201,95 @@ function registerWebRoutes(ctx, registry) {
         } else {
           writeJson(res, 200, { valid: false, workspaceRoot: root, error: 'workspaceRoot not provided' })
         }
+        return
+      }
+
+      // Iter-14：消息注入探针（验证 subagents.followup API）
+      if (req.method === 'POST' && pathname === '/wf/probe-inject') {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const targetSessionId = args.targetSessionId
+            const message = args.message || 'test message from iter-14 probe'
+            const parentSessionId = args.parentSessionId // 可选：指定 parent session
+            
+            if (!targetSessionId) {
+              writeJson(res, 400, { error: 'targetSessionId required' })
+              return
+            }
+            
+            const subagents = ctx.get('subagents')
+            const agents = ctx.get('agents')
+            
+            if (!subagents) {
+              writeJson(res, 500, { error: 'subagents service unavailable' })
+              return
+            }
+            
+            if (!agents) {
+              writeJson(res, 500, { error: 'agents service unavailable' })
+              return
+            }
+            
+            // 尝试获取 parent agent
+            let parentAgent = agents.currentInitiator ? agents.currentInitiator() : null
+            
+            // 如果没有 current initiator，尝试从列表获取
+            if (!parentAgent && parentSessionId) {
+              const allAgents = agents.list ? agents.list() : []
+              parentAgent = allAgents.find(a => a.session && a.session.id === parentSessionId)
+            }
+            
+            // 如果还是没有，尝试获取 roots
+            if (!parentAgent) {
+              const rootAgents = agents.roots ? agents.roots() : []
+              if (rootAgents.length > 0) {
+                parentAgent = rootAgents[0]
+              }
+            }
+            
+            if (!parentAgent) {
+              // 诊断信息
+              const allAgents = agents.list ? agents.list() : []
+              const rootAgents = agents.roots ? agents.roots() : []
+              writeJson(res, 500, { 
+                error: 'no parent agent available',
+                diagnostic: {
+                  currentInitiator: agents.currentInitiator ? !!agents.currentInitiator() : false,
+                  totalAgents: allAgents.length,
+                  rootAgents: rootAgents.length,
+                  agentIds: allAgents.map(a => a.session ? a.session.id : 'no-session').slice(0, 5)
+                }
+              })
+              return
+            }
+            
+            // 调用 subagents.followup 注入消息
+            const content = [{ type: 'text', text: message }]
+            const abortController = new AbortController()
+            const messageId = await subagents.followup(
+              parentAgent,
+              targetSessionId,
+              content,
+              { signal: abortController.signal }
+            )
+            
+            writeJson(res, 200, { 
+              success: true, 
+              messageId, 
+              targetSessionId,
+              parentSessionId: parentAgent.session ? parentAgent.session.id : 'unknown',
+              message 
+            })
+          } catch (e) {
+            writeJson(res, 500, { 
+              error: e && e.message ? e.message : String(e),
+              stack: e && e.stack ? e.stack : undefined
+            })
+          }
+        })
         return
       }
 
