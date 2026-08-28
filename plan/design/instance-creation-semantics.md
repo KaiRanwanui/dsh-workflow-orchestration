@@ -34,7 +34,7 @@ instances/<workflowName>-<uuid8>/
 | 可变性 | 可被编辑器编辑，但**已建实例不受影响** | CREATED 状态可编辑写回快照；RUNNING 禁编辑 |
 | 关系 | 编辑器读模板 → 创建实例 | metadata.sourcePath 反向溯源到模板 |
 
-编辑器双模式（Iter-13 范围修订）：
+编辑器双模式（Iter-16，范围修订）：
 1. **模板模式**：打开模板 YAML 编辑 → 保存后用"创建实例"实例化；
 2. **实例模式**：打开实例的 `instance.yaml` 编辑 → CREATED 状态写回快照（metadata 记 `updatedAt`）；RUNNING 状态禁止保存（提示先 stop/reset）。
 
@@ -55,7 +55,7 @@ PENDING ──→ RUNNING ──→ COMPLETED / FAILED
 ```
 
 - 状态判定以**磁盘**为准（`entryStateOnDisk`）。
-- **"继续"语义**：无需新工具——引擎 hydrate 已支持从磁盘状态恢复（DSH 重启后的惰性恢复即同机制），编排 Agent 读 `workflow_status` 快照按 runnable 继续推进。缺的只是 persona 教学（v0.5.0 persona 第 7 步已含 STOPPED 约束，续跑教学在 Iter-16 面板控制时一并补）。
+- **"继续"语义**：无需新工具——引擎 hydrate 已支持从磁盘状态恢复（DSH 重启后的惰性恢复即同机制），编排 Agent 读 `workflow_status` 快照按 runnable 继续推进。缺的只是 persona 教学（v0.5.0 persona 第 7 步已含 STOPPED 约束，续跑教学在 Iter-15 面板控制时一并补）。
 
 ## 4. 为什么不在 session 创建时自动建实例目录
 
@@ -66,18 +66,18 @@ PENDING ──→ RUNNING ──→ COMPLETED / FAILED
 | # | 流程 | 底座 | 缺口/迭代 |
 |--|------|------|----------|
 | 1 | 创建编排 Session | preset（session 创建零磁盘副作用） | 无 |
-| 2 | 面板创建 workflow，可选模板 | Iter-14 create 按钮 | 模板库 v1（§6.1） |
-| 3 | 编辑节点/关系/参数/技能/门控/输入输出 | Iter-13 编辑器 | 双模式 + 严格区分（§2，Iter-13 范围修订） |
-| 4 | 面板启动执行 | — | **Iter-15 技术穿刺** → Iter-16 面板控制（§6.2） |
+| 2 | 面板创建 workflow，可选模板 | Iter-13 create 按钮 | 模板库 v1（§6.1） |
+| 3 | 编辑节点/关系/参数/技能/门控/输入输出 | Iter-16 编辑器 | 双模式 + 严格区分（§2）；将拆分子迭代（16.1~16.4） |
+| 4 | 面板启动执行 | — | **Iter-14 技术穿刺** → Iter-15 面板控制（§6.2） |
 | 5 | DAG 展示 + 停止/继续/重跑 | Iter-12 展示；stop/reset 工具有 | 面板控制走 §6.2 通道；"继续"见 §3 |
-| 6 | 获取输出/过程文件 | 文件已在实例目录落盘 | 面板产物列表（小，随 Iter-16 或独立小迭代） |
+| 6 | 获取输出/过程文件 | 文件已在实例目录落盘 | 面板产物列表（小，随 Iter-15 或独立小迭代） |
 | 7 | 归档/删 session 不删文件 | 天然自洽（文件在用户工作区） | 孤儿实例语义（§7） |
 
 ## 6. 面板控制与模板库（v2 定稿）
 
 ### 6.1 模板库：v1 从简，演进留路
 
-**v1 实现（并入 Iter-14）**：
+**v1 实现（并入 Iter-13）**：
 - 内置少量基础流程模板（随插件分发，用户编辑创建）；
 - 约定可选扫描目录 `<cwd>/templates/*.yaml`——用户自行放入，或从指定 git 仓下载（下载能力后置）；
 - 面板表单提供"从模板新建"入口：选模板 → 参数替换 → 走 POST /wf/create。
@@ -88,13 +88,13 @@ PENDING ──→ RUNNING ──→ COMPLETED / FAILED
 
 **决策（用户拍板）**：做**技术穿刺**，稳妥优先。面板 start/stop/继续在原理上同构：Client 发消息 → Host → 向指定 session 注入指令。
 
-- **Iter-15（技术穿刺，动态插件形态，先例 Iter-9）**：验证 DSH 是否支持插件向指定 session 注入用户消息/指令。产出 go/no-go 结论 + 可用 API 形态。
-- **Iter-16（面板控制，依赖 Iter-15 = go）**：面板 start/stop/继续按钮，走注入通道驱动编排 session；"继续"按 §3 语义。no-go → 维持"面板只 create，控制走 session"。
-- **架构预留（后话，已立项注记）**：任务失败后对**局部任务**启动 subAgent 重新执行、执行状态局部刷新总状态——要求注入通道是**通用指令消息**（如 `{type: "rerun-task", taskId}`）而非硬编码 start/stop。Iter-15 穿刺时按通用消息形态验证。
+- **Iter-14（技术穿刺，动态插件形态，先例 Iter-9）**：验证 DSH 是否支持插件向指定 session 注入用户消息/指令。产出 go/no-go 结论 + 可用 API 形态。
+- **Iter-15（面板控制，依赖 Iter-14 = go）**：面板 start/stop/继续按钮，走注入通道驱动编排 session；"继续"按 §3 语义。no-go → 维持"面板只 create，控制走 session"。
+- **架构预留（后话，已立项注记）**：任务失败后对**局部任务**启动 subAgent 重新执行、执行状态局部刷新总状态——要求注入通道是**通用指令消息**（如 `{type: "rerun-task", taskId}`）而非硬编码 start/stop。Iter-14 穿刺时按通用消息形态验证。
 
 ### 6.3 创建动作定稿
 
-**边界：面板按钮只 create，不 start**（start 的驱动者是 session 内编排 Agent；面板 start 待 Iter-15/16 通道打通后再议）。
+**边界：面板按钮只 create，不 start**（start 的驱动者是 session 内编排 Agent；面板 start 待 Iter-14/15 通道打通后再议）。
 
 | 动作 | 载体 | 语义 |
 |------|------|------|

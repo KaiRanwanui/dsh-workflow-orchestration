@@ -47,7 +47,7 @@
 
 | 今日 | **Iter-12 前台实例界面** | ✅ 代码完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；待重启+刷新验证） |
 
-| 今日 | **实例创建语义定稿 + Iter-14 立项** | ✅ 文档落档（目录=定义快照、session 创建不自动建目录的耦合分析、面板按钮只 create 不 start；见 plan/design/instance-creation-semantics.md） |
+| 今日 | **实例创建语义定稿 v2 + 迭代重排** | ✅ 文档落档（7 步产品流程映射、模板/实例严格区分、面板控制走注入通道；迭代按执行顺序重排：13 创建按钮+模板库v1 → 14 注入穿刺 → 15 面板控制 → 16 编辑器拆分推进；见 plan/design/instance-creation-semantics.md） |
 
 ---
 

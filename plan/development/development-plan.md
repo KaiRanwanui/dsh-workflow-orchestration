@@ -26,8 +26,8 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面)
-当前:   Iter-14(创建按钮+模板库v1，小步可先做) → Iter-15(消息注入技术穿刺) → Iter-16(面板控制)
-后续:   Iter-13(编排编辑器，范围已修订：双模式)；远期注记：局部任务重跑（指令通道通用化）
+当前:   Iter-13(创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制)
+后续:   Iter-16(编排编辑器——体量最大，启动时将拆分为多个子迭代顺序推进；远期注记：局部任务重跑，指令通道通用化)
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -44,10 +44,10 @@
 | **10** | 实例目录与存储（后台） | 实例目录结构（instance.yaml/state.json/metadata.json/output/logs）+ 按实例读写 state | 多实例独立 state.json | ✅ **完成** |
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | ✅ **完成** |
 | **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | ✅ **完成**（待部署验证） |
-| **13** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-12 |
-| **14** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | Iter-11/12 |
-| **15** | 消息注入技术穿刺 | 验证插件向指定 session 注入指令（动态插件探针，先例 Iter-9；按通用指令消息形态验证） | go/no-go 结论 + API 形态报告 | Iter-12 |
-| **16** | 面板控制（start/stop/继续） | 走 Iter-15 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | Iter-15 go |
+| **13** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | Iter-11/12 |
+| **14** | 消息注入技术穿刺 | 验证插件向指定 session 注入指令（动态插件探针，先例 Iter-9；按通用指令消息形态验证） | go/no-go 结论 + API 形态报告 | Iter-12 |
+| **15** | 面板控制（start/stop/继续） | 走 Iter-14 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | Iter-14 go |
+| **16** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-13 |
 
 ---
 
@@ -381,33 +381,10 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-13: 编排编辑器（1 人天）——范围已修订（v2，见 instance-creation-semantics.md §2）
-
-**修订要点**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。
-
-**输入**：Iter-12 前台实例可切换
-
-**产出**：`code/plugins/workflow-client/editor/`
-
-| 文件 | 职能 |
-|------|------|
-| `canva.js` | 节点拖拽 + 框选 |
-| `edg.js` | depend-on 连线 |
-| `noode-configjs` | 节点配置面板 |
-| `yam-sync.js` | 图形 ↔ YAML 同步 |
-
-**验证标准**：
-
-```
-打开编辑器 → 拖入 2 个 Task 节 → 配 processor/inputs/outputs
-→ 连定义依赖 → 加 Gate → 保存 YAML
-→ 切换到监控式 → 启动 → 运行成功
-```
-
-### Iter-14: 面板"新建 workflow 实例"按钮 + 模板库 v1（0.5~1 人天，可先于 Iter-13 执行）
+### Iter-13: 面板"新建 workflow 实例"按钮 + 模板库 v1（0.5~1 人天）
 
 **输入**：Iter-11 create 工具语义、Iter-12 /wf/list + 切换条
-**语义定稿**：`plan/design/instance-creation-semantics.md` §6.3——**按钮只 create 不 start**（start 驱动者是 session 内编排 Agent；面板 start 待 Iter-15/16 通道打通后再议）
+**语义定稿**：`plan/design/instance-creation-semantics.md` §6.3——**按钮只 create 不 start**（start 驱动者是 session 内编排 Agent；面板 start 待 Iter-14/15 通道打通后再议）
 
 **产出**：
 
@@ -426,7 +403,7 @@ workflow_list → 列出所有实例 + 状态
 → 在 orchestrator session 里 workflow_start 该实例 → 编排正常驱动
 ```
 
-### Iter-15: 消息注入技术穿刺（0.5 人天）
+### Iter-14: 消息注入技术穿刺（0.5 人天）
 
 **输入**：Iter-12 面板就绪；用户拍板"要做技术穿刺，稳妥点"
 **形态**：动态插件探针（先例 Iter-9，用后即 stop+undefine）
@@ -435,11 +412,34 @@ workflow_list → 列出所有实例 + 状态
 
 **产出**：探针报告（go/no-go + API 形态 + 约束）；no-go 则面板维持"只 create，控制走 session"。
 
-### Iter-16: 面板控制 start/stop/继续（1 人天，依赖 Iter-15 = go）
+### Iter-15: 面板控制 start/stop/继续（1 人天，依赖 Iter-14 = go）
 
-**输入**：Iter-15 通道
+**输入**：Iter-14 通道
 **产出**：面板 start/stop/继续按钮（注入指令驱动编排 session）；"继续"= hydrate 续跑（不清进度，persona 补教学）；产物列表（实例 output/ 列表展示，读侧小迭代可并入）
 **验证**：面板启动 → DAG 展示执行 → 面板停止 → 面板继续 → 完成
+
+### Iter-16: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
+
+**范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
+
+**输入**：Iter-13 前台创建可用；Iter-15 面板控制可用（编辑器"保存并启动"依赖控制通道）
+
+**拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
+
+| 子迭代 | 交付 | 验证 |
+|--------|------|------|
+| 16.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 16.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 16.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 16.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+
+**验证标准**：
+
+```
+打开编辑器 → 拖入 2 个 Task 节 → 配 processor/inputs/outputs
+→ 连定义依赖 → 加 Gate → 保存 YAML
+→ 切换到监控式 → 启动 → 运行成功
+```
 
 ---
 
