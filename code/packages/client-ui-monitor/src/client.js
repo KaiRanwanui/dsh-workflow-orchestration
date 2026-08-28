@@ -474,6 +474,10 @@ export function register(ctx) {
         const sessionCwd = useSessions
           ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
           : undefined
+        // Iter-15：提取 parentSessionId（用于 subagent session 的消息注入）
+        const parentSessionId = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
+          : undefined
 
         function WorkflowView() {
           const [, forceUpdate] = React.useReducer(x => x + 1, 0)
@@ -613,7 +617,8 @@ export function register(ctx) {
                     body: JSON.stringify({ 
                       workspaceRoot: activeRoot, 
                       instanceId: currentInstanceId,
-                      sessionId: sessionId // 传递当前 session ID
+                      sessionId: sessionId, // 传递当前 session ID
+                      parentSessionId: parentSessionId // 传递 parent session ID（用于 subagent session）
                     })
                   })
                   if (!resp.ok) {

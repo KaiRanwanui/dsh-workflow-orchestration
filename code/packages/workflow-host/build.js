@@ -40,7 +40,7 @@ const outputCode = `// @workflow-agent/workflow-host - Host Plugin (npm package)
 // 不再依赖 harness Builtin；RPC 处理器（workflow-rpc.mjs）已停用。
 
 const name = 'workflow-host'
-const inject = ['fs', 'tools', 'webServer', 'subagents', 'agents', 'sessionPersistence']
+const inject = ['fs', 'tools', 'webServer', 'subagents', 'agents', 'apiProxy']
 
 function apply(ctx) {
   ${hostCode}
