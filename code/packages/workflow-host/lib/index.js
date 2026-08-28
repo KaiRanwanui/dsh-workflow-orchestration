@@ -2302,6 +2302,92 @@ function registerWebRoutes(ctx, registry) {
         return
       }
 
+      // Iter-15：面板控制路由（start/stop/reset，直接操作实例状态）
+      if (req.method === 'POST' && (pathname === '/wf/start' || pathname === '/wf/stop' || pathname === '/wf/reset')) {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            const instanceId = args.instanceId
+            
+            if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+            if (!instanceId) { writeJson(res, 400, { error: 'instanceId required' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            if (!fs) { writeJson(res, 500, { error: 'fs service unavailable' }); return }
+            
+            const entry = await registry.loadEntry(root, instanceId)
+            if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
+            
+            const action = pathname.replace('/wf/', '')
+            
+            // 辅助函数：展开实例定义（从 instance.yaml 读取并解析）
+            async function expandInstanceDef(entry) {
+              const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+              const text = stripInstanceHeader(raw)
+              const params = (entry.meta && entry.meta.params) || {}
+              const sp = entry.meta && entry.meta.sourcePath
+              const base = (sp && sp !== '(inline workflowText)') ? sp.replace(/[\\/][^\\/]*$/, '') : undefined
+              return expandDefinition(fs, { text, base }, params)
+            }
+            
+            if (action === 'start') {
+              // 检查是否已在运行
+              if (entry.hasState) {
+                const st = entry.engine.snapshot()
+                if (st.stage === 'RUNNING') {
+                  writeJson(res, 400, { error: 'instance is already running' }); return
+                }
+              }
+              // 展开定义并启动
+              const parsed = await expandInstanceDef(entry)
+              entry.engine.begin(parsed)
+              entry.engine.setError(null)
+              const r = await entry.storage.save()
+              entry.engine.setPersist(r)
+              entry.hasState = true // 更新 hasState 标记
+              const snap = entry.engine.snapshot()
+              snap.instanceId = entry.instanceId
+              writeJson(res, 200, snap)
+              return
+            }
+            
+            if (action === 'stop') {
+              if (!entry.hasState) {
+                writeJson(res, 400, { error: 'instance not started (CREATED)' }); return
+              }
+              entry.engine.setStage('STOPPED')
+              const r = await entry.storage.save()
+              entry.engine.setPersist(r)
+              const snap = entry.engine.snapshot()
+              snap.instanceId = entry.instanceId
+              writeJson(res, 200, snap)
+              return
+            }
+            
+            if (action === 'reset') {
+              const parsed = await expandInstanceDef(entry)
+              entry.engine.begin(parsed)
+              entry.engine.setError(null)
+              const r = await entry.storage.save()
+              entry.engine.setPersist(r)
+              await registry.patchMeta(root, instanceId, { lastResetAt: new Date().toISOString() })
+              const snap = entry.engine.snapshot()
+              snap.instanceId = entry.instanceId
+              snap.resetNote = 'state reset (output/logs preserved)'
+              writeJson(res, 200, snap)
+              return
+            }
+            
+            writeJson(res, 400, { error: 'unknown action: ' + action })
+          } catch (e) {
+            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+          }
+        })
+        return
+      }
+
       writeJson(res, 404, { error: 'not found: ' + pathname })
     },
   })

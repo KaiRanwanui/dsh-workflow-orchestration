@@ -1,0 +1,64 @@
+{
+  "workflow": "test-workflow",
+  "version": null,
+  "description": null,
+  "active": true,
+  "stage": "PENDING",
+  "tasks": [
+    {
+      "id": "task1",
+      "name": "Test Task 1",
+      "type": "llm-task",
+      "dependsOn": [],
+      "status": "PENDING",
+      "processor": "/home/zhaokai/Projects/dsh_projects/workflow-agent/echo \"Hello from task1\"",
+      "gateChecker": null,
+      "gateResult": null,
+      "gateOnFailure": null,
+      "retries": 0,
+      "_loopGroup": null,
+      "_loopItem": null,
+      "_loopIndex": 0,
+      "_loopGroupName": null,
+      "_onError": null,
+      "_concurrentGroup": null,
+      "_concurrentGroupName": null,
+      "_concurrentItem": null,
+      "_concurrentIndex": 0,
+      "_concurrentMax": null
+    },
+    {
+      "id": "task2",
+      "name": "Test Task 2",
+      "type": "llm-task",
+      "dependsOn": [],
+      "status": "PENDING",
+      "processor": "/home/zhaokai/Projects/dsh_projects/workflow-agent/echo \"Hello from task2\"",
+      "gateChecker": null,
+      "gateResult": null,
+      "gateOnFailure": null,
+      "retries": 0,
+      "_loopGroup": null,
+      "_loopItem": null,
+      "_loopIndex": 0,
+      "_loopGroupName": null,
+      "_onError": null,
+      "_concurrentGroup": null,
+      "_concurrentGroupName": null,
+      "_concurrentItem": null,
+      "_concurrentIndex": 0,
+      "_concurrentMax": null
+    }
+  ],
+  "gateResult": null,
+  "retries": 0,
+  "error": null,
+  "updatedAt": 1787923077924,
+  "logs": [
+    {
+      "ts": 1787923077924,
+      "action": "BEGIN",
+      "detail": "工作流 \"test-workflow\" 已初始化，tasks=2"
+    }
+  ]
+}

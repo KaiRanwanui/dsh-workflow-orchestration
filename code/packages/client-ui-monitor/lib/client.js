@@ -611,13 +611,91 @@ function register(ctx) {
           const monoStyle = Object.assign({}, fieldStyle, { fontFamily: 'monospace', resize: 'vertical' })
           const btnStyle = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
 
+          // Iter-15：面板控制按钮（Start/Stop/Reset）
+          const controlBtns = []
+          const currentStage = stateData && stateData.stage
+          const currentInstanceId = stateData && stateData.instanceId
+          
+          // Start 按钮（CREATED 或无状态时显示）
+          if (!currentStage || currentStage === 'CREATED') {
+            controlBtns.push(React.createElement('button', {
+              key: 'start', title: '启动实例',
+              onClick: async () => {
+                if (!currentInstanceId || !activeRoot) return
+                try {
+                  const resp = await fetch('/wf/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                  })
+                  if (!resp.ok) {
+                    const err = await resp.json()
+                    alert('启动失败: ' + (err.error || '未知错误'))
+                  }
+                } catch (e) {
+                  alert('启动失败: ' + e.message)
+                }
+              },
+              style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+            }, '▶ Start'))
+          }
+          
+          // Stop 按钮（PENDING 或 RUNNING 时显示）
+          if (currentStage === 'PENDING' || currentStage === 'RUNNING') {
+            controlBtns.push(React.createElement('button', {
+              key: 'stop', title: '停止实例',
+              onClick: async () => {
+                if (!currentInstanceId || !activeRoot) return
+                try {
+                  const resp = await fetch('/wf/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                  })
+                  if (!resp.ok) {
+                    const err = await resp.json()
+                    alert('停止失败: ' + (err.error || '未知错误'))
+                  }
+                } catch (e) {
+                  alert('停止失败: ' + e.message)
+                }
+              },
+              style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+            }, '⏹ Stop'))
+          }
+          
+          // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
+          if (currentStage === 'STOPPED' || currentStage === 'COMPLETED' || currentStage === 'FAILED') {
+            controlBtns.push(React.createElement('button', {
+              key: 'reset', title: '重置实例（清空状态，保留产物）',
+              onClick: async () => {
+                if (!currentInstanceId || !activeRoot) return
+                if (!confirm('确定要重置实例吗？状态将被清空，产物文件保留。')) return
+                try {
+                  const resp = await fetch('/wf/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                  })
+                  if (!resp.ok) {
+                    const err = await resp.json()
+                    alert('重置失败: ' + (err.error || '未知错误'))
+                  }
+                } catch (e) {
+                  alert('重置失败: ' + e.message)
+                }
+              },
+              style: { border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+            }, '↻ Reset'))
+          }
+
           const plusBtn = React.createElement('button', {
             key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
             style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
           }, '+')
           const toolbar = React.createElement('div', {
             key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, [plusBtn])
+          }, [...controlBtns, plusBtn])
 
           const formOverlay = !formOpen ? null : React.createElement('div', {
             style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
