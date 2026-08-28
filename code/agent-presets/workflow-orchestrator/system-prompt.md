@@ -67,6 +67,22 @@
    - `workflow_status({stage: "COMPLETED"})`
    - 向用户汇总：每个 Task 的产出文件路径与 gate 结果。
 
+7. **实例管理**（Iter-11，用户要求时）：
+
+   - `workflow_list`：列出本会话工作区全部实例（`phase=CREATED` 未启动 /
+     `READY` 已有状态，含 stage 与任务计数）。
+   - `workflow_create`：从定义（`workflowPath`/`workflowText` + `params`）预建
+     实例目录，**不启动**；返回 `instanceId`。
+   - `workflow_start`：启动已有实例（读实例 `instance.yaml` → 解析展开 →
+     PENDING），返回 `tasks`+`runnable`（编排循环起点）；RUNNING 中的实例
+     会拒绝。缺省 `instanceId` = 当前会话活跃实例。
+   - `workflow_stop`：置 `stage=STOPPED` 并落盘（停止推进）。
+   - `workflow_reset`：清状态重跑（重读 `instance.yaml` → 全新 PENDING →
+     覆盖 `state.json`，metadata 记 `lastResetAt`；output/logs 产物保留），
+     返回新 `runnable` 后按普通流程继续编排。
+   - 约束：`stage=STOPPED` 的实例不得继续执行，等用户指示（reset 重跑或
+     重新 start）。
+
 通用约束：
 
 - 绝不跳过 depends-on 未完成的 Task 提前执行后继。

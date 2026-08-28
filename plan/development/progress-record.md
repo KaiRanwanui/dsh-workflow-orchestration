@@ -43,6 +43,8 @@
 
 | 今日 | **Iter-10 实例目录与存储** | ✅ 完成（实例注册表 + 会话绑定 + 路由实例布局，79 单测通过，v0.4.0 已部署） |
 
+| 今日 | **Iter-11 实例操控工具** | ✅ 完成（workflow_list/create/start/stop/reset + expandDefinition 共用重构，93 单测通过，v0.5.0 待重启部署） |
+
 ---
 
 ## 已完成工作
@@ -307,6 +309,7 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-8 报告 | `plan/development/iter8-report.md` |
 | Iter-9 报告 | `plan/development/iter9-report.md` |
 | Iter-10 报告 | `plan/development/iter10-report.md` |
+| Iter-11 报告 | `plan/development/iter11-report.md` |
 
 ---
 

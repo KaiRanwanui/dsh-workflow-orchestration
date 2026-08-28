@@ -112,10 +112,20 @@ function createInstanceRegistry(ctx, deps) {
     const engine = deps.createWorkflowEngine()
     const storage = deps.createWorkflowStorage(ctx, engine)
     storage.setInstanceDir(dir)
-    const entry = { instanceId, dir, meta, engine, storage }
+    const entry = { instanceId, dir, meta, engine, storage, hasState: false }
     engines.set(instanceId, entry)
     if (opts.sessionId) activeBySession.set(opts.sessionId, instanceId)
     return entry
+  }
+
+  // 工具执行上下文 → 会话 cwd（Iter-11：操控工具的实例定位锚点）
+  function sessionCwdOf(exec) {
+    try {
+      const c = exec && exec.agent && exec.agent.session && exec.agent.session.header && exec.agent.session.header.cwd
+      return typeof c === 'string' && c ? c : undefined
+    } catch (e) {
+      return undefined
+    }
   }
 
   // ── 会话当前活跃实例；未命中则按实例目录惰性恢复（DSH 重启后首次调用）────
@@ -123,14 +133,7 @@ function createInstanceRegistry(ctx, deps) {
     const sessionId = sessionIdOf(exec)
     const hit = sessionId ? activeBySession.get(sessionId) : undefined
     if (hit && engines.get(hit)) return engines.get(hit)
-    const cwd = (function () {
-      try {
-        const c = exec && exec.agent && exec.agent.session && exec.agent.session.header && exec.agent.session.header.cwd
-        return typeof c === 'string' && c ? c : undefined
-      } catch (e) {
-        return undefined
-      }
-    })()
+    const cwd = sessionCwdOf(exec)
     if (!cwd) return undefined
     const restored = await hydrateLatest(cwd, sessionId)
     if (!restored) return undefined
@@ -172,13 +175,136 @@ function createInstanceRegistry(ctx, deps) {
     return entry
   }
 
+  // ── Iter-11：精确加载实例为条目（有 state.json 则 hydrate；无则为空白引擎）──
+  // 返回 entry 或 undefined（目录/metadata 不存在）。opts.active=true 时标记为
+  // 当前会话活跃实例。
+  async function loadEntry(cwd, instanceId, opts) {
+    const fs = ctx.get('fs')
+    if (!fs || !instanceId) return undefined
+    const dir = instanceDirPath(cwd, instanceId)
+    let meta
+    try {
+      meta = JSON.parse(await fs.readText(await fs.resolve(dir + '/metadata.json')))
+    } catch (e) {
+      return undefined // 目录或 metadata 不存在
+    }
+    if (!meta || meta.instanceId !== instanceId) return undefined
+    const existing = engines.get(instanceId)
+    if (existing) {
+      if (opts && opts.active) {
+        const sid = opts.sessionId || meta.sessionId
+        if (sid) activeBySession.set(sid, instanceId)
+      }
+      return existing
+    }
+    const engine = deps.createWorkflowEngine()
+    const storage = deps.createWorkflowStorage(ctx, engine)
+    storage.setInstanceDir(dir)
+    let hasState = false
+    try {
+      const state = JSON.parse(await fs.readText(await fs.resolve(dir + '/state.json')))
+      if (state && state.workflow) {
+        engine.hydrate(state)
+        hasState = true
+      }
+    } catch (e) { /* 无 state.json → CREATED 阶段的空白条目 */ }
+    const entry = { instanceId, dir, meta, engine, storage, hasState }
+    engines.set(instanceId, entry)
+    if (opts && opts.active) {
+      const sid = opts.sessionId || meta.sessionId
+      if (sid) activeBySession.set(sid, instanceId)
+    }
+    return entry
+  }
+
+  // ── Iter-11：操控工具的实例解析（显式 instanceId 优先，缺省走会话活跃）────
+  async function resolveEntry(exec, instanceId, opts) {
+    const cwd = sessionCwdOf(exec)
+    if (instanceId) {
+      if (!cwd) return undefined
+      return loadEntry(cwd, instanceId, opts)
+    }
+    return forSession(exec)
+  }
+
+  // ── Iter-11：列出当前 cwd 下全部实例（metadata + state 摘要，createdAt 倒序）──
+  // phase: 'CREATED'（仅目录，未启动过）| 'READY'（有 state.json）
+  async function listInstances(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return []
+    let dirs = []
+    try {
+      const entries = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      dirs = entries.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      return [] // 无 instances 目录
+    }
+    const out = []
+    for (const id of dirs) {
+      try {
+        const meta = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/metadata.json')))
+        if (!meta || meta.instanceId !== id) continue
+        const item = {
+          instanceId: id,
+          workflowName: meta.workflowName,
+          sessionId: meta.sessionId || null,
+          createdAt: meta.createdAt || null,
+          lastResetAt: meta.lastResetAt || null,
+          phase: 'CREATED',
+          stage: null,
+          active: !!meta.sessionId && activeBySession.get(meta.sessionId) === id,
+          taskTotal: 0,
+          taskDone: 0,
+          taskFailed: 0,
+        }
+        try {
+          const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
+          if (state && state.workflow) {
+            item.phase = 'READY'
+            item.stage = state.stage || null
+            const tasks = Array.isArray(state.tasks) ? state.tasks : []
+            item.taskTotal = tasks.length
+            item.taskDone = tasks.filter(t => t.status === 'DONE').length
+            item.taskFailed = tasks.filter(t => t.status === 'FAILED').length
+          }
+        } catch (e) { /* 无 state.json → CREATED */ }
+        out.push(item)
+      } catch (e) { /* 残缺实例目录跳过 */ }
+    }
+    out.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+    return out
+  }
+
+  // ── Iter-11：更新实例 metadata 的辅助字段（如 reset 的 lastResetAt）────────
+  async function patchMeta(cwd, instanceId, patch) {
+    const fs = ctx.get('fs')
+    if (!fs) return undefined
+    const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
+    try {
+      const meta = JSON.parse(await fs.readText(await fs.resolve(p)))
+      if (!meta || meta.instanceId !== instanceId) return undefined
+      const next = Object.assign({}, meta, patch || {})
+      await fs.writeText(await fs.resolve(p), JSON.stringify(next, null, 2))
+      const entry = engines.get(instanceId)
+      if (entry) entry.meta = next
+      return next
+    } catch (e) {
+      return undefined
+    }
+  }
+
   return {
     beginInstance,
     forSession,
     hydrateLatest,
+    loadEntry,
+    resolveEntry,
+    listInstances,
+    patchMeta,
     get,
     activeIdFor,
     sessionIdOf,
+    sessionCwdOf,
     engines,
     activeBySession,
   }

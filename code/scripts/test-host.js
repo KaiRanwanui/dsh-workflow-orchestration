@@ -15,13 +15,10 @@ const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
 let pass = 0
 let fail = 0
 
-// ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
-async function runCase8() {
-  console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
-
-  // mock fs：内存文件系统（resolve 返回 {path}，与 DSH fs 语义同构）
+// 内存文件系统（resolve 返回 {path}，与 DSH fs 语义同构）——用例 8/9 共用
+function makeMockFs() {
   const files = new Map()
-  const mockFs = {
+  const fs = {
     async resolve(p) { return { path: p } },
     async writeText(t, content) { files.set(t.path, String(content)) },
     async readText(t) {
@@ -42,6 +39,100 @@ async function runCase8() {
       return Array.from(seen.values())
     },
   }
+  return { files, fs }
+}
+
+// ── 用例 9：实例操控工具（Iter-11：list/create/start/status/stop/reset 全流程）──
+async function runCase9() {
+  console.log('［用例 9］实例操控工具 — list/create/start/status/stop/reset')
+  const { registerWorkflowToolsPreset, stripInstanceHeader } = require('../plugins/workflow-host-preset/tools-preset.js')
+
+  check('stripInstanceHeader: 剥离注释头', stripInstanceHeader('# a\n# source: /x\n# params: {}\n\nname: t9\n').startsWith('name: t9'))
+  check('stripInstanceHeader: 无头部原样保留', stripInstanceHeader('name: t9\n') === 'name: t9\n')
+
+  const { files, fs: mockFs } = makeMockFs()
+  const mkCtx = (bag) => {
+    // 兼容两种访问：ctx.tools.register（属性）与 ctx.get('tools')（服务）
+    const toolsMock = { register(t) { bag[t.name] = t } }
+    return {
+      tools: toolsMock,
+      get(name) {
+        if (name === 'fs') return mockFs
+        if (name === 'tools') return toolsMock
+        return undefined
+      },
+    }
+  }
+  const registered = {}
+  const registry = createInstanceRegistry(mkCtx(registered), { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(mkCtx(registered), null, null, registry)
+
+  const exec = { agent: { session: { header: { id: 'sess-t9', cwd: '/ws/t9' } } } }
+  const WF9 = `
+name: t9demo
+version: "1.0"
+description: "iter11 ops"
+max-concurrency: 2
+tasks:
+  - id: a
+    name: "A"
+    processor: /x/skills/a/SKILL.md
+    outputs: ["/ws/t9/output/a.md"]
+    depends-on: []
+  - id: b
+    name: "B"
+    processor: /x/skills/b/SKILL.md
+    outputs: ["/ws/t9/output/b.md"]
+    depends-on: []
+  - id: c
+    name: "C"
+    processor: /x/skills/c/SKILL.md
+    outputs: ["/ws/t9/output/c.md"]
+    depends-on: [a, b]
+`
+  const statePath = (id) => '/ws/t9/.workflow-agent/instances/' + id + '/state.json'
+
+  let r = await registered.workflow_list.execute({}, exec)
+  check('list: 空工作区返回空数组', Array.isArray(r.instances) && r.instances.length === 0, JSON.stringify(r).slice(0, 80))
+
+  r = await registered.workflow_create.execute({ workflowText: WF9 }, exec)
+  check('create: 返回 CREATED + id 形态', r.phase === 'CREATED' && /^t9demo-[0-9a-f]{8}$/.test(r.instanceId), JSON.stringify(r).slice(0, 120))
+  const iid = r.instanceId
+
+  r = await registered.workflow_list.execute({}, exec)
+  check('list: CREATED 阶段可见', r.instances.length === 1 && r.instances[0].phase === 'CREATED' && r.instances[0].instanceId === iid)
+
+  r = await registered.workflow_start.execute({}, exec)
+  check('start: stage PENDING + runnable 2（max-concurrency=2）', r.stage === 'PENDING' && Array.isArray(r.runnable) && r.runnable.length === 2, r.stage + '/' + (r.runnable || []).length)
+  check('start: 快照带 instanceId', r.instanceId === iid)
+  check('start: state.json 落实例目录', files.has(statePath(iid)))
+
+  r = await registered.workflow_status.execute({ task: 'a', taskStatus: 'RUNNING' }, exec)
+  check('status: 会话绑定推进任务 a RUNNING', r.tasks.some(t => t.id === 'a' && t.status === 'RUNNING'))
+
+  r = await registered.workflow_stop.execute({}, exec)
+  check('stop: stage STOPPED 并落盘', r.stage === 'STOPPED' && files.get(statePath(iid)).includes('STOPPED'))
+
+  r = await registered.workflow_reset.execute({}, exec)
+  check('reset: 状态全新 PENDING + runnable 恢复', r.stage === 'PENDING' && Array.isArray(r.runnable) && r.runnable.length === 2 && r.tasks.every(t => t.status === 'PENDING'))
+  check('reset: metadata 记 lastResetAt', !!JSON.parse(files.get('/ws/t9/.workflow-agent/instances/' + iid + '/metadata.json')).lastResetAt)
+
+  r = await registered.workflow_list.execute({}, exec)
+  check('list: READY 阶段 + 任务计数', r.instances[0].phase === 'READY' && r.instances[0].taskTotal === 3 && r.instances[0].stage === 'PENDING')
+
+  // 模拟 DSH 重启：全新注册表 + 全新工具注册，reset 精确恢复本会话实例
+  const reg2 = {}
+  const registry2 = createInstanceRegistry(mkCtx(reg2), { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(mkCtx(reg2), null, null, registry2)
+  r = await reg2.workflow_reset.execute({}, exec)
+  check('重启后: reset 按 sessionId 精确恢复并重置', r.instanceId === iid && r.stage === 'PENDING')
+}
+
+// ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
+async function runCase8() {
+  console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
+
+  const { files, fs: mockFs } = makeMockFs()
   const ctx = { get() { return mockFs } }
   const deps = { createWorkflowEngine, createWorkflowStorage }
   const registry = createInstanceRegistry(ctx, deps)
@@ -410,6 +501,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
 
     // ── 用例 8：实例注册表（Iter-10）──
     await runCase8()
+    // ── 用例 9：实例操控工具（Iter-11）──
+    await runCase9()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

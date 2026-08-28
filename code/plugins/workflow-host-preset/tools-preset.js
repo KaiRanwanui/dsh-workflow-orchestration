@@ -34,6 +34,10 @@ async function resolveRel(fs, base, rel) {
 // ── ${param} 注入 ───────────────────────────────────────────────────────────
 // PARAM_PATTERN 默认由同作用域 schema 模块提供；独立加载（Node 直测）时兜底
 let E_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN : /\$\{(\w+)\}/g
+// parseWorkflow 兜底：mjs 内联作用域有同名函数；Node 单独 require 时从 shared 加载
+let E_parseWorkflow = typeof parseWorkflow !== 'undefined'
+  ? parseWorkflow
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-parser').parseWorkflow : null)
 function injectParams(value, params) {
   if (typeof value !== 'string') return value
   return value.replace(E_PARAM_PATTERN, (whole, key) => {
@@ -68,6 +72,77 @@ async function loadWorkflowSource(fs, args) {
     return { text: String(args.workflowText), base: undefined }
   }
   return null
+}
+
+// ── 实例快照 instance.yaml 的注释头剥离（Iter-11：start/reset 读取实例定义）──
+// 头部由 beginInstance 生成：连续 '#' 注释行 + 一个空行。剥离后即纯 YAML 定义。
+function stripInstanceHeader(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  let i = 0
+  while (i < lines.length && lines[i].startsWith('#')) i++
+  if (i > 0 && i < lines.length && lines[i].trim() === '') i++ // 头部结束空行
+  return lines.slice(i).join('\n')
+}
+
+// 定义不合法错误（携带 workflowBeginErrors 数组，begin 路径保持既有契约）
+function definitionError(errors) {
+  const e = new Error('workflow 定义不合法: ' + errors.join('; '))
+  e.workflowBeginErrors = errors
+  return e
+}
+
+// ── 定义展开（Iter-11：begin/start/reset 共用）────────────────────────────
+// src: { text, base }；params: 工作流级参数。返回 parsed（tasks 已注入参数、
+// 解析相对路径、展开 loop/concurrent）。定义不合法或 items-from 为空时 throw。
+async function expandDefinition(fs, src, params) {
+  const parsed = E_parseWorkflow(src.text)
+  if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
+  const p = params || {}
+  const tasks = await Promise.all(parsed.tasks.map(async (t) => {
+    const out = { ...t }
+    out.inputs = injectInputsMap(t.inputsRaw, p)
+    out.outputs = injectArray(t.outputsRaw, p)
+    if (t.processorRaw) {
+      const procRel = injectParams(t.processorRaw, p)
+      out.processor = src.base ? await resolveRel(fs, src.base, procRel) : procRel
+    }
+    if (t.gateRaw) {
+      const gateRel = injectParams(t.gateRaw, p)
+      out.gate = {
+        checker: src.base ? await resolveRel(fs, src.base, gateRel) : gateRel,
+        onFailure: t.gateOnFailure,
+        maxRetries: t.gateMaxRetries,
+      }
+    }
+    if (t.itemsFromRaw) {
+      const itemsRel = injectParams(t.itemsFromRaw, p)
+      out.itemsFrom = src.base ? await resolveRel(fs, src.base, itemsRel) : itemsRel
+      out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
+      out.itemVar = t.itemVar
+    }
+    return out
+  }))
+  parsed.tasks = tasks
+  const finalTasks = []
+  for (const t of tasks) {
+    if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
+      const text = await fs.readText(await fs.resolve(t.itemsFrom))
+      const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+      if (items.length === 0) throw new Error('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+      const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p)
+      finalTasks.push(...iterations)
+    } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
+      const text = await fs.readText(await fs.resolve(t.itemsFrom))
+      const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
+      if (items.length === 0) throw new Error('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+      const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p)
+      finalTasks.push(...iterations)
+    } else {
+      finalTasks.push(t)
+    }
+  }
+  parsed.tasks = finalTasks
+  return parsed
 }
 
 // ── 循环展开：将 loop Task 展开为 N 个串行迭代实例 ────────────────────────
@@ -255,72 +330,21 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         }
         const src = await loadWorkflowSource(fs, args)
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
-        const parsed = parseWorkflow(src.text)
         const params = (args && args.params) || {}
-        if (parsed.errors && parsed.errors.length > 0) {
-          b.engine.setError('workflow 定义不合法: ' + parsed.errors.join('; '))
-          await b.storage.save()
-          const s = b.engine.snapshot()
-          s.workflowBeginErrors = parsed.errors
-          return withInstanceId(s, b)
+        let parsed
+        try {
+          parsed = await expandDefinition(fs, src, params)
+        } catch (e) {
+          if (e && e.workflowBeginErrors) {
+            // 保持既有契约：解析错误经快照 workflowBeginErrors 字段返回
+            b.engine.setError(e.message)
+            await b.storage.save()
+            const s = b.engine.snapshot()
+            s.workflowBeginErrors = e.workflowBeginErrors
+            return withInstanceId(s, b)
+          }
+          throw e
         }
-        // 注入 params + 解析相对路径为绝对路径
-        const tasks = await Promise.all(parsed.tasks.map(async (t) => {
-          const out = { ...t }
-          out.inputs = injectInputsMap(t.inputsRaw, params)
-          out.outputs = injectArray(t.outputsRaw, params)
-          if (t.processorRaw) {
-            const procRel = injectParams(t.processorRaw, params)
-            out.processor = src.base ? await resolveRel(fs, src.base, procRel) : procRel
-          }
-          if (t.gateRaw) {
-            const gateRel = injectParams(t.gateRaw, params)
-            out.gate = {
-              checker: src.base ? await resolveRel(fs, src.base, gateRel) : gateRel,
-              onFailure: t.gateOnFailure,
-              maxRetries: t.gateMaxRetries,
-            }
-          }
-          if (t.itemsFromRaw) {
-            const itemsRel = injectParams(t.itemsFromRaw, params)
-            out.itemsFrom = src.base ? await resolveRel(fs, src.base, itemsRel) : itemsRel
-            out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
-            out.itemVar = t.itemVar
-          }
-          return out
-        }))
-        parsed.tasks = tasks
-
-        // ── 循环/并发展开 ──
-        const finalTasks = []
-        for (const t of tasks) {
-          if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
-            // 循环：读取 items-from 文件，串行展开（迭代之间有依赖链）
-            const text = await fs.readText(await fs.resolve(t.itemsFrom))
-            const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-            if (items.length === 0) {
-              b.engine.setError('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-              await b.storage.save()
-              return withInstanceId(b.engine.snapshot(), b)
-            }
-            const iterations = await expandLoopTasks(fs, t, items, t.itemVar, params)
-            finalTasks.push(...iterations)
-          } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
-            // Iter-8：并发——读取 items-from 文件，迭代之间无依赖（可并发，受组级 max 约束）
-            const text = await fs.readText(await fs.resolve(t.itemsFrom))
-            const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-            if (items.length === 0) {
-              b.engine.setError('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-              await b.storage.save()
-              return withInstanceId(b.engine.snapshot(), b)
-            }
-            const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, params)
-            finalTasks.push(...iterations)
-          } else {
-            finalTasks.push(t)
-          }
-        }
-        parsed.tasks = finalTasks
 
         // ── Iter-10：多实例布局——成功路径创建实例目录并切换绑定 ──
         // （解析/展开失败不建实例目录；显式 statePath/workspaceRoot 参数走旧布局）
@@ -396,9 +420,221 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
     },
   }
   ctx.tools.register(statusTool)
+
+  // ══ Iter-11：实例操控工具（操作当前会话工作区下的实例目录）══════════════
+  // 定位语义：显式 instanceId → 本 cwd 实例目录精确解析；缺省 → 会话活跃实例。
+  // 实例运行状态记实例目录 state.json；实例选择/切换由 DSH session 列表承担
+  // （设计文档 §5.4）。
+
+  // 实例定义的相对路径解析基目录（优先原始源定义所在目录）
+  function instanceSourceBase(meta) {
+    const sp = meta && meta.sourcePath
+    if (sp && sp !== '(inline workflowText)') return sp.replace(/[\\/][^\\/]*$/, '')
+    return undefined
+  }
+
+  // 读取实例 instance.yaml 并展开为 parsed（start/reset 共用）
+  async function expandInstanceDefinition(entry) {
+    const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+    const text = stripInstanceHeader(raw)
+    const params = (entry.meta && entry.meta.params) || {}
+    return expandDefinition(fs, { text, base: instanceSourceBase(entry.meta) }, params)
+  }
+
+  // 条目是否有已落盘运行状态（一律以磁盘 state.json 为准，避免内存标记过期）
+  async function entryStateOnDisk(entry) {
+    try {
+      const st = JSON.parse(await fs.readText(await fs.resolve(entry.dir + '/state.json')))
+      return !!(st && st.workflow)
+    } catch (e) {
+      return false
+    }
+  }
+
+  function errPayload(e) {
+    const out = { error: (e && e.message) || String(e) }
+    if (e && e.workflowBeginErrors) out.workflowBeginErrors = e.workflowBeginErrors
+    return out
+  }
+
+  // ── workflow_list ─────────────────────────────────────────────────────────
+  ctx.tools.register({
+    name: 'workflow_list',
+    description: '列出当前会话工作区下的全部 workflow 实例（按创建时间倒序）。phase=CREATED 表示仅创建未启动；READY 表示已有运行状态（stage/task 计数）。返回 {cwd, instances[], activeInstanceId}。',
+    parameters: { type: 'object', additionalProperties: true, properties: {} },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        const cwd = registry.sessionCwdOf(exec)
+        if (!cwd) throw new Error('无会话工作区（实例按 session cwd 隔离）')
+        const instances = await registry.listInstances(cwd)
+        const sid = registry.sessionIdOf(exec)
+        return { cwd, instances, activeInstanceId: (sid && registry.activeIdFor(sid)) || null }
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_create ───────────────────────────────────────────────────────
+  ctx.tools.register({
+    name: 'workflow_create',
+    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED"}。启动用 workflow_start。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        workflowPath: { type: 'string', description: '工作流 YAML 的绝对路径' },
+        workflowText: { type: 'string', description: '工作流 YAML 文本（与 workflowPath 二选一）' },
+        params: { type: 'object', additionalProperties: true, description: '工作流参数快照（启动时复用）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        if (!fs) throw new Error('fs service unavailable')
+        const cwd = registry.sessionCwdOf(exec)
+        if (!cwd) throw new Error('无会话工作区（实例必须在会话工作区内创建）')
+        const src = await loadWorkflowSource(fs, args)
+        if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
+        const parsed = E_parseWorkflow(src.text)
+        if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
+        const entry = await registry.beginInstance({
+          cwd,
+          sessionId: registry.sessionIdOf(exec),
+          workflowName: parsed.name,
+          sourceText: src.text,
+          sourcePath: args.workflowPath || null,
+          params: args.params || {},
+        })
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd }
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_start ────────────────────────────────────────────────────────
+  ctx.tools.register({
+    name: 'workflow_start',
+    description: '启动一个已存在的 workflow 实例：读实例 instance.yaml → 解析展开 → 引擎置 PENDING → 写实例 state.json → 返回任务列表与 runnable（编排循环起点）。缺省 instanceId 时用当前会话活跃实例。RUNNING 中的实例会拒绝（先 stop 或 reset）。返回快照含 instanceId。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '实例 id（缺省=当前会话活跃实例）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        if (!fs) throw new Error('fs service unavailable')
+        const entry = await registry.resolveEntry(exec, args && args.instanceId, { active: true })
+        if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例，可先 workflow_create 或传 instanceId）'))
+        if (await entryStateOnDisk(entry)) {
+          const st = entry.engine.snapshot()
+          if (st.stage === 'RUNNING') throw new Error('实例 ' + entry.instanceId + ' 正在运行中（stage=RUNNING）；要重跑请先 workflow_stop 或 workflow_reset')
+        }
+        const parsed = await expandInstanceDefinition(entry)
+        entry.engine.begin(parsed)
+        entry.engine.setError(null)
+        const r = await entry.storage.save()
+        entry.engine.setPersist(r)
+        const snap = entry.engine.snapshot()
+        snap.instanceId = entry.instanceId
+        return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_stop ─────────────────────────────────────────────────────────
+  ctx.tools.register({
+    name: 'workflow_stop',
+    description: '停止一个 workflow 实例：stage 置 STOPPED 并落盘实例 state.json（编排 Agent 看到 STOPPED 后不再推进）。缺省 instanceId 时用当前会话活跃实例。CREATED 未启动的实例无需停止。返回快照含 instanceId。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '实例 id（缺省=当前会话活跃实例）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        const entry = await registry.resolveEntry(exec, args && args.instanceId)
+        if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例）'))
+        if (!(await entryStateOnDisk(entry))) throw new Error('实例 ' + entry.instanceId + ' 尚未启动（CREATED），无需停止')
+        entry.engine.setStage('STOPPED')
+        const r = await entry.storage.save()
+        entry.engine.setPersist(r)
+        const snap = entry.engine.snapshot()
+        snap.instanceId = entry.instanceId
+        return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_reset ────────────────────────────────────────────────────────
+  ctx.tools.register({
+    name: 'workflow_reset',
+    description: '重置一个 workflow 实例并可直接重跑：从实例 instance.yaml 重新解析展开 → 引擎全新 PENDING → 覆盖实例 state.json → metadata 记 lastResetAt → 返回新快照与 runnable（等效清空状态重跑；output/logs 产物文件保留，同名输出会被覆盖）。缺省 instanceId 时用当前会话活跃实例。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '实例 id（缺省=当前会话活跃实例）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        if (!fs) throw new Error('fs service unavailable')
+        const cwd = registry.sessionCwdOf(exec)
+        if (!cwd) throw new Error('无会话工作区')
+        const entry = await registry.resolveEntry(exec, args && args.instanceId, { active: true })
+        if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例）'))
+        const parsed = await expandInstanceDefinition(entry)
+        entry.engine.begin(parsed)
+        entry.engine.setError(null)
+        const r = await entry.storage.save()
+        entry.engine.setPersist(r)
+        await registry.patchMeta(cwd, entry.instanceId, { lastResetAt: new Date().toISOString() })
+        const snap = entry.engine.snapshot()
+        snap.instanceId = entry.instanceId
+        snap.resetNote = '状态已重置（output/logs 产物保留，同名文件将被覆盖）'
+        return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
 }
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks }
+  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError }
 }
