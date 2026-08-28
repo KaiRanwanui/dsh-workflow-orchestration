@@ -81,19 +81,28 @@ curl -X POST http://127.0.0.1:3080/wf/reset \
 ### 消息注入功能
 
 **实现**：
-- Host 端 `/wf/start` 路由新增 `sessionId` 参数
-- 启动实例后使用 `sessionPersistence.append` 向目标 session 注入 `user/message` 事件
-- Client 端 Start 按钮传递当前 `sessionId`（从 `props.sessionId` 获取）
+- Host 端 `/wf/start` 路由新增 `sessionId` 和 `parentSessionId` 参数
+- 启动实例后使用 `apiProxy.sessions.prompt` 向目标 session 注入用户消息
+- 支持两种模式：
+  - 普通 session：`apiProxy.sessions.prompt({ rpcId, payload: { sessionId, mode: 'queue', content } })`
+  - subagent session：`apiProxy.subagents.prompt({ rpcId, payload: { parentSessionId, childSessionId, mode: 'continuable', content } })`
+- Client 端 Start 按钮传递当前 `sessionId` 和 `parentSessionId`
 - 注入失败不影响启动结果（仅记录 `messageInjectionError` 字段）
+
+**技术细节**：
+- API 调用格式必须包含 `rpcId` 和 `payload` 字段
+- 缺少 `rpcId` 会导致 "Cannot destructure property 'sessionId' of 'request.payload' as it is undefined" 错误
+- `sessionPersistence.append` 只写日志不触发 agent loop，必须使用 `apiProxy.sessions.prompt`
+- `apiProxy.respond` 是 RPC 响应方法，不是发送消息
 
 **测试**：
 ```bash
 curl -X POST http://127.0.0.1:3080/wf/start \
-  -d '{"workspaceRoot":"...","instanceId":"...","sessionId":"test-session-123"}'
-# → {..., "messageInjectionError": "session \"test-session-123\" not found"}
+  -d '{"workspaceRoot":"...","instanceId":"...","sessionId":"session-xxx"}'
+# → {..., "messageInjected": true, "promptResult": {...}}
 ```
 
-**状态**：✅ API 调用成功，消息注入逻辑执行正常
+**状态**：✅ 消息注入成功，session 执行工作流
 
 ---
 
