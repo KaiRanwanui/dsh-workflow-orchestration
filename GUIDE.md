@@ -84,6 +84,30 @@ workflow-agent/
 
 ---
 
+## 3.5 DSH 源代码位置
+
+**重要**：当遇到 DSH API 调用问题时（如 `apiProxy`、`sessions`、`agents` 等服务），需要查看 DSH 源代码中的测试用例来确定正确的调用方式。
+
+**DSH 源代码目录**：`@deepseek-harness-master`（位于 `/home/zhaokai/Projects/dsh_projects/deepseek-harness-master`）
+
+**查找测试用例**：
+```bash
+# 查找特定 API 的测试用例
+grep -r "apiProxy.sessions.prompt\|sessions.prompt" @deepseek-harness-master --include="*.ts" --include="*.js"
+
+# 查找特定服务的测试
+grep -r "scaffold.ctx.apiProxy" @deepseek-harness-master/apps/web/tests/
+```
+
+**关键发现**（从源码测试用例中学到的）：
+- `apiProxy.sessions.prompt` 调用必须包含 `rpcId` 和 `payload` 字段
+- 格式：`{ rpcId: 'unique-id', payload: { sessionId, mode, content } }`
+- 缺少 `rpcId` 会导致 "Cannot destructure property 'sessionId' of 'request.payload' as it is undefined" 错误
+
+**教训**：DSH 的内部 API 文档不完整，遇到不确定的调用方式时，应该优先查看源码中的测试用例（特别是 `apps/web/tests/` 目录），而不是只看类型定义。
+
+---
+
 ## 4. 关键机制速查（当前方案）
 
 ### 5.1 Client↔Host 通信：HTTP 轮询
