@@ -3,7 +3,7 @@
 **日期**：2026-08-28
 **版本**：@workflow-agent/workflow-host **v0.7.0**、@workflow-agent/client-ui-monitor **v0.4.0**
 **前置**：Iter-14 消息注入技术穿刺（CONDITIONAL GO）
-**状态**：✅ **完成**（Host 路由测试通过，Client 按钮已添加）
+**状态**：✅ **完成**（Host 路由测试通过，Client 按钮已添加，消息注入功能已实现）
 
 ---
 
@@ -75,8 +75,25 @@ curl -X POST http://127.0.0.1:3080/wf/reset \
 
 ### Client 按钮
 
-- 构建成功（lib/client.js 35251 chars）
+- 构建成功（lib/client.js 35443 chars）
 - 需重启 DSH 服务后在浏览器中验证
+
+### 消息注入功能
+
+**实现**：
+- Host 端 `/wf/start` 路由新增 `sessionId` 参数
+- 启动实例后使用 `sessionPersistence.append` 向目标 session 注入 `user/message` 事件
+- Client 端 Start 按钮传递当前 `sessionId`（从 `props.sessionId` 获取）
+- 注入失败不影响启动结果（仅记录 `messageInjectionError` 字段）
+
+**测试**：
+```bash
+curl -X POST http://127.0.0.1:3080/wf/start \
+  -d '{"workspaceRoot":"...","instanceId":"...","sessionId":"test-session-123"}'
+# → {..., "messageInjectionError": "session \"test-session-123\" not found"}
+```
+
+**状态**：✅ API 调用成功，消息注入逻辑执行正常
 
 ---
 
