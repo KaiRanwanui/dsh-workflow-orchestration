@@ -51,6 +51,8 @@
 
 | 今日 | **实例创建语义定稿 v2 + 迭代重排** | ✅ 文档落档（7 步产品流程映射、模板/实例严格区分、面板控制走注入通道；迭代按执行顺序重排：13 创建按钮+模板库v1 → 14 注入穿刺 → 15 面板控制 → 16 编辑器拆分推进；见 plan/design/instance-creation-semantics.md） |
 
+| 今日 | **Iter-14 消息注入技术穿刺** | ✅ 完成（subagents.followup API 验证通过，GO 结论，API 形态定稿；详见 iter14-report.md） |
+
 ---
 
 ## 已完成工作
