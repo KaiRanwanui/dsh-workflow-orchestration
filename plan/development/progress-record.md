@@ -53,11 +53,33 @@
 
 | 今日 | **Iter-14 消息注入技术穿刺** | ✅ 完成（subagents.followup API 验证通过，CONDITIONAL GO；发现权限约束：目标 session 必须是 parent 的子 session） |
 
-| 今日 | **Iter-15 面板控制 start/stop/reset** | ✅ 完成（Host 路由 /wf/start + /wf/stop + /wf/reset；Client 工具条按钮；直接操作实例状态，不依赖 followup 注入；host v0.7.0 / client v0.4.0） |
+| 今日 | **Iter-15 面板控制 start/stop/reset** | ✅ 完成（Host 路由 /wf/start + /wf/stop + /wf/reset；Client 工具条按钮；**消息注入功能实现**：apiProxy.sessions.prompt 调用格式 rpcId+payload；host v0.7.0 / client v0.4.0） |
 
 ---
 
 ## 已完成工作
+
+### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
+
+**迭代报告**：`plan/development/iter15-report.md`
+
+**核心交付**：
+- **Host 端**：POST /wf/start + /wf/stop + /wf/reset 路由（直接操作实例状态）
+- **Client 端**：工具条按钮（Start/Stop/Reset）+ 状态联动显示
+- **消息注入**：Start 按钮触发 session 执行工作流（apiProxy.sessions.prompt）
+
+**关键技术发现**：
+- DSH API 调用格式必须包含 `rpcId` 和 `payload` 字段
+- 普通 session：`apiProxy.sessions.prompt({ rpcId, payload: { sessionId, mode: 'queue', content } })`
+- subagent session：`apiProxy.subagents.prompt({ rpcId, payload: { parentSessionId, childSessionId, mode: 'continuable', content } })`
+- `sessionPersistence.append` 只写日志不触发 agent loop
+- DSH 源代码在 `@deepseek-harness-master`，API 调用方式不确定时优先查源码测试用例
+
+**验证**：消息注入成功，session 执行工作流 ✅
+
+**提交**：`62a463b` + `2b75f4d` + `2a4023a`
+
+---
 
 ### 6. Iter-5: Host/Client 架构调整 — Client RPC 链路修复（✅ 完成）
 
@@ -203,6 +225,16 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
+### Iter-16: 编排编辑器（计划中）
+
+**迭代计划**：`plan/development/development-plan.md`（Iter-16）
+
+**目标**：Web UI 工作流编辑器（YAML 可视化编辑、参数配置、模板管理）
+
+**前置条件**：Iter-15 面板控制完成 ✅
+
+---
+
 ### Iter-11: 实例操控工具（后台）（计划中）
 
 **迭代计划**：`plan/development/development-plan.md`（Iter-11）
@@ -347,6 +379,8 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 | Iter-11 报告 | `plan/development/iter11-report.md` |
 | Iter-12 报告 | `plan/development/iter12-report.md` |
 | Iter-13 报告 | `plan/development/iter13-report.md` |
+| Iter-14 报告 | `plan/development/iter14-report.md` |
+| Iter-15 报告 | `plan/development/iter15-report.md` |
 
 ---
 
