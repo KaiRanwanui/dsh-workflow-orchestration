@@ -47,6 +47,8 @@
 
 | 今日 | **Iter-12 前台实例界面** | ✅ 代码完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；待重启+刷新验证） |
 
+| 今日 | **实例创建语义定稿 + Iter-14 立项** | ✅ 文档落档（目录=定义快照、session 创建不自动建目录的耦合分析、面板按钮只 create 不 start；见 plan/design/instance-creation-semantics.md） |
+
 ---
 
 ## 已完成工作

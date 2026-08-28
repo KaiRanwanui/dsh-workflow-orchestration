@@ -24,24 +24,25 @@
 | 1 | `plan/development/progress-record.md` | **最新进度**：已完成工作、当前待办、最近迭代细节 |
 | 2 | `plan/development/iter12-report.md` | **最近迭代报告**：Iter-12 交付内容（DAG 跟随 session + 实例列表）、验证结果、关键决策 |
 
-### 第 2 层：理解方案与约束（4 篇）
+### 第 2 层：理解方案与约束（5 篇）
 | 顺序 | 文档 | 内容 |
 |------|------|------|
 | 3 | `plan/architecture/architecture-decisions.md` | **架构决策**：插件加载、profile 布局、Client↔Host 通信（§5 当前方案，§6 多实例复用 DSH Session） |
 | 4 | `plan/design/multi-instance-session-design.md` | **多实例技术方案**：复用 DSH Session（实例=session、实例目录、映射、重置） |
-| 5 | `plan/design/client-host-communication.md` | **通信方案对比**：HTTP 轮询 vs Host 推送（当前用轮询） |
-| 6 | `plan/development/team-conventions.md` | **团队约定**：上下文压力处理、差分验证、工作代码保护 |
+| 5 | `plan/design/instance-creation-semantics.md` | **实例创建语义**：目录=定义快照、惰性创建、为何不做 session 创建自动建目录（preset 耦合分析）、创建动作定稿（含面板按钮边界） |
+| 6 | `plan/design/client-host-communication.md` | **通信方案对比**：HTTP 轮询 vs Host 推送（当前用轮询） |
+| 7 | `plan/development/team-conventions.md` | **团队约定**：上下文压力处理、差分验证、工作代码保护 |
 
 ### 第 3 层：理解数据模型与源码（2 篇）
 | 顺序 | 文档 | 内容 |
 |------|------|------|
-| 7 | `plan/design/workflow-schema-v1.md` | **YAML Schema**：工作流定义格式（Task 类型、params、loop、concurrent） |
-| 8 | `plan/development/client-rpc-research.md` | **官方源码研究**：DSH 插件机制、host.call 真相、webServer 验证 |
+| 8 | `plan/design/workflow-schema-v1.md` | **YAML Schema**：工作流定义格式（Task 类型、params、loop、concurrent） |
+| 9 | `plan/development/client-rpc-research.md` | **官方源码研究**：DSH 插件机制、host.call 真相、webServer 验证 |
 
 ### 第 4 层：迭代规划（1 篇）
 | 顺序 | 文档 | 内容 |
 |------|------|------|
-| 9 | `plan/development/development-plan.md` | **迭代计划**：Iter-1~13 全景、各迭代详述、风险表、多实例小步拆分 |
+| 10 | `plan/development/development-plan.md` | **迭代计划**：Iter-1~14 全景、各迭代详述、风险表、多实例小步拆分 |
 
 ---
 

@@ -26,8 +26,8 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面)
-当前:   Iter-13(编排编辑器)   ← 待开发
-后续:   （规划已到 Iter-13）
+当前:   Iter-14(实例创建按钮，小步可先做) → Iter-13(编排编辑器)
+后续:   （规划已到 Iter-13/14）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -45,6 +45,7 @@
 | **11** | 实例操控工具（后台） | workflow_create/start/stop/reset/list | 多实例全流程操作验证 | ✅ **完成** |
 | **12** | 前台实例管理界面 | 实例列表 + 跟随 session 切换 DAG（useSessions+sessionId+cwd） | 切 session → DAG 跟随 | ✅ **完成**（待部署验证） |
 | **13** | 编排编辑器 | DAG 拖拽编辑 + YAML 生成 | 用编辑器创建并运行工作流 | Iter-12 |
+| **14** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单（**只 create 不 start**，语义见 instance-creation-semantics.md） | 面板建实例 → session 启动编排 | Iter-11/12 |
 
 ---
 
@@ -397,6 +398,27 @@ workflow_list → 列出所有实例 + 状态
 打开编辑器 → 拖入 2 个 Task 节 → 配 processor/inputs/outputs
 → 连定义依赖 → 加 Gate → 保存 YAML
 → 切换到监控式 → 启动 → 运行成功
+```
+
+### Iter-14: 面板"新建 workflow 实例"按钮（0.5 人天，可先于 Iter-13 执行）
+
+**输入**：Iter-11 create 工具语义、Iter-12 /wf/list + 切换条
+**语义定稿**：`plan/design/instance-creation-semantics.md` §4.2——**按钮只 create 不 start**（启动的驱动者是 session 内编排 Agent loop，面板 start 会制造无驱动者的僵尸实例）
+
+**产出**：
+
+| 项 | 职能 |
+|------|------|
+| Host `POST /wf/create` | 写操作 HTTP 化：loopback 校验 → parseWorkflow 校验 → `beginInstance`（sessionId=null）→ `{instanceId, dir, phase:"CREATED"}`；现有 /wf/* prefix handler 增加 method 判断 + POST body 收集 |
+| Client "+" 按钮 | 切换条旁入口 → 表单（workflowPath + params JSON）→ 创建后 /wf/list 轮询自动带出 chip |
+| 不做 | 面板 start/stop/reset（驱动者约束，见语义文档 §4.3） |
+
+**验证标准**：
+
+```
+面板点"+" → 填 workflowPath → 创建成功
+→ 切换条出现 CREATED chip（无需 session 调工具）
+→ 在 orchestrator session 里 workflow_start 该实例 → 编排正常驱动
 ```
 
 ---
