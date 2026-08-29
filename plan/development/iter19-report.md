@@ -53,6 +53,15 @@
 
 - `instance-store.js`/`tools-preset.js` → `sync-modules.js` 同步到 mjs → `build.js` 重建 host `lib/index.js`（v0.11.0，inject 含 `sessions`/`agents`）；`client-ui-monitor/build.js` 重建 client bundle（v0.5.0，`/wf/create` 带 sessionId + 按钮 gating）。
 
+### 追加修复（手工验证发现的阻塞，A1/A2，v0.11.1 / v0.5.1）
+
+- **A2 根因**：`/wf/create` 路由、`workflow_create`/`workflow_begin` 之前直接 `beginInstance`，**绕过 createBind 的 1:1 守卫**→同会话可绑多实例→`checkWorkspaceTreeIntegrity` 整工作区 BROKEN（CONFLICT）且无恢复。
+- **修复**：上述创建路径改走 **`createBind`（1:1 守卫）**；新增 **`recoverBindingConflicts`**——按用户策略 CONFLICT 自愈：不保留"最新"，而是把冲突旧实例解绑（`sessionId→null` 回 UNBOUND 池），新建实例绑定当前会话；`recoveredConflict` 返回由 UI 弹窗明确告知。
+- **A1**：Client 创建按钮仅当会话 `UNBOUND` 显示；可选实例池仅列未绑定（`sessionId==null`）实例；创建后若 `recoveredConflict` 非空弹窗提示。
+- 单测：用例 14 新增 5 断言（CONFLICT 前置 BROKEN / 自愈解绑 2 个 / 不再 BROKEN / sess-y BOUND / sess-x UNBOUND），总 **148/148**。
+
+---
+
 ### 部署验证（待执行）
 
 1. `systemctl --user restart dsh.service`（Host 插件 v0.11.0）
