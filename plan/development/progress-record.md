@@ -59,6 +59,8 @@
 
 | 今日 | **Iter-17 绑定模型 + 完整性（Host）** | ✅ 完成（工作区骨架物化 instances/+archive/；create-bind/adopt + 1:1 守卫；派生 UNBOUND/BOUND/DONE/BROKEN；整树完整性判定；125 单测通过；host v0.9.0；已重启部署验证：骨架物化 + sessionId=null + 无回归） |
 
+| 今日 | **Iter-18 流程控制工具 + 路由 + 孤儿回收（Host）** | ✅ 代码完成（workflow_adopt/resume 新增；start/stop/reset 接线 Iter-16 状态机；reset 写 _reset_<state> 归档备份；孤儿惰性扫描识别+回收；BROKEN 拦截；system-prompt adopt→start 同步；137 单测通过；host v0.10.0 待重启部署） |
+
 ---
 
 ## 已完成工作
@@ -115,6 +117,24 @@
 **设计确认（孤儿判定基准，源码佐证）**：归档≠死亡；孤儿=绑定会话离开 live store（`sessions.get(id)===undefined`）；孤儿回收挪 Iter-18（见 lifecycle-design §9.1）
 
 **范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-19）、Client（Iter-20）
+
+---
+
+### 15. Iter-18: 流程控制工具 + 路由 + 孤儿回收（Host）（✅ 完成）
+
+**迭代报告**：`plan/development/iter18-report.md`
+
+**核心交付**：
+- **工具接线到 Iter-16 状态机**：`workflow_adopt`（新）/`workflow_resume`（新）；`workflow_start`（须绑定+adopt 前置+engine.start）/`stop`（engine.stop）/`reset`（_reset_<state> 备份+engine.reset）；`workflow_list` 补派生状态 + orphans
+- **路由**：`POST /wf/start|stop|reset|resume|adopt`；BROKEN 拦截 create/adopt/run；reset 走归档备份
+- **孤儿识别+回收（惰性扫描）**：判定=`sessions.get()===undefined`（归档≠死亡）；回收=RUNNING 先 stop→解绑（sessionId→null）→保留 state.json 回 UNBOUND 池→可被新会话 adopt/resume
+- **system-prompt/agent.cordis.yml**：adopt→start 两步同步
+
+**验证**：单测 137/137（用例 13 新增 11 断言：控制全链路 + reset 备份 + status + 孤儿识别/回收）；lib/index.js 构建通过（v0.10.0）；awaiting 部署验证
+
+**决策（用户拍板）**：孤儿触发=惰性扫描；start 须先 adopt；reset 备份在 Iter-18 写。孤儿判定基准经源码佐证（归档≠死亡，lifecycle-design §9.1）
+
+**范围**：未改归档管理/UI（Iter-19）、Client（Iter-20/21）
 
 ---
 

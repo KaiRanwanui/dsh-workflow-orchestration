@@ -103,7 +103,7 @@ tasks:
   check('list: CREATED 阶段可见', r.instances.length === 1 && r.instances[0].phase === 'CREATED' && r.instances[0].instanceId === iid)
 
   r = await registered.workflow_start.execute({}, exec)
-  check('start: stage PENDING + runnable 2（max-concurrency=2）', r.stage === 'PENDING' && Array.isArray(r.runnable) && r.runnable.length === 2, r.stage + '/' + (r.runnable || []).length)
+  check('start: stage RUNNING（Iter-18 状态机）+ runnable 2（max-concurrency=2）', r.stage === 'RUNNING' && Array.isArray(r.runnable) && r.runnable.length === 2, r.stage + '/' + (r.runnable || []).length)
   check('start: 快照带 instanceId', r.instanceId === iid)
   check('start: state.json 落实例目录', files.has(statePath(iid)))
 
@@ -120,12 +120,13 @@ tasks:
   r = await registered.workflow_list.execute({}, exec)
   check('list: READY 阶段 + 任务计数', r.instances[0].phase === 'READY' && r.instances[0].taskTotal === 3 && r.instances[0].stage === 'PENDING')
 
-  // 模拟 DSH 重启：全新注册表 + 全新工具注册，reset 精确恢复本会话实例
+  // 模拟 DSH 重启：全新注册表 + 全新工具注册，按 sessionId 精确恢复本会话实例
   const reg2 = {}
   const registry2 = createInstanceRegistry(mkCtx(reg2), { createWorkflowEngine, createWorkflowStorage })
   registerWorkflowToolsPreset(mkCtx(reg2), null, null, registry2)
-  r = await reg2.workflow_reset.execute({}, exec)
-  check('重启后: reset 按 sessionId 精确恢复并重置', r.instanceId === iid && r.stage === 'PENDING')
+  r = await reg2.workflow_status.execute({}, exec)
+  check('重启后: 按 sessionId 精确恢复实例', r.instanceId === iid)
+  check('重启后: 恢复的实例阶段为 PENDING', r.stage === 'PENDING')
 }
 
 // ── 用例 10：HTTP 路由（Iter-13：POST /wf/create + GET /wf/templates）────────
@@ -310,6 +311,60 @@ async function runCase12() {
   // 场景 8：未绑定会话 → UNBOUND（骨架在场自洽、无 BOUND/DONE 声明）
   st = await reg.deriveSessionState(cwd, 'sess-zzz')
   check('未绑定会话: derive → UNBOUND', st.state === 'UNBOUND')
+}
+
+// ── 用例 13：流程控制全链路 + 孤儿回收（Iter-18）──────────────────────────
+async function runCase13() {
+  console.log('［用例 13］流程控制全链路 + 孤儿回收 — start/stop/resume/reset/adopt + 孤儿')
+  const { registerWorkflowToolsPreset, stripInstanceHeader } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { files, fs: mockFs } = makeMockFs()
+  const live = new Set(['sess-a']) // 可控会话存活（孤儿识别用）
+  const isSessionLive = (sid) => live.has(sid)
+  const registered = {}
+  const ctx = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) { if (n === 'fs') return mockFs; if (n === 'tools') return { register(t) { bag[t.name] = t } }; return undefined },
+  })
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive }
+  const registry = createInstanceRegistry(ctx(registered), deps)
+  registerWorkflowToolsPreset(ctx(registered), null, null, registry)
+
+  const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c13' } } } }
+  const WF = `name: c13demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c13/output/a.md"]\n    depends-on: []\n`
+  const statePath = (id) => '/ws/c13/.workflow-agent/instances/' + id + '/state.json'
+
+  // Part A：控制全链路（create 绑定 sess-a → start → stop → resume → stop → reset 带备份）
+  let r = await registered.workflow_create.execute({ workflowText: WF }, exec)
+  const iid = r.instanceId
+  check('c13 create: CREATED + 绑定 sess-a', r.phase === 'CREATED' && registry.get(iid).meta.sessionId === 'sess-a')
+
+  r = await registered.workflow_start.execute({}, exec)
+  check('c13 start: RUNNING', r.stage === 'RUNNING', r.stage)
+  r = await registered.workflow_stop.execute({}, exec)
+  check('c13 stop: STOPPED + active=false', r.stage === 'STOPPED' && r.active === false)
+  r = await registered.workflow_resume.execute({}, exec)
+  check('c13 resume: RUNNING + 保 DONE', r.stage === 'RUNNING' && r.active === true)
+  r = await registered.workflow_stop.execute({}, exec)
+  check('c13 stop2: STOPPED', r.stage === 'STOPPED')
+  r = await registered.workflow_reset.execute({}, exec)
+  check('c13 reset: PENDING + runnable 1', r.stage === 'PENDING' && Array.isArray(r.runnable) && r.runnable.length === 1, r.stage)
+  check('c13 reset: 备份目录 _reset_<state> 写入', !!r.resetBackup && /_reset_STOPPED/.test(r.resetBackup), r.resetBackup)
+
+  // 启动后 status 用 RUNNING 任务（验证 start→RUNNING 后仍可更新）
+  r = await registered.workflow_start.execute({}, exec)
+  r = await registered.workflow_status.execute({ task: 'a', taskStatus: 'RUNNING' }, exec)
+  check('c13 status: a RUNNING', r.tasks.some(t => t.id === 'a' && t.status === 'RUNNING'))
+
+  // Part B：孤儿识别 + 回收（绑定会话死亡 → unlock → adopt）
+  const orph = await registry.createBind('/ws/c13', 'sess-dead', { workflowName: 'orphan', sourceText: 'name: orphan\n', sourcePath: null, params: {} })
+  let orphans = await registry.scanOrphans('/ws/c13')
+  check('孤儿识别: 死会话实例进 scanOrphans', orphans.some(o => o.id === orph.instanceId && o.sessionId === 'sess-dead'))
+  // 让另一会话存活后 adopt 恢复的实例
+  live.add('sess-b')
+  const rec = await registry.recoverOrphan('/ws/c13', orph.instanceId)
+  check('孤儿回收: 解绑 sessionId=null', rec.meta.sessionId === null)
+  orphans = await registry.scanOrphans('/ws/c13')
+  check('孤儿回收后: 不再被识别为孤儿', !orphans.some(o => o.id === orph.instanceId))
 }
 
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
@@ -693,6 +748,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase11()
     // ── 用例 12：绑定模型 + 完整性（Iter-17）──
     await runCase12()
+    // ── 用例 13：流程控制全链路 + 孤儿回收（Iter-18）──
+    await runCase13()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

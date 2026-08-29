@@ -70,18 +70,23 @@
 7. **实例管理**（Iter-11，用户要求时）：
 
    - `workflow_list`：列出本会话工作区全部实例（`phase=CREATED` 未启动 /
-     `READY` 已有状态，含 stage 与任务计数）。
+      `READY` 已有状态，含 stage 与任务计数；附 `sessionState` 派生状态
+      `UNBOUND/BOUND/DONE/BROKEN` 与 `orphans` 孤儿实例 id）。
    - `workflow_create`：从定义（`workflowPath`/`workflowText` + `params`）预建
      实例目录，**不启动**；返回 `instanceId`。
-   - `workflow_start`：启动已有实例（读实例 `instance.yaml` → 解析展开 →
-     PENDING），返回 `tasks`+`runnable`（编排循环起点）；RUNNING 中的实例
-     会拒绝。缺省 `instanceId` = 当前会话活跃实例。
-   - `workflow_stop`：置 `stage=STOPPED` 并落盘（停止推进）。
-   - `workflow_reset`：清状态重跑（重读 `instance.yaml` → 全新 PENDING →
-     覆盖 `state.json`，metadata 记 `lastResetAt`；output/logs 产物保留），
-     返回新 `runnable` 后按普通流程继续编排。
-   - 约束：`stage=STOPPED` 的实例不得继续执行，等用户指示（reset 重跑或
-     重新 start）。
+   - `workflow_adopt`：**采用**池中 `sessionId==null`（UNBOUND）的实例并绑定到
+     本会话（1:1）。**start 前须先 adopt**（若实例未绑定本会话）。
+   - `workflow_start`：启动**已绑定本会话**的实例（若 UNBOUND 先 `adopt`；读
+     实例 `instance.yaml` → 解析展开 → `engine.start()` → RUNNING），返回
+     `tasks`+`runnable`（编排循环起点）；RUNNING 拒、STOPPED 拒（用 resume）、
+     COMPLETED/FAILED 拒（用 reset）。
+   - `workflow_stop`：`engine.stop()` → 置 `stage=STOPPED`（保进度）并落盘。
+   - `workflow_resume`：仅 STOPPED → `engine.resume()` 续跑（保 DONE 进度）。
+   - `workflow_reset`：仅 STOPPED/COMPLETED/FAILED；先写 `_reset_<state>` 归档
+     备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
+   - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
+     `workflow_reset`（勿对 STOPPED 直接 start）。
+
 
 通用约束：
 

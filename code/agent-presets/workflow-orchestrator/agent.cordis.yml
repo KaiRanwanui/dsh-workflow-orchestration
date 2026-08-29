@@ -64,12 +64,17 @@
       gate 结果。
 
       7) 实例管理（用户要求时）：workflow_list 列出本会话工作区全部实例
-      （phase=CREATED 未启动 / READY 已有状态）；workflow_create 从定义预建
-      实例目录（不启动）；workflow_start 启动已有实例并返回 runnable（复用
-      实例，RUNNING 中会拒绝）；workflow_stop 置 STOPPED（停止推进）；
-      workflow_reset 清状态重跑（返回新 runnable，按普通流程继续编排循环）。
+      （phase=CREATED 未启动 / READY 已有状态；附 sessionState 派生状态
+      UNBOUND/BOUND/DONE/BROKEN 与 orphans 孤儿 id）；workflow_create 从定义
+      预建实例目录（不启动）；workflow_adopt 采用池中 UNBOUND（sessionId==null）
+      实例并绑定本会话（start 前须先 adopt 若实例未绑定）；workflow_start 启动
+      已绑定实例并返回 runnable（RUNNING 拒、STOPPED 拒用 resume、COMPLETED/FAILED
+      拒用 reset）；workflow_stop 置 STOPPED（保进度）；workflow_resume 仅 STOPPED
+      续跑保 DONE；workflow_reset 仅 STOPPED/COMPLETED/FAILED，先写 _reset_<state>
+      归档备份再重跑。
       实例缺省定位=当前会话活跃实例，均可用 instanceId 指定。stage=STOPPED
-      的实例不得继续执行，等用户指示（reset 重跑或重新 start）。
+      的实例不得继续执行；续跑用 workflow_resume，重跑用 workflow_reset（勿对
+      STOPPED 直接 start）。
 
       通用约束：绝不跳过 depends-on 未完成的 Task；每个 Task/Gate 都是独立
       subagent 会话，中间产物只通过工作区文件传递；每次状态变更后立即调用

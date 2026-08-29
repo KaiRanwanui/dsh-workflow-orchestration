@@ -25,8 +25,8 @@
 ## 2. 迭代全景
 
 ```
-已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性)
-当前:   Iter-18~21(流程控制完整化/生命周期，4 个 ~1 人天迭代)   ← 待开发   （Iter-18 控制工具+路由+孤儿回收；编排编辑器顺延为 Iter-22）
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收)
+当前:   Iter-19~21(流程控制完整化/生命周期，3 个 ~1 人天迭代)   ← 待开发   （Iter-19 归档存储+管理；编排编辑器顺延为 Iter-22）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -48,7 +48,7 @@
 | **15** | 面板控制（start/stop/继续） | 走 Iter-14 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | ✅ **完成**（直接操作实例状态，不依赖 followup） |
 | **16** | 运行状态机（Host） | STAGE 补 STOPPED；engine 补 stop(保进度)/begin/resume(续跑)/active | 单测：PENDING→RUNNING→STOPPED→resume→RUNNING(保DONE)；RUNNING 先 stop 再 reset | ✅ **完成** |
 | **17** | 绑定模型 + 完整性（Host） | 工作区骨架物化；create/adopt-bind；1:1 守卫；派生状态 UNBOUND/BOUND/DONE/BROKEN；整树完整性校验 | 单测：绑定/占用/1:1；骨架缺场/目录损坏/冲突→BROKEN | ✅ **完成** |
-| **18** | 流程控制工具 + 路由 + 孤儿回收（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截；**孤儿识别+回收**（绑定会话离开 live store → stop+解绑+保留进度回池 → 可被新会话 adopt/resume） | 单测+路由：控制全链路 + BROKEN 拦截 + 孤儿闭环 | Iter-17 |
+| **18** | 流程控制工具 + 路由 + 孤儿回收（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截；**孤儿识别+回收**（绑定会话离开 live store → stop+解绑+保留进度回池 → 可被新会话 adopt/resume） | 单测+路由：控制全链路 + BROKEN 拦截 + 孤儿闭环 | ✅ **完成** |
 | **19** | 归档存储 + 管理（Host） | archive 移出池；命名 `<ts>_<kind>_<state>`；manifest；list/download/delete + 路由；归档→会话 DONE | 单测：归档闭环 | Iter-18 |
 | **20** | Client 预设门控 + 绑定 UI | 仅 workflow-orchestrator 页签；绑定（新建/采用/锁定）；BROKEN 提示 | 浏览器：新建会话→绑定→BROKEN 展示 | Iter-17 |
 | **21** | Client 控制 + 归档 UI + 联调 | 状态机按钮（start/stop/resume/reset/archive + 确认）；归档 UI（list/download/delete）；与 Host Iter-18/19 联调 | 浏览器：绑定→驱动→停止→续跑→重置→归档 闭环 | Iter-18,19,20 |
@@ -451,22 +451,21 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-18: 流程控制工具 + 路由 + 孤儿回收（Host）
+### Iter-18: 流程控制工具 + 路由 + 孤儿回收（Host）（✅ 完成，报告 `plan/development/iter18-report.md`）
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §3/§5/§6
 
 **交付**：
-- 工具：`workflow_create`（carrier 为 create-bind）/ `workflow_start` / `workflow_stop` / `workflow_resume` / `workflow_reset`（含 reset 归档备份）/ `workflow_adopt`；`workflow_list` 补派生状态；
+- 工具：`workflow_create` / `workflow_adopt`（新）/ `workflow_start` / `workflow_stop` / `workflow_resume`（新）/ `workflow_reset`（含 `_reset_<state>` 归档备份）；`workflow_list` 补派生状态 + orphans；
 - 路由：`POST /wf/start|stop|resume|reset|adopt` + `/wf/list`；BROKEN 时拒绝 create/adopt/run 并返回状态；
-- 结构化驱动指令：`{action, instanceId, workspaceRoot}` 替代自由文本（供编排 Agent 对指定 instanceId 跑，而非 workflow_begin 新建实例）；
-- **孤儿识别 + 回收**（从 Iter-17 移入，用户拍板）：
-  - 判定基准：**仅当绑定会话离开 live store**（`sessions.get(boundSessionId) === undefined` / 触发 `session/disposed`）才算孤儿；**归档（`archivedSessionIds.includes`）≠ 死亡，不判孤儿**；
-  - 触发点：`session/created`(新会话) / `session/disposed`(绑定会话死亡) / 惰性查询(`workflow_list`/`status`/`adopt`)；
-  - 回收：识别孤儿 → 若 RUNNING 先 stop → 解绑(`sessionId→null`) → 保留 `state.json` 进度回 UNBOUND 池 → 可被新会话 `adopt` → `resume` 续跑。
+- 孤儿识别 + 回收：判定 = 绑定会话离开 live store（`sessions.get()===undefined` / `session/disposed`）；**归档≠死亡**；惰性扫描触发；回收 = RUNNING 先 stop → 解绑(`sessionId→null`) → 保留 `state.json` 回 UNBOUND 池 → 可被新会话 adopt/resume；
+- system-prompt/agent.cordis.yml：adopt→start 两步同步（start 前须先 adopt；STOPPED 用 resume、COMPLETED/FAILED 用 reset）。
 
-**验证（可验证）**：单测 + 路由测试——create/adopt/start/stop/resume/reset 全链路；BROKEN 拦截；孤儿闭环（绑定会话死亡→stop+解绑→保留进度→新会话 adopt→resume）。**预留联调缓冲**（Host 自测残留修复）。
+**验证（可验证）**：单测 137/137（用例 13 新增 11 断言：控制全链路 + reset 备份 + status + 孤儿识别/回收）；lib/index.js 构建通过（v0.10.0）。
 
-**前置（go/no-go 探针，仿 Iter-9）**：验证 `sessions.get(id)===undefined` 判定 + `session/disposed` 触发 + **归档不判死**（`archivedSessionIds` 仅归档时仍 `get()!=undefined`）。探针结果回注本迭代范围。
+**决策（用户拍板）**：孤儿触发=惰性扫描；start 须先 adopt（非自动认领）；reset 备份在 Iter-18 写。
+
+**注意**：`sessions.get()===undefined` 与 `session/disposed`、归档不判死 由源码佐证（`packages/host/apiproxy/src/api/workspace.ts`），未单独做动态插件探针（go/no-go 以源码为据）；若需可后续补。
 
 ---
 

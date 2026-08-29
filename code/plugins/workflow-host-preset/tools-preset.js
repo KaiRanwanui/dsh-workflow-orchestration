@@ -473,7 +473,14 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!cwd) throw new Error('无会话工作区（实例按 session cwd 隔离）')
         const instances = await registry.listInstances(cwd)
         const sid = registry.sessionIdOf(exec)
-        return { cwd, instances, activeInstanceId: (sid && registry.activeIdFor(sid)) || null }
+        // Iter-18：派生当前会话状态 UNBOUND/BOUND/DONE/BROKEN + 孤儿扫描提示
+        let sessionState = null
+        if (sid) sessionState = await registry.deriveSessionState(cwd, sid)
+        const orphans = await registry.scanOrphans(cwd)
+        const out = { cwd, instances, activeInstanceId: (sid && registry.activeIdFor(sid)) || null }
+        if (sid) out.sessionState = sessionState
+        if (orphans.length > 0) out.orphans = orphans.map(o => o.id)
+        return out
       } catch (e) {
         return errPayload(e)
       }
@@ -543,15 +550,26 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!fs) throw new Error('fs service unavailable')
         const entry = await registry.resolveEntry(exec, args && args.instanceId, { active: true })
         if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例，可先 workflow_create 或传 instanceId）'))
-        if (await entryStateOnDisk(entry)) {
-          const st = entry.engine.snapshot()
-          if (st.stage === 'RUNNING') throw new Error('实例 ' + entry.instanceId + ' 正在运行中（stage=RUNNING）；要重跑请先 workflow_stop 或 workflow_reset')
+        // Iter-18：start 须会话已认领实例（UNBOUND→先 adopt；异会话→1:1 拒）
+        const sessId = registry.sessionIdOf(exec)
+        if (sessId && entry.meta.sessionId !== sessId) {
+          if (!entry.meta.sessionId) throw new Error('实例 ' + entry.instanceId + ' 未绑定本会话；先用 workflow_adopt 采用')
+          throw new Error('实例 ' + entry.instanceId + ' 已被会话 ' + entry.meta.sessionId + ' 占用（1:1），本会话不可启动')
         }
-        const parsed = await expandInstanceDefinition(entry)
-        entry.engine.begin(parsed)
+        // 状态机守卫
+        const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
+        if (stage === 'RUNNING') throw new Error('实例 ' + entry.instanceId + ' 正在运行中（stage=RUNNING）')
+        if (stage === 'STOPPED') throw new Error('实例 ' + entry.instanceId + ' 已停止；用 workflow_resume 续跑')
+        if (stage === 'COMPLETED' || stage === 'FAILED') throw new Error('实例 ' + entry.instanceId + ' 已完成/失败（stage=' + stage + '）；用 workflow_reset 重跑')
+        if (!entry.hasState) {
+          const parsed = await expandInstanceDefinition(entry)
+          entry.engine.begin(parsed)
+        }
         entry.engine.setError(null)
+        entry.engine.start() // Iter-18：PENDING→RUNNING（引擎守卫仅 PENDING）
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
+        entry.hasState = true
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
         return snap
@@ -582,7 +600,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const entry = await registry.resolveEntry(exec, args && args.instanceId)
         if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例）'))
         if (!(await entryStateOnDisk(entry))) throw new Error('实例 ' + entry.instanceId + ' 尚未启动（CREATED），无需停止')
-        entry.engine.setStage('STOPPED')
+        entry.engine.stop() // Iter-18：仅 RUNNING→STOPPED（保进度，active=false）
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
         const snap = entry.engine.snapshot()
@@ -617,8 +635,13 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!cwd) throw new Error('无会话工作区')
         const entry = await registry.resolveEntry(exec, args && args.instanceId, { active: true })
         if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例）'))
-        const parsed = await expandInstanceDefinition(entry)
-        entry.engine.begin(parsed)
+        // Iter-18：reset 仅 STOPPED/COMPLETED/FAILED（PENDING/CREATED/RUNNING 拒）
+        const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
+        if (stage === 'RUNNING') throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED；RUNNING 先 workflow_stop')
+        if (stage === 'CREATED' || stage === 'PENDING') throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED（当前 ' + stage + '）')
+        // Iter-18：先写 reset 归档备份（<ts>_reset_<state>/），再 engine.reset()
+        const backupDir = await registry.writeArchiveBackup(cwd, entry.instanceId, 'reset', (stage || 'UNKNOWN'))
+        entry.engine.reset() // → 全新 PENDING
         entry.engine.setError(null)
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
@@ -626,6 +649,78 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
         snap.resetNote = '状态已重置（output/logs 产物保留，同名文件将被覆盖）'
+        snap.resetBackup = backupDir
+        return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_resume（Iter-18 新增：仅 STOPPED 续跑）────────────────────────
+  ctx.tools.register({
+    name: 'workflow_resume',
+    description: '续跑一个已停止（STOPPED）的 workflow 实例：engine.resume() 从已存 state.json hydrate 续跑保进度（保 DONE）→ RUNNING。缺省 instanceId 用当前会话活跃实例。仅 STOPPED 可 resume；PENDING/RUNNING/COMPLETED/FAILED 拒绝。返回快照含 instanceId。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '实例 id（缺省=当前会话活跃实例）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        const entry = await registry.resolveEntry(exec, args && args.instanceId)
+        if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例）'))
+        if (!(await entryStateOnDisk(entry))) throw new Error('实例 ' + entry.instanceId + ' 尚未启动（CREATED），无进度可续跑')
+        const stage = entry.engine.snapshot().stage
+        if (stage !== 'STOPPED') throw new Error('resume 仅允许 STOPPED（当前 ' + stage + '）')
+        entry.engine.resume() // STOPPED→RUNNING，保 DONE
+        const r = await entry.storage.save()
+        entry.engine.setPersist(r)
+        const snap = entry.engine.snapshot()
+        snap.instanceId = entry.instanceId
+        return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_adopt（Iter-18 新增：采用池中 UNBOUND 实例并绑定本会话）────────
+  ctx.tools.register({
+    name: 'workflow_adopt',
+    description: '采用一个池中 UNBOUND（sessionId==null）的 workflow 实例并绑定到当前会话（1:1 守卫；RUNNING 实例先 stop 再采用）。须传 instanceId。返回实例快照含 instanceId 与 adopted=true。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '要采用的实例 id（必填）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!registry) throw new Error('registry unavailable')
+        if (!fs) throw new Error('fs service unavailable')
+        const cwd = registry.sessionCwdOf(exec)
+        if (!cwd) throw new Error('无会话工作区（实例必须在会话工作区内采用）')
+        if (!(args && args.instanceId)) throw new Error('workflow_adopt 须传 instanceId')
+        const sessId = registry.sessionIdOf(exec)
+        if (!sessId) throw new Error('无会话 id，无法绑定实例')
+        const entry = await registry.adoptInstance(cwd, sessId, args.instanceId)
+        const snap = entry.engine.snapshot()
+        snap.instanceId = entry.instanceId
+        snap.adopted = true
+        snap.meta = entry.meta
         return snap
       } catch (e) {
         return errPayload(e)

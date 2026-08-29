@@ -47,6 +47,11 @@ function archiveRootPath(cwd) {
   return (normalizeDir(cwd) + '/.workflow-agent/archive').replace(/\/+/g, '/')
 }
 
+// Iter-18：归档目录时间戳（YYYYMMDDTHHMMSSZ，与 lifecycle-design §7 一致）
+function archiveTimestamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')
+}
+
 // ── metadata.json 组装（lossless JSON；sessionId 缺省 null 而非 undefined）──
 function composeMetadata(m) {
   return {
@@ -64,6 +69,9 @@ function composeMetadata(m) {
 function createInstanceRegistry(ctx, deps) {
   const engines = new Map()        // instanceId -> entry
   const activeBySession = new Map() // sessionId -> instanceId
+  // Iter-18：会话存活判定（孤儿识别依赖）。生产由 apply 注入 sessions 服务包装，
+  // 测试注入可控 stub；缺省恒 true（不误判孤儿，保持既有行为）。
+  const isSessionLive = typeof deps.isSessionLive === 'function' ? deps.isSessionLive : (() => true)
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -454,6 +462,74 @@ function createInstanceRegistry(ctx, deps) {
     return loadEntry(cwd, instanceId, { active: true })
   }
 
+  // ── Iter-18：孤儿识别（绑定会话离开 live store 的实例）────────────────────
+  // 判定 = !isSessionLive(boundSessionId)；归档≠死亡（归档仅改 UI，会话仍 live）。
+  async function scanOrphans(cwd) {
+    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    if (!integ.ok) return []
+    const orphans = []
+    for (const inst of integ.instances) {
+      const sid = inst.meta.sessionId
+      if (sid && !isSessionLive(sid)) orphans.push({ id: inst.id, sessionId: sid })
+    }
+    return orphans
+  }
+
+  // ── Iter-18：孤儿回收（RUNNING 先 stop → 解绑→保留 state.json 回 UNBOUND 池）──
+  async function recoverOrphan(cwd, instanceId) {
+    const entry = await loadEntry(cwd, instanceId)
+    if (!entry) throw new Error('实例不存在: ' + instanceId)
+    const sid = entry.meta.sessionId
+    if (!sid) throw new Error('实例 ' + instanceId + ' 无绑定，非孤儿')
+    if (isSessionLive(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
+    // RUNNING 先 stop（保留 DONE 进度）
+    if (entry.hasState) {
+      const st = entry.engine.snapshot()
+      if (st.stage === 'RUNNING') entry.engine.stop()
+    }
+    await patchMeta(cwd, instanceId, { sessionId: null })
+    activeBySession.delete(sid)
+    return loadEntry(cwd, instanceId)
+  }
+
+  // ── Iter-18：写归档备份（reset 用 kind=reset；显式归档用 kind=archive，Iter-19）──
+  // 复制实例内容到 archive/<instanceId>/<ts>_<kind>_<state>/ + manifest.json。
+  async function writeArchiveBackup(cwd, instanceId, kind, state) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    const ts = archiveTimestamp()
+    const dest = archiveRootPath(cwd) + '/' + instanceId + '/' + ts + '_' + kind + '_' + state
+    const src = instanceDirPath(cwd, instanceId)
+    for (const f of ['metadata.json', 'instance.yaml', 'state.json']) {
+      try {
+        const text = await fs.readText(await fs.resolve(src + '/' + f))
+        await fs.writeText(await fs.resolve(dest + '/' + f), text)
+      } catch (e) { /* 实例可能无该文件（如 CREATED 无 state.json） */ }
+    }
+    for (const sub of ['output', 'logs']) {
+      try {
+        const entries = await fs.listDir(await fs.resolve(src + '/' + sub))
+        for (const en of entries) {
+          if (en.type !== 'file') continue
+          try {
+            const text = await fs.readText(await fs.resolve(src + '/' + sub + '/' + en.name))
+            await fs.writeText(await fs.resolve(dest + '/' + sub + '/' + en.name), text)
+          } catch (e) { /* skip */ }
+        }
+      } catch (e) { /* skip */ }
+    }
+    const meta = await tryReadMeta(cwd, instanceId)
+    const manifest = {
+      kind,
+      state,
+      reason: kind === 'reset' ? 'reset_backup' : 'archive',
+      archivedAt: new Date().toISOString(),
+      workflowName: meta ? meta.workflowName : null,
+    }
+    await fs.writeText(await fs.resolve(dest + '/manifest.json'), JSON.stringify(manifest, null, 2))
+    return dest
+  }
+
   return {
     beginInstance,
     forSession,
@@ -467,6 +543,9 @@ function createInstanceRegistry(ctx, deps) {
     deriveSessionState,
     createBind,
     adoptInstance,
+    scanOrphans,
+    recoverOrphan,
+    writeArchiveBackup,
     get,
     activeIdFor,
     sessionIdOf,
@@ -477,5 +556,5 @@ function createInstanceRegistry(ctx, deps) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, composeMetadata, createInstanceRegistry }
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry }
 }
