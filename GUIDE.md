@@ -43,7 +43,7 @@
 ### 第 4 层：迭代规划（1 篇）
 | 顺序 | 文档 | 内容 |
 |------|------|------|
-| 11 | `plan/development/development-plan.md` | **迭代计划**：Iter-1~23 全景、各迭代详述、风险表、多实例小步拆分 |
+| 11 | `plan/development/development-plan.md` | **迭代计划**：Iter-1~22 全景、各迭代详述、风险表、多实例小步拆分 |
 
 ---
 

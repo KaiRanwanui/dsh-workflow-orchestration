@@ -284,13 +284,16 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-19~23: 流程控制完整化（生命周期/绑定/状态机/归档/前后台联动）（计划中）
+### Iter-20~22: 流程控制剩余功能（按功能闭环组织）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-19~23）；技术方案 `plan/design/workflow-lifecycle-design.md`
+**迭代计划**：`plan/development/development-plan.md`（Iter-20~22）；技术方案 `plan/design/workflow-lifecycle-design.md`
 
-**目标**：实例-会话 1:1 永久绑定 + 纯完整性判定（BROKEN）；运行状态机（STOP/RESUME）闭环；完整控制工具/路由；重置自动备份 + 归档管理；WebUI↔workflow 配合调优。拆分（19 WebUI↔workflow 配合调优 / 20 Host 归档 / 21 Client 门控+绑定 / 22 Client 控制+归档+联调 / 23 编排编辑器）。编排编辑器顺延为 Iter-23。
+**目标**：按"一个迭代 = 一个可端到端验证的功能"重组剩余工作——
+- **20 前后台状态一致**（Iter-19 收尾）：R1(/wf/list 补 sessionState+Client gating)、R2(面板 Start 不置 RUNNING、状态归 workflow_start)、R4(Session 启停同步覆盖列表路径)、R3(实例列表并入创建界面)、绑定/采用/锁定、预设门控、BROKEN 展示；
+- **21 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
+- **22 编排可视化编辑**（22.1~22.4）。
 
-**前置条件**：Iter-18 完成 ✅（计划新增 Iter-19 前后台联动迭代，用户确认）
+**前置条件**：Iter-19 完成 ✅（重组按功能闭环，用户确认）
 
 ---
 

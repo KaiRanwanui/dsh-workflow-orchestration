@@ -75,4 +75,4 @@
 
 ## 下一步
 
-**Iter-20 归档存储 + 管理（Host）**：显式归档（`archive_<state>` 移出池）+ `listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具与路由；归档后会话 BOUND→DONE（技术方案 `workflow-lifecycle-design.md` §7）。
+**Iter-20 前后台状态一致（Iter-19 收尾）**：R1(/wf/list 补 sessionState + Client create/start gating)、R2(面板 Start 不置 RUNNING、状态归 workflow_start)、R4(Session 启停同步覆盖列表路径)、R3(实例列表并入创建界面)、绑定/采用/锁定、预设门控、BROKEN 展示。端到端验证：面板建实例→仅本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态。其后 Iter-21 生命周期闭环+归档、Iter-22 编排编辑器（迭代计划已按功能闭环重组）。

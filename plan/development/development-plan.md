@@ -26,7 +26,7 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优)
-当前:   Iter-20(归档存储 + 管理，Host)   ← 待开发   （其后 Iter-21 Client 门控 / 22 Client 控制+归档 / 23 编辑器；编排编辑器顺延为 Iter-23）
+当前:   Iter-20(前后台状态一致，Iter-19 收尾)   ← 待开发   （其后 Iter-21 生命周期闭环+归档 / 22 编排编辑器）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -50,10 +50,9 @@
 | **17** | 绑定模型 + 完整性（Host） | 工作区骨架物化；create/adopt-bind；1:1 守卫；派生状态 UNBOUND/BOUND/DONE/BROKEN；整树完整性校验 | 单测：绑定/占用/1:1；骨架缺场/目录损坏/冲突→BROKEN | ✅ **完成** |
 | **18** | 流程控制工具 + 路由 + 孤儿回收（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截；**孤儿识别+回收**（绑定会话离开 live store → stop+解绑+保留进度回池 → 可被新会话 adopt/resume） | 单测+路由：控制全链路 + BROKEN 拦截 + 孤儿闭环 | ✅ **完成** |
 | **19** | WebUI↔workflow 配合调优（前后台联动） | create 即绑定（/wf/create 绑 sessionId + Client 传 sessionId）；执行期=RUNNING（workflow_begin 补 start；编排用 workflow_start 驱动已绑定/面板实例）；Client Start/Stop gating（Start 仅 CREATED/PENDING、Stop 仅 RUNNING）；**Session 启停同步**（agent idle→stop、running→resume）；system-prompt 同步 | 单测+端到端：create 即绑定/执行期 RUNNING/Session idle→stop→running→resume | ✅ **完成** |
-| **20** | 归档存储 + 管理（Host） | archive 移出池；命名 `<ts>_<kind>_<state>`；manifest；list/download/delete + 路由；归档→会话 DONE | 单测：归档闭环 | Iter-19 |
-| **21** | Client 预设门控 + 绑定 UI | 仅 workflow-orchestrator 页签；绑定（新建/采用/锁定）；BROKEN 提示 | 浏览器：新建会话→绑定→BROKEN 展示 | Iter-17 |
-| **22** | Client 控制 + 归档 UI + 联调 | 状态机按钮（start/stop/resume/reset/archive + 确认）；归档 UI（list/download/delete）；与 Host Iter-20/21 联调 | 浏览器：绑定→驱动→停止→续跑→重置→归档 闭环 | Iter-19,20,21 |
-| **23** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-22 |
+| **20** | 前后台状态一致（Iter-19 收尾 + 绑定体验） | R1(/wf/list 路由补 sessionState + Client create/start gating)、R2(面板 Start 不置 RUNNING，状态归 workflow_start)、R4(Session 启停同步覆盖列表路径)；实例列表并入创建界面（R3）；绑定/采用/锁定；预设门控；BROKEN 展示 | 端到端：面板建实例(绑定)→仅显示本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态；前后台状态一致 | Iter-19 |
+| **21** | 实例生命周期闭环 + 归档（Host+Client） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-20 |
+| **22** | 编排可视化编辑（体量最大，拆子迭代） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-21 |
 
 ---
 
@@ -486,59 +485,48 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-20: 归档存储 + 管理（Host）
+### Iter-20: 前后台状态一致（Iter-19 收尾 + 绑定体验）
 
-**技术方案**：`plan/design/workflow-lifecycle-design.md` §7
+**背景**：Iter-19 打通了 create 即绑定/执行期=RUNNING/Session 启停同步，但手工验证暴露 R1~R4 阻塞（前后台状态不一致）。本迭代把"前后台状态一致"作为一整个可端到端验证的功能闭环收尾。
 
 **交付**：
-- 归档：实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态），写 `manifest.json`；
-- `listArchive` / `downloadArchive`(zip) / `deleteArchive` 工具 + 路由；归档后会话 BOUND→DONE；
-- 重置用 `reset_<state>`、显式归档用 `archive_<state>` 区分。
+- **R2（状态权威）**：`/wf/start` 路由**不置 RUNNING**，只校验+注入消息；状态由编排侧 `workflow_start` 统一维护（消除双写冲突，B4）。
+- **R1（gating 数据源）**：`/wf/list` 路由补 `sessionState`；Client create/start gating：会话 UNBOUND 才显示"+"，仅显示本会话绑定实例为当前项。
+- **R4（同步覆盖列表路径）**：Session 启停同步从 `forSession` 扩展到 `/wf/list`（按派生状态对绑定实例 idle→stop、running→resume），避免列表过期 RUNNING。
+- **R3（实例列表并入创建界面）**：实例选择从常驻切换条移入创建界面（可从模板创建或选一个未绑定实例）；面板只显示当前会话绑定实例。
+- **绑定体验（Client）**：预设门控（仅 workflow-orchestrator 显示页签/DAG/控件）；绑定（新建/采用/锁定）；BROKEN 展示"环境异常，需新建 workflow 会话"。
 
-**验证（可验证）**：单测通过——归档移出池；命名含 kind/state；list/download/delete 全链路；归档后会话→DONE。
+**验证（端到端）**：面板建实例(绑定)→仅显示本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态；前后台状态一致（A/B/C/E 场景全 PASS）。含绑定/门控/BROKEN 展示。
 
 ---
 
-### Iter-21: Client 预设门控 + 绑定 UI
-
-**技术方案**：`plan/design/workflow-lifecycle-design.md` §8/§3
-
-**交付**：
-- 预设门控：仅 `workflow-orchestration` preset 会话显示 workflow 页签 / DAG / 控件；
-- 绑定 UI：未绑定时"新建实例 / 采用已有 UNBOUND 实例"，绑定后锁定（禁再绑/切换）；
-- BROKEN 展示：实例目录缺失/损坏时提示"环境异常，需新建 workflow 会话"。
-
-**验证（可验证）**：浏览器——非编排会话无 workflow 页签；编排会话未绑定→绑定（新建/采用）；绑定后锁定；手动删实例目录→显 BROKEN。
-
----
-
-### Iter-22: Client 控制 + 归档 UI + 联调
+### Iter-21: 实例生命周期闭环 + 归档（Host+Client）
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
 
 **交付**：
-- 状态机按钮：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset 确认、归档确认）；
-- 归档管理 UI：list / download / delete；
-- 与 Host Iter-18/20 联调（驱动/停止/续跑/重置/归档闭环）。
+- **Host 归档**：归档实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态）+ `manifest.json`；`listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具+路由；归档后会话 BOUND→DONE；重置写 `reset_<state>`、显式归档用 `archive_<state>` 区分；
+- **Client 状态机按钮**：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset/归档确认）；
+- **归档管理 UI**：list / download / delete。
 
-**验证（可验证）**：浏览器闭环——绑定→start 执行 DAG→stop→resume→reset→archive；归档 list/download/delete。**预留联调缓冲**。
+**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete。
 
 ---
 
-### Iter-23: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
+### Iter-22: 编排可视化编辑（体量最大，拆子迭代顺序推进）
 
 **范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
 
-**输入**：Iter-22 流程控制闭环（编辑器"保存并启动"依赖控制通道）。
+**输入**：Iter-21 生命周期闭环（编辑器"保存并启动"依赖控制通道）。
 
 **拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
 
 | 子迭代 | 交付 | 验证 |
 |--------|------|------|
-| 23.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 23.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 23.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 23.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+| 22.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 22.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 22.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 22.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
 
 **验证标准**：
 
