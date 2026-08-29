@@ -207,7 +207,7 @@ STOPPED/COMPLETED/FAILED（PENDING 全不支持，RUNNING 须先 stop）。`setS
 
 ---
 
-## 10. 迭代落地映射（development-plan.md Iter-16~22，按功能闭环组织）
+## 10. 迭代落地映射（development-plan.md Iter-16~23，按功能闭环组织）
 
 | 迭代 | 层 | 交付 |
 |------|----|------|
@@ -216,8 +216,9 @@ STOPPED/COMPLETED/FAILED（PENDING 全不支持，RUNNING 须先 stop）。`setS
 | 18 | Host | 流程控制工具 + 路由：create/adopt/start/stop/resume/reset + `/wf/*`；结构化驱动；BROKEN 拦截；孤儿识别+回收 |
 | 19 | 前后台 | WebUI↔workflow 配合调优：create 即绑定、执行期=RUNNING、编排 workflow_start 驱动已绑定实例、Client 按钮 gating、system-prompt 同步 |
 | 20 | 前后台 | 前后台状态一致（Iter-19 收尾）：R1 `/wf/list` 补 sessionState+Client gating；R2 面板 Start 不置 RUNNING、状态归 workflow_start；R4 Session 启停同步覆盖列表路径；R3 实例列表并入创建界面；绑定/采用/锁定；预设门控；BROKEN 展示 |
-| 21 | Host+Client | 实例生命周期闭环 + 归档：归档移出池/命名/manifest/list-download-delete；归档→会话 DONE；Client 状态机按钮(start/stop/resume/reset/archive)+归档 UI |
-| 22 | 编辑器 | 编排编辑器（顺延，22.1~22.4） |
+| 21 | 前后台 | 前后台状态一致·修复轮（S1~S5）：去掉自动 idle→stop（状态由用户控制）；Resume 按钮+即时刷新；孤儿进采用池；reset 清对话；预设门控+BROKEN 展示 |
+| 22 | Host+Client | 实例生命周期闭环 + 归档：归档移出池/命名/manifest/list-download-delete；归档→会话 DONE；Client 状态机按钮(start/stop/resume/reset/archive)+归档 UI |
+| 23 | 编辑器 | 编排编辑器（顺延，23.1~23.4） |
 
 --- 
 

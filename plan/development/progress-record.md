@@ -63,7 +63,7 @@
 
 | 今日 | **Iter-19 WebUI↔workflow 配合调优（前后台联动）** | ✅ 代码完成（create 即绑定 /wf/create 绑 sessionId；执行期=RUNNING workflow_begin 补 start；编排 workflow_start 驱动已绑定实例；Client Start/Stop gating；**Session 启停同步** agent idle→stop、running→resume；143 单测通过；host v0.11.0 + client v0.5.0 待部署。手测发现阻塞后追加修复：/wf/create 与 create/begin 工具改走 createBind(1:1 守卫)+CONFLICT 自愈解绑，Client 创建按钮仅会话 UNBOUND 显示+仅未绑定实例可选+解绑弹窗告知；148 单测；host 0.11.1 + client 0.5.1） |
 
-| 今日 | **Iter-20 前后台状态一致（Iter-19 收尾）** | 🔄 进行中（R1 /wf/list 补 sessionState+Client gating、R2 面板 Start 不置 RUNNING（状态归 workflow_start）、R4 Session 启停同步进 listInstances、R3 移除常驻切换条+空态/创建/采用弹窗；155 单测通过；host v0.11.2 + client v0.5.2 待部署。**剩余**：预设门控（仅编排会话显页签）+ BROKEN 展示） |
+| 今日 | **Iter-20 前后台状态一致（Iter-19 收尾）** | 🔄 进行中（R1 /wf/list 补 sessionState+Client gating、R2 面板 Start 不置 RUNNING（状态归 workflow_start）、R4 Session 启停同步进 listInstances、R3 移除常驻切换条+空态/创建/采用弹窗；**forSession 根因修复**（只返回本会话实例，不回退最新，修 Other3/A1/B1/D1/E1）；157 单测通过；host v0.11.3 + client v0.5.3。v3 手测发现 S1~S5（见下），归入 Iter-21 修复轮） |
 
 ---
 
@@ -286,14 +286,15 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-20~22: 流程控制剩余功能（按功能闭环组织）（计划中）
+### Iter-20~23: 流程控制剩余功能（按功能闭环组织）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-20~22）；技术方案 `plan/design/workflow-lifecycle-design.md`
+**迭代计划**：`plan/development/development-plan.md`（Iter-20~23）；技术方案 `plan/design/workflow-lifecycle-design.md`
 
 **目标**：按"一个迭代 = 一个可端到端验证的功能"重组剩余工作——
-- **20 前后台状态一致**（Iter-19 收尾）：R1(/wf/list 补 sessionState+Client gating)、R2(面板 Start 不置 RUNNING、状态归 workflow_start)、R4(Session 启停同步覆盖列表路径)、R3(实例列表并入创建界面)、绑定/采用/锁定、预设门控、BROKEN 展示；
-- **21 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
-- **22 编排可视化编辑**（22.1~22.4）。
+- **20 前后台状态一致**（Iter-19 收尾 + forSession 根因）：R1(/wf/list 补 sessionState+Client gating)、R2(面板 Start 不置 RUNNING、状态归 workflow_start)、R4(Session 启停同步进 listInstances)、R3(实例列表并入创建界面)；**forSession 只返回本会话实例**；
+- **21 前后台状态一致·修复轮**（S1~S5）：去掉自动 idle→stop、Resume 按钮+即时刷新、孤儿进采用池、reset 清对话、预设门控+BROKEN 展示；
+- **22 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
+- **23 编排可视化编辑**（23.1~23.4）。
 
 **前置条件**：Iter-19 完成 ✅（重组按功能闭环，用户确认）
 

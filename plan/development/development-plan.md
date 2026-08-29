@@ -26,7 +26,7 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优)
-当前:   Iter-20(前后台状态一致，Iter-19 收尾)   ← 进行中（R1/R2/R3/R4 代码完成，155 单测；剩预设门控/BROKEN 展示 + 部署验证）   （其后 Iter-21 生命周期闭环+归档 / 22 编排编辑器）
+当前:   Iter-20(前后台状态一致，Iter-19 收尾)   ← 进行中（R1/R2/R3/R4 + forSession 根因 已修，157 单测；剩 预设门控/BROKEN 展示 → 归入 Iter-21 修复轮）   （其后 Iter-21 前后台状态一致·修复轮 = S1~S5 / 22 生命周期闭环+归档 / 23 编排编辑器）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -51,8 +51,9 @@
 | **18** | 流程控制工具 + 路由 + 孤儿回收（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截；**孤儿识别+回收**（绑定会话离开 live store → stop+解绑+保留进度回池 → 可被新会话 adopt/resume） | 单测+路由：控制全链路 + BROKEN 拦截 + 孤儿闭环 | ✅ **完成** |
 | **19** | WebUI↔workflow 配合调优（前后台联动） | create 即绑定（/wf/create 绑 sessionId + Client 传 sessionId）；执行期=RUNNING（workflow_begin 补 start；编排用 workflow_start 驱动已绑定/面板实例）；Client Start/Stop gating（Start 仅 CREATED/PENDING、Stop 仅 RUNNING）；**Session 启停同步**（agent idle→stop、running→resume）；system-prompt 同步 | 单测+端到端：create 即绑定/执行期 RUNNING/Session idle→stop→running→resume | ✅ **完成** |
 | **20** | 前后台状态一致（Iter-19 收尾 + 绑定体验） | R1(/wf/list 路由补 sessionState + Client create/start gating)、R2(面板 Start 不置 RUNNING，状态归 workflow_start)、R4(Session 启停同步覆盖列表路径)；实例列表并入创建界面（R3）；绑定/采用/锁定；预设门控；BROKEN 展示 | 端到端：面板建实例(绑定)→仅显示本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态；前后台状态一致 | Iter-19 |
-| **21** | 实例生命周期闭环 + 归档（Host+Client） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-20 |
-| **22** | 编排可视化编辑（体量最大，拆子迭代） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-21 |
+| **21** | 前后台状态一致·修复轮（S1~S5，v3 手测问题闭环） | S1 去掉自动 idle→stop（状态由用户显式控制，避免提问等待误停）；S2 加 Resume 按钮 + wfListLoader 即时刷新；S3 孤儿进采用池（recoverOrphan 解绑）+ 采用池只列 CREATED/标注；S4 reset 清理会话对话；S5 预设门控 + BROKEN 展示 | 端到端：面板 Stop/Resume/Reset 一致、提问等待不停、孤儿可采用、reset 后重跑正常、门控与 BROKEN 提示 | Iter-20 |
+| **22** | 实例生命周期闭环 + 归档（Host+Client） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-21 |
+| **23** | 编排可视化编辑（体量最大，拆子迭代） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-22 |
 
 ---
 
@@ -507,7 +508,22 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-21: 实例生命周期闭环 + 归档（Host+Client）
+### Iter-21: 前后台状态一致·修复轮（S1~S5，v3 手测问题闭环）
+
+**背景**：Iter-20 核心（R1/R2/R3/R4 + forSession 根因）已修；但 v3 手工验证又发现 S1~S5 状态同步/控制/采用池/对话残留/门控问题，集中一个迭代修复并端到端验证。
+
+**交付**：
+- **S1 状态同步语义**：去掉自动 idle→stop（agent idle ≠ workflow 停止；提问等待/暂停不置 STOPPED）；workflow 状态由用户显式控制（面板 Stop/Resume）。`syncInstanceState` 不再自动 idle→stop / running→resume。
+- **S2 控制按钮**：Client 加 **Resume** 按钮（STOPPED→resume）；接通 `wfListLoader`（create/adopt/start 后即时刷新，非轮询等待）；切换会话刷新提速。
+- **S3 孤儿/采用池**：采用池先对孤儿（sessionId 为死会话）跑 `recoverOrphan` 解绑再列入；池只列 CREATED 或明确标注状态（不含莫名 STOPPED 误导）。
+- **S4 会话对话**：reset 时清理/重置编排会话上下文（或编排侧忽略旧对话），避免重跑时 LLM 反复对比状态。
+- **S5 面板门控 + BROKEN 展示**：仅 workflow-orchestrator 会话显示 workflow 页签/DAG/控件；BROKEN 实例提示"环境异常，需新建 workflow 会话"。
+
+**验证（端到端）**：面板 Stop/Resume/Reset 一致；提问等待不被误停；孤儿实例可被采用并正常执行；reset 后重跑状态一致；非编排会话无页签 + BROKEN 提示。
+
+---
+
+### Iter-22: 实例生命周期闭环 + 归档（Host+Client）
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
 
@@ -520,20 +536,20 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-22: 编排可视化编辑（体量最大，拆子迭代顺序推进）
+### Iter-23: 编排可视化编辑（体量最大，拆子迭代顺序推进）
 
 **范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
 
-**输入**：Iter-21 生命周期闭环（编辑器"保存并启动"依赖控制通道）。
+**输入**：Iter-22 生命周期闭环（编辑器"保存并启动"依赖控制通道）。
 
 **拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
 
 | 子迭代 | 交付 | 验证 |
 |--------|------|------|
-| 22.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 22.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 22.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 22.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+| 23.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 23.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 23.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 23.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
 
 **验证标准**：
 
