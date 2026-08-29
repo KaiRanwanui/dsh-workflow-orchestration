@@ -498,6 +498,12 @@ async function runCase15() {
   const unbound = await registry2.beginInstance({ cwd, sessionId: null, workflowName: 'wfd', sourceText: 'name: wfd\n', sourcePath: null, params: {} })
   const sr = await call('POST', '/wf/start', { workspaceRoot: cwd, instanceId: unbound.instanceId, sessionId: 'sess-a' })
   check('R2 /wf/start 路由: 不置 RUNNING（未改引擎状态）', sr.code === 200 && sr.body.stage !== 'RUNNING', JSON.stringify(sr.body).slice(0, 80))
+
+  // 4) forSession 根修复：未绑定会话 → undefined（绝不取工作区最新实例）；已绑定 → 返回本会话实例
+  const r1 = await registry.forSession({ agent: { session: { header: { id: 'sess-zzz', cwd } } } })
+  check('forSession: 未绑定会话 → undefined（不取最新实例，防跨会话污染）', r1 === undefined, r1 && r1.instanceId)
+  const r2 = await registry.forSession({ agent: { session: { header: { id: 'sess-a', cwd } } } })
+  check('forSession: 已绑定会话 → 返回本会话实例', r2 && r2.instanceId === b.instanceId, r2 && r2.instanceId)
 }
 
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──

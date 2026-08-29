@@ -88,8 +88,9 @@ function register(ctx) {
       if (stop) return
       try {
         // Iter-5：webServer HTTP 路由替代 harness RPC（host.call）
-        // Iter-12：面板选择的实例（wfInstanceId）参与轮询；空=最新实例
-        const q = '/wf/status?workspaceRoot=' + encodeURIComponent(wfRoot || '') + (wfInstanceId ? '&instanceId=' + encodeURIComponent(wfInstanceId) : '')
+        // Iter-20：只查询**本会话绑定实例**（不存在→空态）；绝不取"工作区最新实例"
+        const boundId = wfInstances.find(it => it.sessionId === wfSessionId)
+        const q = '/wf/status?workspaceRoot=' + encodeURIComponent(wfRoot || '') + (boundId ? '&instanceId=' + encodeURIComponent(boundId.instanceId) : '')
         const resp = await fetch(q)
         const s = await resp.json()
         if (!stop) publish(s)

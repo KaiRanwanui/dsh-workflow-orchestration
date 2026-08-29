@@ -184,8 +184,11 @@ function createInstanceRegistry(ctx, deps) {
       } catch (e) { /* 残缺实例目录跳过 */ }
     }
     if (candidates.length === 0) return undefined
+    // Iter-20：只返回声明了该 sessionId 的实例；会话未绑定（UNBOUND）→ undefined。
+    // 绝不回退取"工作区最新实例"（那可能是别的会话的，导致归属污染/空态误显示 DAG/Start 注入错实例）。
     const matched = sessionId ? candidates.find(c => c.meta.sessionId === sessionId) : null
-    const best = matched || candidates.sort((a, b) => String(b.meta.createdAt || '').localeCompare(String(a.meta.createdAt || '')))[0]
+    if (!matched) return undefined
+    const best = matched
     const dir = instanceDirPath(cwd, best.meta.instanceId)
     const engine = deps.createWorkflowEngine()
     const storage = deps.createWorkflowStorage(ctx, engine)

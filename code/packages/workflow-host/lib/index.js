@@ -1097,8 +1097,11 @@ function createInstanceRegistry(ctx, deps) {
       } catch (e) { /* 残缺实例目录跳过 */ }
     }
     if (candidates.length === 0) return undefined
+    // Iter-20：只返回声明了该 sessionId 的实例；会话未绑定（UNBOUND）→ undefined。
+    // 绝不回退取"工作区最新实例"（那可能是别的会话的，导致归属污染/空态误显示 DAG/Start 注入错实例）。
     const matched = sessionId ? candidates.find(c => c.meta.sessionId === sessionId) : null
-    const best = matched || candidates.sort((a, b) => String(b.meta.createdAt || '').localeCompare(String(a.meta.createdAt || '')))[0]
+    if (!matched) return undefined
+    const best = matched
     const dir = instanceDirPath(cwd, best.meta.instanceId)
     const engine = deps.createWorkflowEngine()
     const storage = deps.createWorkflowStorage(ctx, engine)
@@ -2429,57 +2432,9 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
         }
       }
     }
-    let dirs = []
-    try {
-      const entries = await fs.listDir(await fs.resolve(instancesRoot))
-      dirs = entries.filter(en => en.type === 'directory').map(en => en.name)
-    } catch (e) { dirs = [] } // 无 instances 目录
-    if (dirs.length > 0) {
-      let best = null
-      for (const id of dirs) {
-        try {
-          const meta = JSON.parse(await fs.readText(await fs.resolve(instancesRoot + '/' + id + '/metadata.json')))
-          if (!best || String(meta.createdAt || '') > String(best.createdAt || '')) best = { id, createdAt: meta.createdAt }
-        } catch (e) { /* 残缺实例目录跳过 */ }
-      }
-      if (best) {
-        const instanceDir = instancesRoot + '/' + best.id
-        // 尝试读取 state.json（RUNNING/COMPLETED/FAILED 状态）
-        try {
-          const resolved = await fs.resolve(instanceDir + '/state.json')
-          const state = JSON.parse(await fs.readText(resolved))
-          return { state, error: null, instanceId: best.id }
-        } catch (e) {
-          // state.json 不存在 → CREATED 状态，从 instance.yaml 构建默认状态
-          try {
-            const yamlPath = await fs.resolve(instanceDir + '/instance.yaml')
-            const yamlText = await fs.readText(yamlPath)
-            const parsed = parseWorkflow(yamlText)
-            if (parsed.errors && parsed.errors.length > 0) {
-              return { state: null, error: 'invalid instance.yaml: ' + parsed.errors.join(', '), instanceId: best.id }
-            }
-            return {
-              state: {
-                workflow: parsed.name,
-                stage: 'CREATED',
-                tasks: [],
-                runnable: [],
-                maxConcurrency: parsed.maxConcurrency || 1,
-              },
-              error: null,
-              instanceId: best.id,
-            }
-          } catch (e2) {
-            return { state: null, error: 'cannot read instance.yaml: ' + (e2 && e2.message ? e2.message : String(e2)), instanceId: best.id }
-          }
-        }
-      }
-    }
-    // 旧单实例布局回退（demo 数据兼容）
-    const statePath = root + '/.workflow-agent/state.json'
-    const resolved = await fs.resolve(statePath)
-    const state = JSON.parse(await fs.readText(resolved))
-    return { state, error: null }
+    // Iter-20：未指定 instanceId（会话未绑定/无选中）→ 返回空状态；绝不取"工作区最新实例"或旧布局，
+    // 避免跨会话归属污染 / 空态误显示其他会话的 DAG。
+    return { state: null, error: null, instanceId: '' }
   } catch (e) {
     return { state: null, error: e && e.message ? e.message : String(e) }
   }
