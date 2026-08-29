@@ -72,11 +72,13 @@
 
 - `code/plugins/workflow-host/instance-store.js` → 经 `sync-modules.js instance-store` 同步到 `workflow-host.mjs` → `packages/workflow-host/build.js` 重建 `lib/index.js`，`module.exports = {name, inject, apply}` 完整。
 
-### 部署验证（待执行）
+### 部署验证（已重启，通过）
 
-1. `systemctl --user restart dsh.service`（改 Host 侧插件必须重启）
-2. 浏览器硬刷新
-3. 面板/工具验证：绑定语义（create/adopt/1:1/派生状态）在 Iter-18 工具/路由接线后前端可见
+1. `systemctl --user restart dsh.service` 后插件已加载 **v0.9.0**（profile symlink 指向源码，`/wf/list` 正常返回 29 实例，无崩溃）。
+2. **骨架物化（Iter-17 observable）**：`POST /wf/create` 新建实例 `iter17-check-c25293ea` 触发 `beginInstance`→`ensureWorkspaceSkeleton`，`.workflow-agent/archive/`（含 `.gitkeep`）与 `instances/` 均已物化 ✅。
+3. **新实例 metadata.sessionId=null**（UNBOUND 池，adopt 前置）✅。
+4. **无回归**：`/wf/start`→PENDING/active=true；`/wf/stop`→STOPPED/active=false ✅。
+5. **说明**：create-bind/adopt/1:1 守卫/派生状态（UNBOUND/BOUND/BROKEN）在运行态尚无法直接经 HTTP 触发——这些方法未接线到工具/路由（Iter-18 才接线），当前由单测 125/125 覆盖。
 
 ## 提交
 
