@@ -21,11 +21,18 @@
      （instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录，
      DSH 重启后按会话自动恢复。
    - 返回：`tasks[]`（每个含 id/name/type/status=PENDING/processor（绝对路径）/
-     inputs（命名字典，key→路径 或 路径列表）/outputs/gate）+ `stage=PENDING`
+     inputs（命名字典，key→路径 或 路径列表）/outputs/gate）+ `stage=RUNNING`（Iter-19：begin 后即视为执行中，不再是 PENDING）
      + `instanceId`（本次实例 id）。
+    - 入口二选一：新建自己的实例用 `workflow_begin`（创建+启动→RUNNING）；
+      驱动已存在/面板创建的实例用 `workflow_start`（实例须已绑定本会话）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
 
-2. **就绪推导**：Task 的 `dependsOn` 全部 DONE 后该 Task 才就绪。
+2. **Session 启停同步（Iter-19）**：用户在 DSH 上启停本会话（agent idle⇄running）会
+   自动与本工作流实例同步——session 停下时实例→`STOPPED`（保 DONE 进度），session 启动恢复时实例
+   `resume()`→`RUNNING` 续跑。因此编排过程中若发现 `stage=STOPPED`，说明用户已停本会话，暂停推进
+   等用户恢复；`stage=RUNNING` 才继续。
+
+3. **就绪推导**：Task 的 `dependsOn` 全部 DONE 后该 Task 才就绪。
    - 空 depends-on 的 Task 在工作流启动后即可执行。
    - 串行规则：一次只执行一个 Task（并发是后续版本的独立维度，当前不支持）。
 

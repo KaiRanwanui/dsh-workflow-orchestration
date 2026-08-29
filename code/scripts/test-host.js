@@ -367,6 +367,66 @@ async function runCase13() {
   check('孤儿回收后: 不再被识别为孤儿', !orphans.some(o => o.id === orph.instanceId))
 }
 
+// ── 用例 14：前后台配合（Iter-19）─────────────────────────────────────────
+async function runCase14() {
+  console.log('［用例 14］前后台配合 — create 即绑定 / 执行期=RUNNING / Session 启停同步')
+  const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { files, fs: mockFs } = makeMockFs()
+  const live = new Set(['sess-a'])
+  const runningAgents = new Set(['sess-a'])
+  const isSessionLive = (sid) => live.has(sid)
+  const isAgentRunning = (sid) => runningAgents.has(sid)
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning }
+  const registered = {}
+  const ctx = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) { if (n === 'fs') return mockFs; if (n === 'tools') return { register(t) { bag[t.name] = t } }; return undefined },
+  })
+  const registry = createInstanceRegistry(ctx(registered), deps)
+  registerWorkflowToolsPreset(ctx(registered), null, null, registry)
+  const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c14' } } } }
+  const WF = `name: c14demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c14/output/a.md"]\n    depends-on: []\n`
+
+  // 1) workflow_begin → RUNNING（执行期=RUNNING）+ 绑定 sess-a
+  let r = await registered.workflow_begin.execute({ workflowText: WF }, exec)
+  check('workflow_begin: 返回 RUNNING（执行期=RUNNING）', r.stage === 'RUNNING', r.stage)
+  check('workflow_begin: 实例绑定 sess-a', registry.get(r.instanceId).meta.sessionId === 'sess-a')
+  const iid = r.instanceId
+
+  // 2) Session 停止同步（agent idle → 实例 STOPPED）
+  runningAgents.delete('sess-a')
+  let e = await registry.syncInstanceState('/ws/c14', iid)
+  check('sync:idle → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+
+  // 3) Session 启动同步（agent running → 实例 resume RUNNING）
+  runningAgents.add('sess-a')
+  e = await registry.syncInstanceState('/ws/c14', iid)
+  check('sync:running → 实例 resume RUNNING', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+
+  // 4) create 即绑定（/wf/create 路由带 sessionId → metadata.sessionId）
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  let routeHandler = null
+  const ctx2 = {
+    get(n) {
+      if (n === 'webServer') return { register(def) { routeHandler = def.handler } }
+      if (n === 'fs') return mockFs
+      return undefined
+    },
+  }
+  const registry2 = createInstanceRegistry(ctx2, deps)
+  mjs.registerWebRoutes(ctx2, registry2)
+  const call = (body) => new Promise((resolve, reject) => {
+    const res = { code: 0, headers: null, payload: '', writeHead(c, h) { this.code = c; this.headers = h }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
+    const req = { method: 'POST', url: '/wf/create', headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' },
+      on: (ev, fn) => { if (ev === 'data') fn(JSON.stringify(body)); if (ev === 'end') Promise.resolve().then(() => fn()) } }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+  r = await call({ workspaceRoot: '/ws/c14b', workflowText: WF, sessionId: 'sess-b' })
+  check('route create: 返回 sessionId=sess-b', r.code === 200 && r.body.sessionId === 'sess-b', JSON.stringify(r.body).slice(0, 100))
+  const meta = JSON.parse(files.get('/ws/c14b/.workflow-agent/instances/' + r.body.instanceId + '/metadata.json'))
+  check('route create: metadata.sessionId=sess-b', meta.sessionId === 'sess-b')
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -750,6 +810,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase12()
     // ── 用例 13：流程控制全链路 + 孤儿回收（Iter-18）──
     await runCase13()
+    // ── 用例 14：前后台配合（Iter-19）──
+    await runCase14()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

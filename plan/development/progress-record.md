@@ -61,6 +61,8 @@
 
 | 今日 | **Iter-18 流程控制工具 + 路由 + 孤儿回收（Host）** | ✅ 代码完成（workflow_adopt/resume 新增；start/stop/reset 接线 Iter-16 状态机；reset 写 _reset_<state> 归档备份；孤儿惰性扫描识别+回收；BROKEN 拦截；system-prompt adopt→start 同步；137 单测通过；host v0.10.0 待重启部署） |
 
+| 今日 | **Iter-19 WebUI↔workflow 配合调优（前后台联动）** | ✅ 代码完成（create 即绑定 /wf/create 绑 sessionId；执行期=RUNNING workflow_begin 补 start；编排 workflow_start 驱动已绑定实例；Client Start/Stop gating；**Session 启停同步** agent idle→stop、running→resume；143 单测通过；host v0.11.0 + client v0.5.0 待部署） |
+
 ---
 
 ## 已完成工作

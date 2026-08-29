@@ -589,7 +589,7 @@ function register(ctx) {
             try {
               let params = {}
               try { params = paramsText.trim() ? JSON.parse(paramsText) : {} } catch (e) { throw new Error('params 不是合法 JSON') }
-              const payload = { workspaceRoot: activeRoot, params }
+              const payload = { workspaceRoot: activeRoot, params, sessionId } // Iter-19：面板创建即绑定当前 sessionId
               if (tplSel === 'custom') {
                 if (!pathText.trim()) throw new Error('请填写 workflowPath')
                 payload.workflowPath = pathText.trim()
@@ -620,8 +620,8 @@ function register(ctx) {
           const currentStage = stateData && stateData.stage
           const currentInstanceId = (snap && snap.instanceId) || wfInstanceId || (wfInstances[0] && wfInstances[0].instanceId) || ''
           
-          // Start 按钮（CREATED 或无状态时显示）
-          if (!currentStage || currentStage === 'CREATED') {
+          // Start 按钮（CREATED/PENDING（已重置待启动）时显示）
+          if (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING') {
             controlBtns.push(React.createElement('button', {
               key: 'start', title: '启动实例',
               onClick: async () => {
@@ -649,8 +649,8 @@ function register(ctx) {
             }, '▶ Start'))
           }
           
-          // Stop 按钮（PENDING 或 RUNNING 时显示）
-          if (currentStage === 'PENDING' || currentStage === 'RUNNING') {
+          // Stop 按钮（仅 RUNNING 时显示；PENDING 属待启动，非执行中）
+          if (currentStage === 'RUNNING') {
             controlBtns.push(React.createElement('button', {
               key: 'stop', title: '停止实例',
               onClick: async () => {

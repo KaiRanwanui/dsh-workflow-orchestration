@@ -16,7 +16,15 @@ export function apply(ctx) {
     if (!sessions || typeof sessions.get !== 'function') return true
     return !!(sid && sessions.get(sid))
   }
-  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive })
+  // Iter-19：注入会话 agent 运行判定（Session 启停同步用；agents.get(sid).status === 'running'）
+  const agents = ctx.get('agents')
+  const isAgentRunning = (sid) => {
+    if (!agents || typeof agents.get !== 'function') return undefined
+    const a = agents.get(sid)
+    if (!a) return undefined
+    return a.status === 'running'
+  }
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning })
   // 单实例兼容绑定（显式 statePath/workspaceRoot 参数或无会话上下文时回退）
   const engine = createWorkflowEngine()
   const storage = createWorkflowStorage(ctx, engine)
@@ -968,6 +976,9 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-18：会话存活判定（孤儿识别依赖）。生产由 apply 注入 sessions 服务包装，
   // 测试注入可控 stub；缺省恒 true（不误判孤儿，保持既有行为）。
   const isSessionLive = typeof deps.isSessionLive === 'function' ? deps.isSessionLive : (() => true)
+  // Iter-19：会话 agent 是否运行中（Session 启停同步依赖）。生产由 apply 注入 agents 服务包装；
+  // 缺省返回 undefined（无法判定 → 不触发同步，保持既有行为）。
+  const isAgentRunning = typeof deps.isAgentRunning === 'function' ? deps.isAgentRunning : (() => undefined)
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -1042,12 +1053,16 @@ function createInstanceRegistry(ctx, deps) {
   async function forSession(exec) {
     const sessionId = sessionIdOf(exec)
     const hit = sessionId ? activeBySession.get(sessionId) : undefined
-    if (hit && engines.get(hit)) return engines.get(hit)
+    if (hit && engines.get(hit)) {
+      await syncInstanceState(sessionCwdOf(exec), hit) // Iter-19：Session 启停同步
+      return engines.get(hit)
+    }
     const cwd = sessionCwdOf(exec)
     if (!cwd) return undefined
     const restored = await hydrateLatest(cwd, sessionId)
     if (!restored) return undefined
     if (sessionId) activeBySession.set(sessionId, restored.instanceId)
+    await syncInstanceState(cwd, restored.instanceId) // Iter-19：Session 启停同步
     return restored
   }
 
@@ -1426,6 +1441,35 @@ function createInstanceRegistry(ctx, deps) {
     return dest
   }
 
+  // ── Iter-19：Session 启停同步（前后台状态配合）────────────────────────────
+  // 用户起停 DSH Session（agent idle⇄running）时，绑定实例状态需对齐：
+  //   agent idle（用户停了 session）  → 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
+  //   agent running（用户重启 session）→ 实例 STOPPED 则 engine.resume() → RUNNING（续跑）
+  // 仅在能判定 agent 状态时触发；CREATED/PENDING/COMPLETED/FAILED 不误改。
+  async function syncInstanceState(cwd, instanceId) {
+    const entry = await loadEntry(cwd, instanceId)
+    if (!entry) return entry
+    const sid = entry.meta.sessionId
+    if (!sid || !isSessionLive(sid)) return entry // UNBOUND 或孤儿（孤儿由 Iter-18 回收）
+    const running = isAgentRunning(sid)
+    if (running === undefined || running === null) return entry // 无法判定，不触发
+    const stage = entry.engine.snapshot().stage // 以引擎实际状态为准（hasState 仅缓存标记）
+    if (running === false) {
+      if (stage === 'RUNNING') {
+        entry.engine.stop() // RUNNING→STOPPED，保 DONE 进度
+        await entry.storage.save()
+        entry.engine.setPersist('ok (session-idle sync)')
+      }
+    } else {
+      if (stage === 'STOPPED') {
+        entry.engine.resume() // STOPPED→RUNNING，续跑
+        await entry.storage.save()
+        entry.engine.setPersist('ok (session-running sync)')
+      }
+    }
+    return entry
+  }
+
   return {
     beginInstance,
     forSession,
@@ -1442,6 +1486,7 @@ function createInstanceRegistry(ctx, deps) {
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,
+    syncInstanceState,
     get,
     activeIdFor,
     sessionIdOf,
@@ -1822,6 +1867,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         }
 
         b.engine.begin(parsed)
+        b.engine.start() // Iter-19：begin 后即视为执行中 → RUNNING（与状态机一致）
         b.engine.setError(null)
         const r = await b.storage.save()
         b.engine.setPersist(r)
@@ -2533,13 +2579,13 @@ function registerWebRoutes(ctx, registry) {
             }
             const entry = await registry.beginInstance({
               cwd: root,
-              sessionId: null,
+              sessionId: args.sessionId || null, // Iter-19：面板创建即绑定当前 sessionId（create-bind），start 无需先 adopt
               workflowName: parsed.name,
               sourceText: text,
               sourcePath: srcPath || null,
               params: args.params || {},
             })
-            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root })
+            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root, sessionId: args.sessionId || null })
           } catch (e) {
             writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
           }

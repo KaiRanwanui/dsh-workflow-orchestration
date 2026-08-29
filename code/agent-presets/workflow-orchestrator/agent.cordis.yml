@@ -31,7 +31,7 @@
       state.json/metadata.json/output/logs），状态写入实例目录，DSH 重启后按
       会话自动恢复。返回 tasks[]（含 id/name/type/dependsOn/status=PENDING/
       processor 绝对路径/inputs 命名字典/outputs/gate）+ runnable[] +
-      maxConcurrency + stage=PENDING + instanceId（本次实例 id）。
+      maxConcurrency + stage=RUNNING（Iter-19：begin 后即视为执行中）+ instanceId（本次实例 id）。
       若返回 workflowBeginErrors，向用户报告具体错误并停止。
 
       2) 就绪推导：以引擎返回的 runnable 字段为准（它已按 dependsOn 全部完成 +

@@ -364,6 +364,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         }
 
         b.engine.begin(parsed)
+        b.engine.start() // Iter-19：begin 后即视为执行中 → RUNNING（与状态机一致）
         b.engine.setError(null)
         const r = await b.storage.save()
         b.engine.setPersist(r)
