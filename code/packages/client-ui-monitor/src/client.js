@@ -13,6 +13,8 @@ export function register(ctx) {
   let activeRoot = null, wfInstances = [], wfInstanceId = ''
   // Iter-19：当前会话派生状态（/wf/list 返回；create 按钮 gating 用）
   let wfSessionState = null
+  // Iter-20：当前会话 id（/wf/list 查询用，路由据此返回轻量 sessionState）
+  let wfSessionId = ''
   // Iter-13：列表加载器引用（面板创建成功后即时刷新）
   let wfListLoader = null
 
@@ -42,7 +44,7 @@ export function register(ctx) {
     const loadList = async () => {
       if (!activeRoot) return
       try {
-        const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot))
+        const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot) + (wfSessionId ? '&sessionId=' + encodeURIComponent(wfSessionId) : ''))
         const r = await resp.json()
         wfInstances = r && Array.isArray(r.instances) ? r.instances : []
         wfSessionState = r && r.sessionState ? r.sessionState : null
@@ -472,6 +474,7 @@ export function register(ctx) {
       function WorkflowViewFactory(props) {
         const workspaceHook = props.useWorkspaces
         const sessionId = props.sessionId
+        wfSessionId = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
         const useSessions = props.useSessions
         // Iter-12：跟随当前 session 的 cwd（切 session → 实例目录跟随）
         const sessionCwd = useSessions
@@ -540,6 +543,7 @@ export function register(ctx) {
 
           // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
           const [formOpen, setFormOpen] = React.useState(false)
+          const [adoptOpen, setAdoptOpen] = React.useState(false) // Iter-20：采用未绑定实例
           const [tplOpts, setTplOpts] = React.useState([])
           const [tplSel, setTplSel] = React.useState('custom')
           const [yamlText, setYamlText] = React.useState('')
@@ -609,10 +613,13 @@ export function register(ctx) {
           // Iter-15：面板控制按钮（Start/Stop/Reset）
           const controlBtns = []
           const currentStage = stateData && stateData.stage
-          const currentInstanceId = (snap && snap.instanceId) || wfInstanceId || (wfInstances[0] && wfInstances[0].instanceId) || ''
+          // Iter-20：当前实例 = 本会话绑定实例（snap 优先，其次 wfInstances 中绑本会话的实例）
+          const boundInstance = wfInstances.find(it => it.sessionId === wfSessionId)
+          const currentInstanceId = (snap && snap.instanceId) || (boundInstance && boundInstance.instanceId) || ''
+          const sessionBound = !!(wfSessionState && wfSessionState.state === 'BOUND')
           
-          // Start 按钮（CREATED/PENDING（已重置待启动）时显示）
-          if (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING') {
+          // Start 按钮（仅本会话已绑定实例（BOUND）且为可启动态时显示）
+          if (sessionBound && (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING')) {
             controlBtns.push(React.createElement('button', {
               key: 'start', title: '启动实例',
               onClick: async () => {
@@ -641,7 +648,7 @@ export function register(ctx) {
           }
           
           // Stop 按钮（仅 RUNNING 时显示；PENDING 属待启动，非执行中）
-          if (currentStage === 'RUNNING') {
+          if (sessionBound && currentStage === 'RUNNING') {
             controlBtns.push(React.createElement('button', {
               key: 'stop', title: '停止实例',
               onClick: async () => {
@@ -665,7 +672,7 @@ export function register(ctx) {
           }
           
           // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
-          if (currentStage === 'STOPPED' || currentStage === 'COMPLETED' || currentStage === 'FAILED') {
+          if (sessionBound && (currentStage === 'STOPPED' || currentStage === 'COMPLETED' || currentStage === 'FAILED')) {
             controlBtns.push(React.createElement('button', {
               key: 'reset', title: '重置实例（清空状态，保留产物）',
               onClick: async () => {
@@ -694,10 +701,16 @@ export function register(ctx) {
           const plusBtn = canCreate ? React.createElement('button', {
             key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
             style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
-          }, '+') : null
+          }, '+ 创建') : null
+          // Iter-20(R3)：会话 UNBOUND 时提供"采用"入口（选未绑定实例并绑定本会话）
+          const adoptBtn = canCreate ? React.createElement('button', {
+            key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => setAdoptOpen(true),
+            style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
+          }, '采用') : null
+          // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮
           const toolbar = React.createElement('div', {
             key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, [...controlBtns, ...(plusBtn ? [plusBtn] : [])])
+          }, canCreate ? [plusBtn, adoptBtn] : controlBtns)
 
           const formOverlay = !formOpen ? null : React.createElement('div', {
             style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
@@ -745,40 +758,48 @@ export function register(ctx) {
               formOverlay,
               React.createElement('div', {
                 style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
-              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : 'Waiting for workflow...')
+              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...'))
             )
           }
 
-          // ── Iter-12：实例切换条（>1 个实例才显示；空选=最新实例）────────
-          // Iter-19：仅展示未绑定（sessionId==null）实例作为可选池；已绑定实例随状态/DAG 呈现，
-          //          不作为"可切换/可选"项。
-          const selectInstance = (id) => {
-            wfInstanceId = id
-            latest = null
-            listeners.forEach(fn => { try { fn() } catch (e2) {} })
-          }
+          // ── Iter-20(R3)：移除常驻实例切换条；改为"采用"弹窗（可选未绑定实例并绑定本会话）──
           const poolInstances = wfInstances.filter(it => it.sessionId == null)
-          const defaultSel = wfInstanceId || (poolInstances[0] ? poolInstances[0].instanceId : '')
-          const instBar = poolInstances.length > 1 ? React.createElement('div', {
-            key: 'ib', style: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px 0', alignItems: 'center' }
-          }, poolInstances.map(it => {
-            const isSel = defaultSel === it.instanceId
-            return React.createElement('button', {
-              key: it.instanceId,
-              onClick: () => selectInstance(it.instanceId),
-              style: {
-                border: '1px solid ' + (isSel ? 'rgba(59,130,246,0.8)' : 'rgba(148,163,184,0.35)'),
-                background: isSel ? 'rgba(59,130,246,0.12)' : 'transparent',
-                color: 'inherit', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer'
-              }
-            }, it.workflowName + ' · ' + String(it.instanceId).slice(-6) + (it.stage ? ' · ' + it.stage : ''))
-          })) : null
+          const instBar = null // R3：不再常驻展示实例列表
+          const doAdopt = async (pid) => {
+            if (!sessionId || !activeRoot) { alert('无会话上下文，无法采用'); return }
+            try {
+              const resp = await fetch('/wf/adopt', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: pid, sessionId })
+              })
+              const r = await resp.json()
+              if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
+              setAdoptOpen(false); wfInstanceId = ''
+              if (typeof wfListLoader === 'function') wfListLoader()
+            } catch (e) { alert('采用失败: ' + (e && e.message ? e.message : String(e))) }
+          }
+          const adoptOverlay = !adoptOpen ? null : React.createElement('div', {
+            style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
+            onClick: () => setAdoptOpen(false)
+          }, React.createElement('div', {
+            style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 420, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
+            onClick: (e) => e.stopPropagation()
+          }, [
+            React.createElement('div', { key: 'tt', style: { fontSize: 13, fontWeight: 600 } }, '采用未绑定实例（绑定到本会话）'),
+            (poolInstances.length === 0
+              ? React.createElement('div', { key: 'e', style: { color: '#9ca3af', fontSize: 12 } }, '当前没有未绑定实例。请先「创建」一个新实例。')
+              : React.createElement('div', { key: 'lst', style: { display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' } },
+                poolInstances.map(it => React.createElement('button', {
+                  key: it.instanceId, onClick: () => doAdopt(it.instanceId),
+                  style: { textAlign: 'left', border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }
+                }, it.workflowName + ' · ' + String(it.instanceId).slice(-6) + (it.stage ? ' · ' + it.stage : ' · 未绑定'))))),
+            React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
+          ]))
 
           return React.createElement('div', {
             style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
           },
             toolbar,
-            instBar,
             React.createElement(DagCanvas, {
               stage: stateData.stage,
               gateResult: stateData.gateResult || null,
@@ -789,7 +810,8 @@ export function register(ctx) {
               retries: stateData.retries || 0,
               error: stateData.error || null,
             }),
-            formOverlay
+            formOverlay,
+            adoptOverlay
           )
         }
 

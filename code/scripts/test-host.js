@@ -441,6 +441,65 @@ async function runCase14() {
   check('CONFLICT 恢复: sess-x 回 UNBOUND（冲突实例已解绑）', stX.state === 'UNBOUND', stX.state)
 }
 
+// ── 用例 15：前后台状态一致（Iter-20）─────────────────────────────────────
+async function runCase15() {
+  console.log('［用例 15］前后台状态一致 — sessionBindState / R4 列表同步 / 路由 sessionState / start 不置 RUNNING')
+  const { files, fs: mockFs } = makeMockFs()
+  const live = new Set(['sess-a'])
+  const runningAgents = new Set(['sess-a'])
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive: (s) => live.has(s), isAgentRunning: (s) => runningAgents.has(s) }
+  const registry = createInstanceRegistry({ get() { return mockFs } }, deps)
+  const cwd = '/ws/c15'
+
+  // 1) sessionBindState：BOUND / UNBOUND / BROKEN
+  const a = await registry.beginInstance({ cwd, sessionId: 'sess-a', workflowName: 'wfa', sourceText: 'name: wfa\n', sourcePath: null, params: {} })
+  let sb = await registry.sessionBindState(cwd, 'sess-a')
+  check('sessionBindState: BOUND（命中一个绑定实例）', sb.state === 'BOUND' && sb.instanceId === a.instanceId, JSON.stringify(sb))
+  sb = await registry.sessionBindState(cwd, 'sess-b')
+  check('sessionBindState: UNBOUND（无绑定实例）', sb.state === 'UNBOUND')
+  await registry.beginInstance({ cwd, sessionId: 'sess-a', workflowName: 'wfb', sourceText: 'name: wfb\n', sourcePath: null, params: {} })
+  sb = await registry.sessionBindState(cwd, 'sess-a')
+  check('sessionBindState: BROKEN（同会话多实例）', sb.state === 'BROKEN', JSON.stringify(sb))
+  // 清理：解绑冲突的两个实例（wfa / wfb），使后续只有一个 sess-a 绑定实例(b)
+  await registry.patchMeta(cwd, a.instanceId, { sessionId: null })
+  const allWfaWfb = await registry.listInstances(cwd)
+  const wfb = allWfaWfb.find(x => x.workflowName === 'wfb')
+  if (wfb) await registry.patchMeta(cwd, wfb.instanceId, { sessionId: null })
+
+  // 2) R4：listInstances 对绑定实例做 Session 启停同步（idle→stop / running→resume）
+  const b = await registry.beginInstance({ cwd, sessionId: 'sess-a', workflowName: 'wfc', sourceText: 'name: wfc\n', sourcePath: null, params: {} })
+  b.engine.begin({ name: 'wfc', version: '1', description: null, params: {}, tasks: [{ id: 't', name: 't', type: 'llm-task', processor: '/x', outputs: [], gate: null }] })
+  b.engine.start()
+  await b.storage.save()
+  runningAgents.delete('sess-a') // 会话 idle
+  let list = await registry.listInstances(cwd)
+  const idleItem = list.find(x => x.instanceId === b.instanceId)
+  check('R4 list: 会话 idle → 实例 STOPPED（列表同步）', idleItem && idleItem.stage === 'STOPPED', idleItem && idleItem.stage)
+  runningAgents.add('sess-a') // 会话 running
+  list = await registry.listInstances(cwd)
+  const runItem = list.find(x => x.instanceId === b.instanceId)
+  check('R4 list: 会话 running → 实例 resume RUNNING', runItem && runItem.stage === 'RUNNING', runItem && runItem.stage)
+
+  // 3) /wf/list 路由返回 sessionState（轻量）；/wf/start 路由不置 RUNNING
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  let routeHandler = null
+  const ctx2 = { get(n) { if (n === 'webServer') return { register(def) { routeHandler = def.handler } }; if (n === 'fs') return mockFs; return undefined } }
+  const registry2 = createInstanceRegistry(ctx2, deps)
+  mjs.registerWebRoutes(ctx2, registry2)
+  const call = (method, url, body) => new Promise((resolve, reject) => {
+    const res = { code: 0, headers: null, payload: '', writeHead(c, h) { this.code = c; this.headers = h }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
+    const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+    if (method === 'POST') { req.on = (ev, fn) => { if (ev === 'data') fn(JSON.stringify(body || {})); if (ev === 'end') Promise.resolve().then(() => fn()) } }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+  const lr = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(cwd) + '&sessionId=sess-a')
+  check('R1 /wf/list 路由: 返回 sessionState=BOUND', lr.code === 200 && lr.body.sessionState && lr.body.sessionState.state === 'BOUND', JSON.stringify(lr.body.sessionState))
+  // /wf/start 对 sessionId=null 实例：R2 不置 RUNNING（未改引擎状态）
+  const unbound = await registry2.beginInstance({ cwd, sessionId: null, workflowName: 'wfd', sourceText: 'name: wfd\n', sourcePath: null, params: {} })
+  const sr = await call('POST', '/wf/start', { workspaceRoot: cwd, instanceId: unbound.instanceId, sessionId: 'sess-a' })
+  check('R2 /wf/start 路由: 不置 RUNNING（未改引擎状态）', sr.code === 200 && sr.body.stage !== 'RUNNING', JSON.stringify(sr.body).slice(0, 80))
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -826,6 +885,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase13()
     // ── 用例 14：前后台配合（Iter-19）──
     await runCase14()
+    // ── 用例 15：前后台状态一致（Iter-20）──
+    await runCase15()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

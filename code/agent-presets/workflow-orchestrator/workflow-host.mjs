@@ -1154,6 +1154,30 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-11：列出当前 cwd 下全部实例（metadata + state 摘要，createdAt 倒序）──
   // phase: 'CREATED'（仅目录，未启动过）| 'READY'（有 state.json）
+  // ── Iter-20：轻量会话绑定态（BOUND/UNBOUND/BROKEN）──────────────
+  // 供 /wf/list 等轮询路径 gating 用：只扫描 metadata.sessionId，不物化骨架、不整树扫描。
+  // （session 状态按设计是派生的，无存储字段；这里给一个轻量判定。）
+  async function sessionBindState(cwd, sessionId) {
+    if (!sessionId) return { state: 'UNBOUND' }
+    const fs = ctx.get('fs')
+    if (!fs) return { state: 'UNBOUND' }
+    let dirs = []
+    try {
+      const ins = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      dirs = ins.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) { return { state: 'UNBOUND' } }
+    let bound = null
+    for (const id of dirs) {
+      const meta = await tryReadMeta(cwd, id)
+      if (meta && meta.sessionId === sessionId) {
+        if (bound) return { state: 'BROKEN', reason: 'CONFLICT: 会话被多实例占用/' + sessionId }
+        bound = { id, meta }
+      }
+    }
+    if (bound) return { state: 'BOUND', instanceId: bound.id }
+    return { state: 'UNBOUND' }
+  }
+
   async function listInstances(cwd) {
     const fs = ctx.get('fs')
     if (!fs) return []
@@ -1182,17 +1206,28 @@ function createInstanceRegistry(ctx, deps) {
           taskDone: 0,
           taskFailed: 0,
         }
-        try {
-          const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
-          if (state && state.workflow) {
-            item.phase = 'READY'
-            item.stage = state.stage || null
-            const tasks = Array.isArray(state.tasks) ? state.tasks : []
-            item.taskTotal = tasks.length
-            item.taskDone = tasks.filter(t => t.status === 'DONE').length
-            item.taskFailed = tasks.filter(t => t.status === 'FAILED').length
-          }
-        } catch (e) { /* 无 state.json → CREATED */ }
+        // Iter-20(R4)：绑定实例先做 Session 启停同步（idle→stop / running→resume），列表不再见过期 RUNNING
+        const entry = meta.sessionId ? await syncInstanceState(cwd, id) : undefined
+        if (entry && entry.hasState) {
+          const snap = entry.engine.snapshot()
+          item.phase = 'READY'
+          item.stage = snap.stage
+          item.taskTotal = snap.tasks.length
+          item.taskDone = snap.tasks.filter(t => t.status === 'DONE').length
+          item.taskFailed = snap.tasks.filter(t => t.status === 'FAILED').length
+        } else {
+          try {
+            const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
+            if (state && state.workflow) {
+              item.phase = 'READY'
+              item.stage = state.stage || null
+              const tasks = Array.isArray(state.tasks) ? state.tasks : []
+              item.taskTotal = tasks.length
+              item.taskDone = tasks.filter(t => t.status === 'DONE').length
+              item.taskFailed = tasks.filter(t => t.status === 'FAILED').length
+            }
+          } catch (e) { /* 无 state.json → CREATED */ }
+        }
         out.push(item)
       } catch (e) { /* 残缺实例目录跳过 */ }
     }
@@ -1525,6 +1560,7 @@ function createInstanceRegistry(ctx, deps) {
     createBind,
     adoptInstance,
     recoverBindingConflicts,
+    sessionBindState,
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,
@@ -2556,15 +2592,18 @@ function registerWebRoutes(ctx, registry) {
       // Iter-12：实例列表（只读）——Client 面板实例切换条数据源
       if (pathname === '/wf/list') {
         const root = query.get('workspaceRoot') || ''
+        const sessionId = query.get('sessionId') || '' // Iter-20：Client 传当前会话用于 gating
         let instances = []
+        let sessionState = null
         if (registry && root) {
           try {
             instances = await registry.listInstances(root)
+            sessionState = await registry.sessionBindState(root, sessionId || null) // Iter-20：轻量绑定态
           } catch (e) {
             instances = []
           }
         }
-        writeJson(res, 200, { workspaceRoot: root, instances })
+        writeJson(res, 200, { workspaceRoot: root, instances, sessionState: sessionState && sessionState.state ? sessionState : null })
         return
       }
 
@@ -2819,15 +2858,8 @@ function registerWebRoutes(ctx, registry) {
               if (stage === 'RUNNING') { writeJson(res, 400, { error: 'instance is already running' }); return }
               if (stage === 'STOPPED') { writeJson(res, 400, { error: 'instance is STOPPED; use resume' }); return }
               if (stage === 'COMPLETED' || stage === 'FAILED') { writeJson(res, 400, { error: 'instance is ' + stage + '; use reset' }); return }
-              if (!entry.hasState) {
-                const parsed = await expandInstanceDef(entry)
-                entry.engine.begin(parsed)
-              }
-              entry.engine.setError(null)
-              entry.engine.start() // Iter-18：PENDING→RUNNING
-              const r = await entry.storage.save()
-              entry.engine.setPersist(r)
-              entry.hasState = true
+              // Iter-20(R2)：面板 Start 不置 RUNNING，状态由编排侧 workflow_start 统一维护；
+              // 路由只校验 + 注入"请启动实例"消息，不改引擎状态（避免双写冲突 B4）。
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               
