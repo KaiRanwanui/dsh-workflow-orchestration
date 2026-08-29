@@ -489,6 +489,13 @@ workflow_list → 列出所有实例 + 状态
 
 **背景**：Iter-19 打通了 create 即绑定/执行期=RUNNING/Session 启停同步，但手工验证暴露 R1~R4 阻塞（前后台状态不一致）。本迭代把"前后台状态一致"作为一整个可端到端验证的功能闭环收尾。
 
+**问题定位（R1~R4 根因与证据，来自 `plan/development/iter19-verification-report-v2.md` 手测）**：
+- **R1（`+`/Start gating 恒失效，A1a/A1b/B2）**：`/wf/list` **HTTP 路由**只走 `registry.listInstances`，**不返回 `sessionState`**（我只把 `sessionState` 加进了 `workflow_list` 工具）。Client `loadList` 用路由 → `wfSessionState` 恒 null → `canCreate = !wfSessionState || UNBOUND` 恒真 → `+` 永远显示；且 UNBOUND 无实例时 Start 也显示。
+- **R2（Start 置 RUNNING vs workflow_start 拒 RUNNING，B4）**：面板 `/wf/start` 路由先 `engine.start()` → RUNNING，再注入消息；编排会话收到后调 `workflow_start`（工具）→ 见 `stage==='RUNNING'` → 拒绝（"正在运行中"）。同一实例双重触发，第二次必被守卫拦住。**决议：由编排侧 `workflow_start` 统一维护状态（面板路由不置 RUNNING）。**
+- **R3（实例常驻切换条 UX，A1c）**：面板把 workspace 全部实例（含绑定其他会话 + UNBOUND 池）展示为常驻切换条，用户认为应**并入创建界面**（可从模板创建或选一个未绑定实例），面板只显示当前会话绑定实例。
+- **R4（Session 启停同步只在 `forSession`，列表过期 RUNNING，E1 不可靠）**：Iter-19 的 idle→stop / running→resume 同步挂在 `forSession`（status 路径），而 `/wf/list` 用 `listInstances` **不触发** → 列表可能显示过期 RUNNING（实测 `test-demo-e775e9a6` RUNNING 但 active=false，`activeBySession` 重启后为空）。
+- **附带**：实测工作区为多会话共享池（4 个会话各绑 1 实例 + 5 个 UNBOUND），前台需区分"本会话绑定 / 其余会话绑定 / UNBOUND 池"。
+
 **交付**：
 - **R2（状态权威）**：`/wf/start` 路由**不置 RUNNING**，只校验+注入消息；状态由编排侧 `workflow_start` 统一维护（消除双写冲突，B4）。
 - **R1（gating 数据源）**：`/wf/list` 路由补 `sessionState`；Client create/start gating：会话 UNBOUND 才显示"+"，仅显示本会话绑定实例为当前项。
@@ -496,7 +503,7 @@ workflow_list → 列出所有实例 + 状态
 - **R3（实例列表并入创建界面）**：实例选择从常驻切换条移入创建界面（可从模板创建或选一个未绑定实例）；面板只显示当前会话绑定实例。
 - **绑定体验（Client）**：预设门控（仅 workflow-orchestrator 显示页签/DAG/控件）；绑定（新建/采用/锁定）；BROKEN 展示"环境异常，需新建 workflow 会话"。
 
-**验证（端到端）**：面板建实例(绑定)→仅显示本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态；前后台状态一致（A/B/C/E 场景全 PASS）。含绑定/门控/BROKEN 展示。
+**验证（端到端）**：面板建实例(绑定)→仅显示本会话绑定→Start 单权威 RUNNING→会话启停同步→列表无过期状态；前后台状态一致（A/B/C/E 场景全 PASS）。含绑定/门控/BROKEN 展示。手工清单见 `plan/development/iter19-verification-report-v2.md`。
 
 ---
 
