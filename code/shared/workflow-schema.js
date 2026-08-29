@@ -57,7 +57,7 @@ const STAGE = {
   RUNNING: 'RUNNING', // 运行中
   COMPLETED: 'COMPLETED', // 全部完成
   FAILED: 'FAILED', // 阻断失败
-  PAUSED: 'PAUSED', // 暂停（后续迭代）
+  STOPPED: 'STOPPED', // 停止（保留进度，可 resume/reset/archive；Iter-16）
 }
 
 // ── 条件导出（Node 测试可用；宿主内联拼接时 module 未定义则跳过） ─────────

@@ -94,7 +94,7 @@ const STAGE = {
   RUNNING: 'RUNNING', // 运行中
   COMPLETED: 'COMPLETED', // 全部完成
   FAILED: 'FAILED', // 阻断失败
-  PAUSED: 'PAUSED', // 暂停（后续迭代）
+  STOPPED: 'STOPPED', // 停止（保留进度，可 resume/reset/archive；Iter-16）
 }
 
 // ── 条件导出（Node 测试可用；宿主内联拼接时 module 未定义则跳过） ─────────
@@ -424,7 +424,7 @@ function normalizeInputs(v) {
 
 // 兜底常量：宿主内联时同作用域已有同名 const，let 声明不冲突。
 let E_STAGE = typeof STAGE !== 'undefined' ? STAGE : {
-  PENDING: 'PENDING', RUNNING: 'RUNNING', COMPLETED: 'COMPLETED', FAILED: 'FAILED', PAUSED: 'PAUSED',
+  PENDING: 'PENDING', RUNNING: 'RUNNING', COMPLETED: 'COMPLETED', FAILED: 'FAILED', STOPPED: 'STOPPED',
 }
 let E_TASK_STATUS = typeof TASK_STATUS !== 'undefined' ? TASK_STATUS : {
   PENDING: 'PENDING', RUNNING: 'RUNNING', DONE: 'DONE', FAILED: 'FAILED', SKIPPED: 'SKIPPED',
@@ -474,6 +474,7 @@ function createWorkflowEngine() {
     updatedAt: 0,
     logs: [], // 结构化执行日志 [{ts, action, detail}]
     persist: null, // 最近一次持久化结果
+    def: null, // Iter-16：最近一次 begin 的解析定义（供 reset 重新 begin 用）
   }
 
   function fingerprint() {
@@ -503,6 +504,7 @@ function createWorkflowEngine() {
 
   // 启动新工作流：清空旧状态，按解析结果初始化 N 个 Task
   function begin(parsed) {
+    state.def = parsed // Iter-16：保留解析定义供 reset 重新 begin
     state.workflow = parsed.name
     state.version = parsed.version
     state.description = parsed.description
@@ -599,7 +601,8 @@ function createWorkflowEngine() {
   function setStage(s) {
     state.stage = s
     state.updatedAt = Date.now()
-    if (s === E_STAGE.COMPLETED || s === E_STAGE.FAILED) state.active = false
+    // Iter-16：STOPPED 也视为无进行中实例（保留 DONE 进度，但编排 Agent 停）
+    if (s === E_STAGE.COMPLETED || s === E_STAGE.FAILED || s === E_STAGE.STOPPED) state.active = false
     log('STAGE', s)
   }
 
@@ -701,6 +704,46 @@ function createWorkflowEngine() {
     state.updatedAt = Date.now()
   }
 
+  // ── Iter-16：运行状态机动作 ───────────────────────────────────────────────
+  // 状态：PENDING | RUNNING | STOPPED | COMPLETED | FAILED
+  // 转移：start 仅 PENDING（全新 begin→RUNNING）；stop 仅 RUNNING（保进度→STOPPED）；
+  //       resume 仅 STOPPED（hydrate 续跑→RUNNING，保 DONE）；reset 仅
+  //       STOPPED/COMPLETED/FAILED（丢弃进度→PENDING；RUNNING 须先 stop，PENDING 无内容）。
+  function start() {
+    if (state.stage !== E_STAGE.PENDING) {
+      throw new Error('start 仅允许 PENDING 状态（当前: ' + state.stage + '）；STOPPED/COMPLETED/FAILED 须先 reset')
+    }
+    state.active = true
+    setStage(E_STAGE.RUNNING)
+    return snapshot()
+  }
+
+  function stop() {
+    if (state.stage !== E_STAGE.RUNNING) {
+      throw new Error('stop 仅允许 RUNNING 状态（当前: ' + state.stage + '）')
+    }
+    setStage(E_STAGE.STOPPED) // setStage 将 active 置 false；保留 DONE 进度
+    return snapshot()
+  }
+
+  function resume() {
+    if (state.stage !== E_STAGE.STOPPED) {
+      throw new Error('resume 仅允许 STOPPED 状态（当前: ' + state.stage + '）')
+    }
+    state.active = true
+    setStage(E_STAGE.RUNNING)
+    return snapshot()
+  }
+
+  function reset() {
+    if (state.stage === E_STAGE.PENDING || state.stage === E_STAGE.RUNNING) {
+      throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED 状态（当前: ' + state.stage + '）；RUNNING 须先 stop，PENDING 无执行内容')
+    }
+    if (!state.def) throw new Error('reset 需要已 begin 的定义')
+    begin(state.def) // 丢弃进度，全新 PENDING
+    return snapshot()
+  }
+
   return {
     begin,
     clear,
@@ -713,10 +756,13 @@ function createWorkflowEngine() {
     setRetries,
     setError,
     setPersist,
+    start,
+    stop,
+    resume,
+    reset,
     snapshot,
   }
 }
-
 
 // ---- module: storage ----
 // ============================================================================

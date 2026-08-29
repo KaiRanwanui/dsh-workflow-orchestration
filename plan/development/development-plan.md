@@ -25,8 +25,8 @@
 ## 2. 迭代全景
 
 ```
-已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制)
-当前:   Iter-16(编排编辑器，拆分推进)   ← 待开发
+已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机)
+当前:   Iter-17~21(流程控制完整化/生命周期，5 个 ~1 人天迭代)   ← 待开发   （Iter-17 绑定+完整性；编排编辑器顺延为 Iter-22）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -46,7 +46,13 @@
 | **13** | 面板"新建 workflow 实例"按钮 | POST /wf/create + Client 表单 + 模板库 v1（内置模板 + `<cwd>/templates/` 扫描；**只 create 不 start**，语义见 instance-creation-semantics.md §6.3） | 面板选模板建实例 → session 启动编排 | ✅ **完成** |
 | **14** | 消息注入技术穿刺 | 验证插件向指定 session 注入指令（动态插件探针，先例 Iter-9；按通用指令消息形态验证） | go/no-go 结论 + API 形态报告 | ✅ **完成**（GO，subagents.followup API） |
 | **15** | 面板控制（start/stop/继续） | 走 Iter-14 通道驱动编排 session；"继续"=hydrate 续跑 | 面板启动 → DAG 展示执行 → 面板停止/继续 | ✅ **完成**（直接操作实例状态，不依赖 followup） |
-| **16** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-13 |
+| **16** | 运行状态机（Host） | STAGE 补 STOPPED；engine 补 stop(保进度)/begin/resume(续跑)/active | 单测：PENDING→RUNNING→STOPPED→resume→RUNNING(保DONE)；RUNNING 先 stop 再 reset | ✅ **完成** |
+| **17** | 绑定模型 + 完整性（Host） | 工作区骨架物化；create/adopt-bind；1:1 守卫；派生状态 UNBOUND/BOUND/DONE/BROKEN；整树完整性校验 | 单测：绑定/占用/解除 1:1；骨架缺场/目录损坏→BROKEN | Iter-16 |
+| **18** | 流程控制工具 + 路由（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截 | 单测+路由：控制全链路 + BROKEN 拦截 | Iter-17 |
+| **19** | 归档存储 + 管理（Host） | archive 移出池；命名 `<ts>_<kind>_<state>`；manifest；list/download/delete + 路由；归档→会话 DONE | 单测：归档闭环 | Iter-18 |
+| **20** | Client 预设门控 + 绑定 UI | 仅 workflow-orchestrator 页签；绑定（新建/采用/锁定）；BROKEN 提示 | 浏览器：新建会话→绑定→BROKEN 展示 | Iter-17 |
+| **21** | Client 控制 + 归档 UI + 联调 | 状态机按钮（start/stop/resume/reset/archive + 确认）；归档 UI（list/download/delete）；与 Host Iter-18/19 联调 | 浏览器：绑定→驱动→停止→续跑→重置→归档 闭环 | Iter-18,19,20 |
+| **22** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-21 |
 
 ---
 
@@ -417,20 +423,98 @@ workflow_list → 列出所有实例 + 状态
 **产出**：面板 start/stop/继续按钮（注入指令驱动编排 session）；"继续"= hydrate 续跑（不清进度，persona 补教学）；产物列表（实例 output/ 列表展示，读侧小迭代可并入）
 **验证**：面板启动 → DAG 展示执行 → 面板停止 → 面板继续 → 完成
 
-### Iter-16: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
+### Iter-16: 运行状态机（Host）
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §4/§6
+
+**交付**：
+- schema / engine：STAGE 枚举补 `STOPPED`；`setStage('STOPPED')` 置 `active=false`；
+- engine 补 `stop`（保留 DONE 进度、active=false）/ `resume`（hydrate 续跑、active=true）/ `begin`（全新 PENDING）语义；
+- 单测补 STOPPED / resume / stop-then-reset 用例。
+
+**验证（可验证）**：单测通过——`PENDING→RUNNING→STOPPED→resume→RUNNING(保 DONE)`；`RUNNING 先 stop 再 reset`；`STOPPED 不可 start`。
+
+---
+
+### Iter-17: 绑定模型 + 完整性（Host）
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §2/§3
+
+**交付**：
+- 工作区骨架物化：`<workspace>/.workflow-agent/{instances,archive}`（首次挂接 workflow 会话）；
+- 绑定：`create-bind`（新建实例写 `metadata.sessionId=S`）/ `adopt`（采用池中 `sessionId==null` 实例）；1:1 守卫（一会话一实例、一实例一会话、绑定后禁再绑）；
+- 派生状态：`UNBOUND/BOUND/DONE/BROKEN`；整树完整性校验（骨架缺场、实例目录损坏、冲突→BROKEN）。
+
+**验证（可验证）**：单测通过——创建/采用绑定；重复绑定拒绝；骨架缺场→BROKEN；实例目录损坏→BROKEN。
+
+---
+
+### Iter-18: 流程控制工具 + 路由（Host）
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§6
+
+**交付**：
+- 工具：`workflow_create`（carrier 为 create-bind）/ `workflow_start` / `workflow_stop` / `workflow_resume` / `workflow_reset`（含 reset 归档备份）；`workflow_list` 补派生状态；
+- 路由：`POST /wf/start|stop|resume|reset` + `/wf/list`；BROKEN 时拒绝 create/adopt/run 并返回状态；
+- 结构化驱动指令：`{action, instanceId, workspaceRoot}` 替代自由文本（供编排 Agent 对指定 instanceId 跑，而非 workflow_begin 新建实例）。
+
+**验证（可验证）**：单测 + 路由测试——create/adopt/start/stop/resume/reset 全链路；BROKEN 拦截。**预留联调缓冲**（Host 自测残留修复）。
+
+---
+
+### Iter-19: 归档存储 + 管理（Host）
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §7
+
+**交付**：
+- 归档：实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态），写 `manifest.json`；
+- `listArchive` / `downloadArchive`(zip) / `deleteArchive` 工具 + 路由；归档后会话 BOUND→DONE；
+- 重置用 `reset_<state>`、显式归档用 `archive_<state>` 区分。
+
+**验证（可验证）**：单测通过——归档移出池；命名含 kind/state；list/download/delete 全链路；归档后会话→DONE。
+
+---
+
+### Iter-20: Client 预设门控 + 绑定 UI
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §8/§3
+
+**交付**：
+- 预设门控：仅 `workflow-orchestration` preset 会话显示 workflow 页签 / DAG / 控件；
+- 绑定 UI：未绑定时"新建实例 / 采用已有 UNBOUND 实例"，绑定后锁定（禁再绑/切换）；
+- BROKEN 展示：实例目录缺失/损坏时提示"环境异常，需新建 workflow 会话"。
+
+**验证（可验证）**：浏览器——非编排会话无 workflow 页签；编排会话未绑定→绑定（新建/采用）；绑定后锁定；手动删实例目录→显 BROKEN。
+
+---
+
+### Iter-21: Client 控制 + 归档 UI + 联调
+
+**技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
+
+**交付**：
+- 状态机按钮：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset 确认、归档确认）；
+- 归档管理 UI：list / download / delete；
+- 与 Host Iter-18/19 联调（驱动/停止/续跑/重置/归档闭环）。
+
+**验证（可验证）**：浏览器闭环——绑定→start 执行 DAG→stop→resume→reset→archive；归档 list/download/delete。**预留联调缓冲**。
+
+---
+
+### Iter-22: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
 
 **范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
 
-**输入**：Iter-13 前台创建可用；Iter-15 面板控制可用（编辑器"保存并启动"依赖控制通道）
+**输入**：Iter-21 流程控制闭环（编辑器"保存并启动"依赖控制通道）。
 
 **拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
 
 | 子迭代 | 交付 | 验证 |
 |--------|------|------|
-| 16.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 16.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 16.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 16.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+| 22.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 22.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 22.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 22.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
 
 **验证标准**：
 

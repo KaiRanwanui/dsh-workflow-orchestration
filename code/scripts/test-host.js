@@ -198,6 +198,51 @@ async function runCase10() {
   check('404 回退', r.code === 404)
 }
 
+// ── 用例 11：运行状态机（Iter-16：start/stop/resume/reset + STOPPED active）──
+async function runCase11() {
+  console.log('［用例 11］运行状态机 — start/stop/resume/reset + STOPPED')
+  const src = { name: 'sm', version: '1', description: null, params: {}, tasks: [
+    { id: 'a', name: 'A', type: 'llm-task', processor: '/x/a', outputs: [], gate: null },
+    { id: 'b', name: 'B', type: 'llm-task', processor: '/x/b', outputs: [], gate: null },
+  ] }
+
+  // 场景 1：PENDING→RUNNING→STOPPED→resume→RUNNING（保 DONE）
+  const e = createWorkflowEngine()
+  e.begin(src)
+  let s = e.snapshot()
+  check('begin: PENDING + active=true', s.stage === 'PENDING' && s.active === true)
+  e.start()
+  s = e.snapshot()
+  check('start: RUNNING + active=true', s.stage === 'RUNNING' && s.active === true)
+  e.updateTask('a', { status: 'DONE' })
+  e.stop()
+  s = e.snapshot()
+  check('stop: STOPPED + active=false', s.stage === 'STOPPED' && s.active === false)
+  check('stop: 保留 DONE 进度', s.tasks.find(t => t.id === 'a').status === 'DONE')
+  e.resume()
+  s = e.snapshot()
+  check('resume: RUNNING + active=true', s.stage === 'RUNNING' && s.active === true)
+  check('resume: 续跑保 DONE', s.tasks.find(t => t.id === 'a').status === 'DONE')
+
+  // 场景 2：STOPPED 不可 start（抛错）
+  e.stop()
+  let threw = false
+  try { e.start() } catch (err) { threw = true }
+  check('STOPPED 不可 start（抛错）', threw)
+
+  // 场景 3：RUNNING 先 stop 再 reset → 全新 PENDING
+  e.resume()
+  e.stop()
+  e.reset()
+  s = e.snapshot()
+  check('stop->reset: 全新 PENDING + active=true', s.stage === 'PENDING' && s.active === true && s.tasks.every(t => t.status === 'PENDING'))
+
+  // 场景 4：PENDING 不可 reset（抛错）
+  threw = false
+  try { e.reset() } catch (err) { threw = true }
+  check('PENDING 不可 reset（抛错）', threw)
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -575,6 +620,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase9()
     // ── 用例 10：HTTP 路由（Iter-13）──
     await runCase10()
+    // ── 用例 11：运行状态机（Iter-16）──
+    await runCase11()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

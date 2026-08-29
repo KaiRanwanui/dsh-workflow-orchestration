@@ -55,6 +55,8 @@
 
 | 今日 | **Iter-15 面板控制 start/stop/reset** | ✅ 完成（Host 路由 /wf/start + /wf/stop + /wf/reset；Client 工具条按钮；**消息注入功能实现**：apiProxy.sessions.prompt 调用格式 rpcId+payload；host v0.7.0 / client v0.4.0） |
 
+| 今日 | **Iter-16 运行状态机（Host）** | ✅ 代码完成（STAGE 补 STOPPED；engine 补 start/stop/resume/reset + setStage(STOPPED) 置 active=false；113 单测通过；host v0.8.0 已构建待重启部署验证） |
+
 ---
 
 ## 已完成工作
@@ -78,6 +80,21 @@
 **验证**：消息注入成功，session 执行工作流 ✅
 
 **提交**：`62a463b` + `2b75f4d` + `2a4023a`
+
+---
+
+### 13. Iter-16: 运行状态机（Host）（✅ 代码完成）
+
+**迭代报告**：`plan/development/iter16-report.md`
+
+**核心交付**：
+- **schema**：STAGE 枚举 `PAUSED` → `STOPPED`（workflow-schema.js + engine 兜底）
+- **engine**：`setStage('STOPPED')` 置 `active=false`；新增运行状态机动作 `start`（仅 PENDING→RUNNING）/ `stop`（仅 RUNNING→STOPPED，保 DONE 进度）/ `resume`（仅 STOPPED→RUNNING，续跑保 DONE）/ `reset`（仅 STOPPED/COMPLETED/FAILED→全新 PENDING；begin 保留 def 供 reset）；非法转移抛错
+- **单测**：用例 11 新增 9 断言（start/stop/resume/reset + STOPPED 不可 start + PENDING 不可 reset）
+
+**验证**：单测 113/113（原 104 + 新增 9）；lib/index.js 构建通过（v0.8.0）；awaiting 部署验证（重启 dsh.service）
+
+**范围**：纯 Host 状态机，未改路由/工具/前端（归 Iter-17/18/20）
 
 ---
 
@@ -225,11 +242,11 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-16: 编排编辑器（计划中）
+### Iter-16~21: 流程控制完整化（生命周期/绑定/状态机/归档）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-16）
+**迭代计划**：`plan/development/development-plan.md`（Iter-16~21）；技术方案 `plan/design/workflow-lifecycle-design.md`
 
-**目标**：Web UI 工作流编辑器（YAML 可视化编辑、参数配置、模板管理）
+**目标**：实例-会话 1:1 永久绑定 + 纯完整性判定（BROKEN）；运行状态机（STOP/RESUME）闭环；完整控制工具/路由；重置自动备份 + 归档管理。拆 6 个 ~1 人天迭代（16 Host 状态机 / 17 Host 绑定+完整性 / 18 Host 工具+路由 / 19 Host 归档 / 20 Client 门控+绑定 / 21 Client 控制+归档+联调）。编排编辑器顺延为 Iter-22。
 
 **前置条件**：Iter-15 面板控制完成 ✅
 
