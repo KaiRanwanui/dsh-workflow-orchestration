@@ -82,7 +82,7 @@ const STAGE = {
    - `POST /wf/stop` → `stage=STOPPED, active=false` ✅（Iter-16 的 active 修正生效）
    - `POST /wf/reset` → `stage=PENDING, active=true, tasks 全 PENDING` ✅
    - `POST /wf/resume` → **404**（无该路由，属 Iter-18）
-3. **说明**：resume（STOPPED→RUNNING 续跑保 DONE）与引擎方法守卫（STOPPED 不可 start / PENDING 不可 reset）当前 UI 到达不了——现行 `/wf/start|stop|reset` 仍直接调 `engine.begin()/setStage('STOPPED')`，未接线到新引擎方法。完整 UI 验证留待 Iter-18（控制工具/路由接线）+ Iter-20/21（Client 按钮）。`/wf/list` 的 `active` 为会话绑定语义，非引擎运行态，故迭代修正不在列表体现。
+3. **说明**：resume（STOPPED→RUNNING 续跑保 DONE）与引擎方法守卫（STOPPED 不可 start / PENDING 不可 reset）当前 UI 到达不了——现行 `/wf/start|stop|reset` 仍直接调 `engine.begin()/setStage('STOPPED')`，未接线到新引擎方法。完整 UI 验证留待 Iter-18（控制工具/路由接线）+ Iter-21/22（Client 按钮）。`/wf/list` 的 `active` 为会话绑定语义，非引擎运行态，故迭代修正不在列表体现。
 
 ## 提交
 

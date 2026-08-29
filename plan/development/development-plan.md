@@ -26,7 +26,7 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收)
-当前:   Iter-19~21(流程控制完整化/生命周期，3 个 ~1 人天迭代)   ← 待开发   （Iter-19 归档存储+管理；编排编辑器顺延为 Iter-22）
+当前:   Iter-19(WebUI↔workflow 配合调优，前后台联动，1 人天 + buffer)   ← 待开发   （其后 Iter-20 归档存储+管理；编排编辑器顺延为 Iter-23）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -49,10 +49,11 @@
 | **16** | 运行状态机（Host） | STAGE 补 STOPPED；engine 补 stop(保进度)/begin/resume(续跑)/active | 单测：PENDING→RUNNING→STOPPED→resume→RUNNING(保DONE)；RUNNING 先 stop 再 reset | ✅ **完成** |
 | **17** | 绑定模型 + 完整性（Host） | 工作区骨架物化；create/adopt-bind；1:1 守卫；派生状态 UNBOUND/BOUND/DONE/BROKEN；整树完整性校验 | 单测：绑定/占用/1:1；骨架缺场/目录损坏/冲突→BROKEN | ✅ **完成** |
 | **18** | 流程控制工具 + 路由 + 孤儿回收（Host） | workflow_create/adopt/start/stop/resume/reset（reset 含归档备份）/wf/* 路由；结构化驱动；BROKEN 拦截；**孤儿识别+回收**（绑定会话离开 live store → stop+解绑+保留进度回池 → 可被新会话 adopt/resume） | 单测+路由：控制全链路 + BROKEN 拦截 + 孤儿闭环 | ✅ **完成** |
-| **19** | 归档存储 + 管理（Host） | archive 移出池；命名 `<ts>_<kind>_<state>`；manifest；list/download/delete + 路由；归档→会话 DONE | 单测：归档闭环 | Iter-18 |
-| **20** | Client 预设门控 + 绑定 UI | 仅 workflow-orchestrator 页签；绑定（新建/采用/锁定）；BROKEN 提示 | 浏览器：新建会话→绑定→BROKEN 展示 | Iter-17 |
-| **21** | Client 控制 + 归档 UI + 联调 | 状态机按钮（start/stop/resume/reset/archive + 确认）；归档 UI（list/download/delete）；与 Host Iter-18/19 联调 | 浏览器：绑定→驱动→停止→续跑→重置→归档 闭环 | Iter-18,19,20 |
-| **22** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-21 |
+| **19** | WebUI↔workflow 配合调优（前后台联动） | create 即绑定（/wf/create 绑 sessionId + Client 传 sessionId）；执行期=RUNNING（workflow_begin 补 start；编排用 workflow_start 驱动已绑定/面板实例）；Client Start/Stop gating（Start 仅 CREATED/PENDING、Stop 仅 RUNNING）；system-prompt 同步 | 端到端：面板建实例→Start 直接 RUNNING→Stop 生效→resume/reset；前后台状态一致 | Iter-18 |
+| **20** | 归档存储 + 管理（Host） | archive 移出池；命名 `<ts>_<kind>_<state>`；manifest；list/download/delete + 路由；归档→会话 DONE | 单测：归档闭环 | Iter-19 |
+| **21** | Client 预设门控 + 绑定 UI | 仅 workflow-orchestrator 页签；绑定（新建/采用/锁定）；BROKEN 提示 | 浏览器：新建会话→绑定→BROKEN 展示 | Iter-17 |
+| **22** | Client 控制 + 归档 UI + 联调 | 状态机按钮（start/stop/resume/reset/archive + 确认）；归档 UI（list/download/delete）；与 Host Iter-20/21 联调 | 浏览器：绑定→驱动→停止→续跑→重置→归档 闭环 | Iter-19,20,21 |
+| **23** | 编排编辑器（体量最大，拆分为多个子迭代顺序推进） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 用编辑器创建并运行工作流 | Iter-22 |
 
 ---
 
@@ -447,7 +448,7 @@ workflow_list → 列出所有实例 + 状态
 
 **验证（可验证）**：单测 125/125（用例 12 新增 12 断言：create-bind/adopt/重复绑定拒绝/已占用拒绝/RUNNING 拒绝/骨架缺场→BROKEN/目录损坏→BROKEN/1:1 冲突→BROKEN/UNBOUND）。
 
-**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-19）、Client（Iter-20）。孤儿回收（解绑/回池/adopt/resume）属 Iter-18；解绑语义=仅删会话（Iter-18 孤儿回收实现）。
+**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-20）、Client（Iter-21）。孤儿回收（解绑/回池/adopt/resume）属 Iter-18；解绑语义=仅删会话（Iter-18 孤儿回收实现）。
 
 ---
 
@@ -469,7 +470,22 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-19: 归档存储 + 管理（Host）
+### Iter-19: WebUI↔workflow 配合调优（前后台联动，1 人天 + buffer）
+
+**背景**：Iter-15~18 打通了 Host 状态机/绑定/控制，但前台（面板/会话）与 Host 的**状态同步与驱动方式**存在联动问题（用户实测发现）：面板建实例未绑定会话、编排执行期 stage 停留 PENDING 导致 Stop 报"仅 RUNNING"、编排用 workflow_begin 重复新建实例等。此类问题跨 Host/system-prompt/Client，集中一个迭代（含 buffer，前台问题预期持续累积）。
+
+**交付**：
+- **create 即绑定**：`POST /wf/create` 路由绑定新实例到请求 `sessionId`（create-bind）；Client `/wf/create` 传入当前 `sessionId`；
+- **执行期=RUNNING**：`workflow_begin` 工具 `begin(parsed)` 后补 `engine.start()` → RUNNING；编排 agent 对已绑定/面板创建的实例改用 **`workflow_start`** 驱动（不再 `workflow_begin` 重复新建）；仅自建新实例时用 `workflow_begin`（同样→RUNNING）；
+- **Client 按钮 gating**：Start 仅 `CREATED/PENDING`；Stop 仅 `RUNNING`（PENDING 为"已重置待启动"，非执行中）；
+- **system-prompt / agent.cordis.yml**：编排模式同步（start 驱动已绑定实例、begin 创建新实例、状态语义）；
+- **预留 buffer**：前后台联动增量问题（session 同步 / 状态刷新 / 实例切换跟随 / 面板 start 后 DAG 即时变化等）。
+
+**验证（可验证）**：端到端——面板建实例（绑定 sessionId）→ Start 直接 RUNNING → Stop 生效 → resume → reset；前后台状态一致（DAG 跟随、按钮 gating 正确）。
+
+---
+
+### Iter-20: 归档存储 + 管理（Host）
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §7
 
@@ -482,7 +498,7 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-20: Client 预设门控 + 绑定 UI
+### Iter-21: Client 预设门控 + 绑定 UI
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §8/§3
 
@@ -495,33 +511,33 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-21: Client 控制 + 归档 UI + 联调
+### Iter-22: Client 控制 + 归档 UI + 联调
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
 
 **交付**：
 - 状态机按钮：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset 确认、归档确认）；
 - 归档管理 UI：list / download / delete；
-- 与 Host Iter-18/19 联调（驱动/停止/续跑/重置/归档闭环）。
+- 与 Host Iter-18/20 联调（驱动/停止/续跑/重置/归档闭环）。
 
 **验证（可验证）**：浏览器闭环——绑定→start 执行 DAG→stop→resume→reset→archive；归档 list/download/delete。**预留联调缓冲**。
 
 ---
 
-### Iter-22: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
+### Iter-23: 编排编辑器（体量最大，启动时拆分为多个子迭代顺序推进）
 
 **范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
 
-**输入**：Iter-21 流程控制闭环（编辑器"保存并启动"依赖控制通道）。
+**输入**：Iter-22 流程控制闭环（编辑器"保存并启动"依赖控制通道）。
 
 **拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
 
 | 子迭代 | 交付 | 验证 |
 |--------|------|------|
-| 22.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 22.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 22.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 22.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+| 23.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 23.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 23.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 23.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
 
 **验证标准**：
 

@@ -109,14 +109,14 @@
 **核心交付**：
 - **工作区骨架物化**：`<workspace>/.workflow-agent/{instances,archive}`（首次挂接 workflow 会话，幂等，`ensureWorkspaceSkeleton`）
 - **绑定语义（按用户确认）**：`create-bind`（新建实例写 `metadata.sessionId=S`）/ `adopt`（仅采用池中 `sessionId==null` 实例）；1:1 守卫（一会话一实例、一实例一会话、绑定后禁再绑）；仅删会话解绑；adopt 拒绝 RUNNING 实例
-- **派生状态**：`UNBOUND/BOUND/DONE/BROKEN`（不侵入 DSH Session，实时从实例+整树派生；DONE 由 archive 声明，Iter-19 起成立）
+- **派生状态**：`UNBOUND/BOUND/DONE/BROKEN`（不侵入 DSH Session，实时从实例+整树派生；DONE 由 archive 声明，Iter-20 起成立）
 - **整树完整性判定**：不设独立绑定指针；骨架缺场/实例目录损坏/1:1 冲突 → BROKEN
 
 **验证**：单测 125/125（用例 12 新增 12 断言）；lib/index.js 构建通过（v0.9.0）；awaiting 部署验证
 
 **设计确认（孤儿判定基准，源码佐证）**：归档≠死亡；孤儿=绑定会话离开 live store（`sessions.get(id)===undefined`）；孤儿回收挪 Iter-18（见 lifecycle-design §9.1）
 
-**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-19）、Client（Iter-20）
+**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-20）、Client（Iter-21）
 
 ---
 
@@ -134,7 +134,7 @@
 
 **决策（用户拍板）**：孤儿触发=惰性扫描；start 须先 adopt；reset 备份在 Iter-18 写。孤儿判定基准经源码佐证（归档≠死亡，lifecycle-design §9.1）
 
-**范围**：未改归档管理/UI（Iter-19）、Client（Iter-20/21）
+**范围**：未改归档管理/UI（Iter-20）、Client（Iter-21/22）
 
 ---
 
@@ -282,13 +282,13 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-16~21: 流程控制完整化（生命周期/绑定/状态机/归档）（计划中）
+### Iter-19~23: 流程控制完整化（生命周期/绑定/状态机/归档/前后台联动）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-16~21）；技术方案 `plan/design/workflow-lifecycle-design.md`
+**迭代计划**：`plan/development/development-plan.md`（Iter-19~23）；技术方案 `plan/design/workflow-lifecycle-design.md`
 
-**目标**：实例-会话 1:1 永久绑定 + 纯完整性判定（BROKEN）；运行状态机（STOP/RESUME）闭环；完整控制工具/路由；重置自动备份 + 归档管理。拆 6 个 ~1 人天迭代（16 Host 状态机 / 17 Host 绑定+完整性 / 18 Host 工具+路由 / 19 Host 归档 / 20 Client 门控+绑定 / 21 Client 控制+归档+联调）。编排编辑器顺延为 Iter-22。
+**目标**：实例-会话 1:1 永久绑定 + 纯完整性判定（BROKEN）；运行状态机（STOP/RESUME）闭环；完整控制工具/路由；重置自动备份 + 归档管理；WebUI↔workflow 配合调优。拆分（19 WebUI↔workflow 配合调优 / 20 Host 归档 / 21 Client 门控+绑定 / 22 Client 控制+归档+联调 / 23 编排编辑器）。编排编辑器顺延为 Iter-23。
 
-**前置条件**：Iter-15 面板控制完成 ✅
+**前置条件**：Iter-18 完成 ✅（计划新增 Iter-19 前后台联动迭代，用户确认）
 
 ---
 

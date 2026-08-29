@@ -78,7 +78,7 @@
 
 1. `systemctl --user restart dsh.service`
 2. 浏览器硬刷新
-3. 面板/工具验证：adopt→start、resume、reset(备份)、孤儿回收在 Client（Iter-20/21）接线后前端可见；Host 侧工具语义需重启后生效
+3. 面板/工具验证：adopt→start、resume、reset(备份)、孤儿回收在 Client（Iter-21/22）接线后前端可见；Host 侧工具语义需重启后生效
 
 ## 提交
 
@@ -86,4 +86,4 @@
 
 ## 下一步
 
-**Iter-19 归档存储 + 管理（Host）**：显式归档（`archive_<state>` 移出池）+ `listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具与路由；归档后会话 BOUND→DONE（技术方案 `workflow-lifecycle-design.md` §7）。
+**Iter-20 归档存储 + 管理（Host）**：显式归档（`archive_<state>` 移出池）+ `listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具与路由；归档后会话 BOUND→DONE（技术方案 `workflow-lifecycle-design.md` §7）。
