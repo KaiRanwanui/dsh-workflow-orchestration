@@ -425,6 +425,20 @@ async function runCase14() {
   check('route create: 返回 sessionId=sess-b', r.code === 200 && r.body.sessionId === 'sess-b', JSON.stringify(r.body).slice(0, 100))
   const meta = JSON.parse(files.get('/ws/c14b/.workflow-agent/instances/' + r.body.instanceId + '/metadata.json'))
   check('route create: metadata.sessionId=sess-b', meta.sessionId === 'sess-b')
+
+  // 5) CONFLICT 自愈：模拟同会话被多实例占用 → 新建实例即恢复（解绑冲突，新建绑定当前）
+  await registry2.beginInstance({ cwd: '/ws/c14b', sessionId: 'sess-x', workflowName: 'dup1', sourceText: 'name: dup1\n', sourcePath: null, params: {} })
+  await registry2.beginInstance({ cwd: '/ws/c14b', sessionId: 'sess-x', workflowName: 'dup2', sourceText: 'name: dup2\n', sourcePath: null, params: {} })
+  let integ2 = await registry2.checkWorkspaceTreeIntegrity('/ws/c14b')
+  check('CONFLICT 前置: 双实例绑 sess-x → BROKEN', integ2.ok === false && /CONFLICT/.test(integ2.reason))
+  const rec = await registry2.createBind('/ws/c14b', 'sess-y', { workflowName: 'fresh', sourceText: 'name: fresh\n', sourcePath: null, params: {} })
+  check('CONFLICT 恢复: 解绑了冲突实例（2 个）', Array.isArray(rec._recoveredConflict) && rec._recoveredConflict.length === 2, JSON.stringify(rec._recoveredConflict))
+  integ2 = await registry2.checkWorkspaceTreeIntegrity('/ws/c14b')
+  check('CONFLICT 恢复: workspace 不再 BROKEN', integ2.ok === true)
+  const stY = await registry2.deriveSessionState('/ws/c14b', 'sess-y')
+  check('CONFLICT 恢复: sess-y BOUND', stY.state === 'BOUND', stY.state)
+  const stX = await registry2.deriveSessionState('/ws/c14b', 'sess-x')
+  check('CONFLICT 恢复: sess-x 回 UNBOUND（冲突实例已解绑）', stX.state === 'UNBOUND', stX.state)
 }
 
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──

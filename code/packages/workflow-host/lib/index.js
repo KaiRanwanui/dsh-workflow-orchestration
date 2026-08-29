@@ -1342,16 +1342,57 @@ function createInstanceRegistry(ctx, deps) {
     return { state: 'UNBOUND' }
   }
 
+  // ── Iter-19：解绑冲突实例（数据自愈，明确告知用户）────────────────────────
+  // CONFLICT（同 sessionId 被多实例声明）不该让整工作区永久 BROKEN。
+  // 策略：不自动"保留最新"（可能非当前会话实例），而是在用户新建实例时，把
+  // 所有涉及冲突绑定的实例解绑（sessionId→null 回 UNBOUND 池），新建实例绑定
+  // 当前会话；调用方须把 unbound 列表明确告知用户。
+  async function recoverBindingConflicts(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return { unbound: [], conflicts: [] }
+    let dirs = []
+    try {
+      const ins = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      dirs = ins.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) { return { unbound: [], conflicts: [] } }
+    const metas = []
+    for (const id of dirs) {
+      const meta = await tryReadMeta(cwd, id)
+      if (meta && meta.sessionId) metas.push({ id, meta })
+    }
+    const cnt = new Map()
+    for (const { meta } of metas) cnt.set(meta.sessionId, (cnt.get(meta.sessionId) || 0) + 1)
+    const conflicted = new Set([...cnt].filter(([s, c]) => c > 1).map(([s]) => s))
+    const unbound = []
+    for (const { id, meta } of metas) {
+      if (conflicted.has(meta.sessionId)) {
+        await patchMeta(cwd, id, { sessionId: null })
+        activeBySession.delete(meta.sessionId)
+        unbound.push(id)
+      }
+    }
+    return { unbound, conflicts: [...conflicted] }
+  }
+
   // ── Iter-17：create-bind（UNBOUND→BOUND，新建实例并写 metadata.sessionId=S）──
   async function createBind(cwd, sessionId, opts) {
     if (!sessionId) throw new Error('createBind 需要 sessionId')
     await ensureWorkspaceSkeleton(cwd)
-    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    let integ = await checkWorkspaceTreeIntegrity(cwd)
+    let recovered = []
+    // Iter-19：CONFLICT 自愈——不解绑"最新"，而是把冲突的旧实例解绑回池，再新建当前绑定
+    if (!integ.ok && /^CONFLICT/.test(integ.reason || '')) {
+      const rec = await recoverBindingConflicts(cwd)
+      recovered = rec.unbound
+      integ = await checkWorkspaceTreeIntegrity(cwd)
+    }
     if (!integ.ok) throw new Error('工作区完整性异常，无法绑定: ' + integ.reason)
     if (integ.instances.some(x => x.meta.sessionId === sessionId)) {
       throw new Error('会话 ' + sessionId + ' 已绑定实例（1:1 守卫，禁再绑）')
     }
-    return beginInstance(Object.assign({}, opts, { cwd, sessionId }))
+    const entry = await beginInstance(Object.assign({}, opts, { cwd, sessionId }))
+    entry._recoveredConflict = recovered // 供 route/tool 明确告知用户
+    return entry
   }
 
   // ── Iter-17：adopt（UNBOUND→BOUND，采用池中 sessionId==null 实例并写 S）──
@@ -1492,6 +1533,7 @@ function createInstanceRegistry(ctx, deps) {
     deriveSessionState,
     createBind,
     adoptInstance,
+    recoverBindingConflicts,
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,
@@ -1863,15 +1905,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (registry && !args.statePath && !args.workspaceRoot) {
           const cwd = sessionCwd(exec)
           if (cwd) {
-            const entry = await registry.beginInstance({
-              cwd,
-              sessionId: registry.sessionIdOf(exec),
-              workflowName: parsed.name,
-              sourceText: src.text,
-              sourcePath: args.workflowPath || null,
-              params,
-            })
-            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+            const entry = await (registry.sessionIdOf(exec)
+              ? registry.createBind(cwd, registry.sessionIdOf(exec), { // Iter-19：1:1 + CONFLICT 自愈
+                workflowName: parsed.name,
+                sourceText: src.text,
+                sourcePath: args.workflowPath || null,
+                params,
+              })
+              : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params }))
+            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId, recoveredConflict: entry._recoveredConflict || [] }
           }
         }
 
@@ -1880,7 +1922,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         b.engine.setError(null)
         const r = await b.storage.save()
         b.engine.setPersist(r)
-        return withInstanceId(b.engine.snapshot(), b)
+        const beginSnap = withInstanceId(b.engine.snapshot(), b)
+        if (b.recoveredConflict && b.recoveredConflict.length > 0) beginSnap.recoveredConflict = b.recoveredConflict
+        return beginSnap
       } catch (error) {
         b.engine.setError(error.message)
         await b.storage.save()
@@ -2027,15 +2071,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const parsed = E_parseWorkflow(src.text)
         if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
-        const entry = await registry.beginInstance({
-          cwd,
-          sessionId: registry.sessionIdOf(exec),
-          workflowName: parsed.name,
-          sourceText: src.text,
-          sourcePath: args.workflowPath || null,
-          params: args.params || {},
-        })
-        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd }
+        const entry = await (registry.sessionIdOf(exec)
+          ? registry.createBind(cwd, registry.sessionIdOf(exec), { // Iter-19：1:1 + CONFLICT 自愈
+            workflowName: parsed.name,
+            sourceText: src.text,
+            sourcePath: args.workflowPath || null,
+            params: args.params || {},
+          })
+          : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: args.params || {} }))
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [] }
       } catch (e) {
         return errPayload(e)
       }
@@ -2586,15 +2630,19 @@ function registerWebRoutes(ctx, registry) {
               writeJson(res, 400, { error: 'invalid workflow definition', workflowBeginErrors: parsed.errors })
               return
             }
-            const entry = await registry.beginInstance({
-              cwd: root,
-              sessionId: args.sessionId || null, // Iter-19：面板创建即绑定当前 sessionId（create-bind），start 无需先 adopt
-              workflowName: parsed.name,
-              sourceText: text,
-              sourcePath: srcPath || null,
-              params: args.params || {},
-            })
-            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root, sessionId: args.sessionId || null })
+            let entry
+            if (args.sessionId) {
+              // Iter-19：走 createBind（1:1 守卫 + CONFLICT 自愈：解绑冲突旧实例→新建当前绑定）
+              entry = await registry.createBind(root, args.sessionId, {
+                workflowName: parsed.name,
+                sourceText: text,
+                sourcePath: srcPath || null,
+                params: args.params || {},
+              })
+            } else {
+              entry = await registry.beginInstance({ cwd: root, sessionId: null, workflowName: parsed.name, sourceText: text, sourcePath: srcPath || null, params: args.params || {} })
+            }
+            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root, sessionId: args.sessionId || null, recoveredConflict: entry._recoveredConflict || [] })
           } catch (e) {
             writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
           }

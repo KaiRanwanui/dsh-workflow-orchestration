@@ -429,16 +429,57 @@ function createInstanceRegistry(ctx, deps) {
     return { state: 'UNBOUND' }
   }
 
+  // ── Iter-19：解绑冲突实例（数据自愈，明确告知用户）────────────────────────
+  // CONFLICT（同 sessionId 被多实例声明）不该让整工作区永久 BROKEN。
+  // 策略：不自动"保留最新"（可能非当前会话实例），而是在用户新建实例时，把
+  // 所有涉及冲突绑定的实例解绑（sessionId→null 回 UNBOUND 池），新建实例绑定
+  // 当前会话；调用方须把 unbound 列表明确告知用户。
+  async function recoverBindingConflicts(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return { unbound: [], conflicts: [] }
+    let dirs = []
+    try {
+      const ins = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      dirs = ins.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) { return { unbound: [], conflicts: [] } }
+    const metas = []
+    for (const id of dirs) {
+      const meta = await tryReadMeta(cwd, id)
+      if (meta && meta.sessionId) metas.push({ id, meta })
+    }
+    const cnt = new Map()
+    for (const { meta } of metas) cnt.set(meta.sessionId, (cnt.get(meta.sessionId) || 0) + 1)
+    const conflicted = new Set([...cnt].filter(([s, c]) => c > 1).map(([s]) => s))
+    const unbound = []
+    for (const { id, meta } of metas) {
+      if (conflicted.has(meta.sessionId)) {
+        await patchMeta(cwd, id, { sessionId: null })
+        activeBySession.delete(meta.sessionId)
+        unbound.push(id)
+      }
+    }
+    return { unbound, conflicts: [...conflicted] }
+  }
+
   // ── Iter-17：create-bind（UNBOUND→BOUND，新建实例并写 metadata.sessionId=S）──
   async function createBind(cwd, sessionId, opts) {
     if (!sessionId) throw new Error('createBind 需要 sessionId')
     await ensureWorkspaceSkeleton(cwd)
-    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    let integ = await checkWorkspaceTreeIntegrity(cwd)
+    let recovered = []
+    // Iter-19：CONFLICT 自愈——不解绑"最新"，而是把冲突的旧实例解绑回池，再新建当前绑定
+    if (!integ.ok && /^CONFLICT/.test(integ.reason || '')) {
+      const rec = await recoverBindingConflicts(cwd)
+      recovered = rec.unbound
+      integ = await checkWorkspaceTreeIntegrity(cwd)
+    }
     if (!integ.ok) throw new Error('工作区完整性异常，无法绑定: ' + integ.reason)
     if (integ.instances.some(x => x.meta.sessionId === sessionId)) {
       throw new Error('会话 ' + sessionId + ' 已绑定实例（1:1 守卫，禁再绑）')
     }
-    return beginInstance(Object.assign({}, opts, { cwd, sessionId }))
+    const entry = await beginInstance(Object.assign({}, opts, { cwd, sessionId }))
+    entry._recoveredConflict = recovered // 供 route/tool 明确告知用户
+    return entry
   }
 
   // ── Iter-17：adopt（UNBOUND→BOUND，采用池中 sessionId==null 实例并写 S）──
@@ -579,6 +620,7 @@ function createInstanceRegistry(ctx, deps) {
     deriveSessionState,
     createBind,
     adoptInstance,
+    recoverBindingConflicts,
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,

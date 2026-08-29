@@ -351,15 +351,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (registry && !args.statePath && !args.workspaceRoot) {
           const cwd = sessionCwd(exec)
           if (cwd) {
-            const entry = await registry.beginInstance({
-              cwd,
-              sessionId: registry.sessionIdOf(exec),
-              workflowName: parsed.name,
-              sourceText: src.text,
-              sourcePath: args.workflowPath || null,
-              params,
-            })
-            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+            const entry = await (registry.sessionIdOf(exec)
+              ? registry.createBind(cwd, registry.sessionIdOf(exec), { // Iter-19：1:1 + CONFLICT 自愈
+                workflowName: parsed.name,
+                sourceText: src.text,
+                sourcePath: args.workflowPath || null,
+                params,
+              })
+              : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params }))
+            b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId, recoveredConflict: entry._recoveredConflict || [] }
           }
         }
 
@@ -368,7 +368,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         b.engine.setError(null)
         const r = await b.storage.save()
         b.engine.setPersist(r)
-        return withInstanceId(b.engine.snapshot(), b)
+        const beginSnap = withInstanceId(b.engine.snapshot(), b)
+        if (b.recoveredConflict && b.recoveredConflict.length > 0) beginSnap.recoveredConflict = b.recoveredConflict
+        return beginSnap
       } catch (error) {
         b.engine.setError(error.message)
         await b.storage.save()
@@ -515,15 +517,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const parsed = E_parseWorkflow(src.text)
         if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
-        const entry = await registry.beginInstance({
-          cwd,
-          sessionId: registry.sessionIdOf(exec),
-          workflowName: parsed.name,
-          sourceText: src.text,
-          sourcePath: args.workflowPath || null,
-          params: args.params || {},
-        })
-        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd }
+        const entry = await (registry.sessionIdOf(exec)
+          ? registry.createBind(cwd, registry.sessionIdOf(exec), { // Iter-19：1:1 + CONFLICT 自愈
+            workflowName: parsed.name,
+            sourceText: src.text,
+            sourcePath: args.workflowPath || null,
+            params: args.params || {},
+          })
+          : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: args.params || {} }))
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [] }
       } catch (e) {
         return errPayload(e)
       }

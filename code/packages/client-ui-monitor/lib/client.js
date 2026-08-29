@@ -27,6 +27,8 @@ function register(ctx) {
   let pollingActive = false, wfRoot = '', wfLoaded = false
   // Iter-12：cwd 跟随 + 实例列表（activeRoot=当前轮询锚点；wfInstanceId=面板选择）
   let activeRoot = null, wfInstances = [], wfInstanceId = ''
+  // Iter-19：当前会话派生状态（/wf/list 返回；create 按钮 gating 用）
+  let wfSessionState = null
   // Iter-13：列表加载器引用（面板创建成功后即时刷新）
   let wfListLoader = null
 
@@ -59,6 +61,7 @@ function register(ctx) {
         const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot))
         const r = await resp.json()
         wfInstances = r && Array.isArray(r.instances) ? r.instances : []
+        wfSessionState = r && r.sessionState ? r.sessionState : null
         listeners.forEach(fn => { try { fn() } catch (e2) {} })
       } catch (e) {
         // 静默失败，下次轮询重试
@@ -604,6 +607,10 @@ function register(ctx) {
               if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
               setFormOpen(false)
               if (typeof wfListLoader === 'function') wfListLoader()
+              // Iter-19：CONFLICT 自愈告知——新建时自动解绑了冲突旧实例
+              if (r && Array.isArray(r.recoveredConflict) && r.recoveredConflict.length > 0) {
+                alert('检测到工作区存在实例绑定冲突（同一会话被多实例占用）。已自动解绑冲突实例 [' + r.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。如非预期请在实例列表查看。')
+              }
             } catch (e) {
               setFormErr(e && e.message ? e.message : String(e))
             } finally {
@@ -698,13 +705,15 @@ function register(ctx) {
             }, '↻ Reset'))
           }
 
-          const plusBtn = React.createElement('button', {
+          // Iter-19：创建按钮仅当会话 UNBOUND（无绑定实例）时显示
+          const canCreate = !wfSessionState || wfSessionState.state === 'UNBOUND'
+          const plusBtn = canCreate ? React.createElement('button', {
             key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
             style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
-          }, '+')
+          }, '+') : null
           const toolbar = React.createElement('div', {
             key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, [...controlBtns, plusBtn])
+          }, [...controlBtns, ...(plusBtn ? [plusBtn] : [])])
 
           const formOverlay = !formOpen ? null : React.createElement('div', {
             style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
@@ -757,15 +766,18 @@ function register(ctx) {
           }
 
           // ── Iter-12：实例切换条（>1 个实例才显示；空选=最新实例）────────
+          // Iter-19：仅展示未绑定（sessionId==null）实例作为可选池；已绑定实例随状态/DAG 呈现，
+          //          不作为"可切换/可选"项。
           const selectInstance = (id) => {
             wfInstanceId = id
             latest = null
             listeners.forEach(fn => { try { fn() } catch (e2) {} })
           }
-          const defaultSel = wfInstanceId || (wfInstances[0] ? wfInstances[0].instanceId : '')
-          const instBar = wfInstances.length > 1 ? React.createElement('div', {
+          const poolInstances = wfInstances.filter(it => it.sessionId == null)
+          const defaultSel = wfInstanceId || (poolInstances[0] ? poolInstances[0].instanceId : '')
+          const instBar = poolInstances.length > 1 ? React.createElement('div', {
             key: 'ib', style: { display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px 0', alignItems: 'center' }
-          }, wfInstances.map(it => {
+          }, poolInstances.map(it => {
             const isSel = defaultSel === it.instanceId
             return React.createElement('button', {
               key: it.instanceId,
