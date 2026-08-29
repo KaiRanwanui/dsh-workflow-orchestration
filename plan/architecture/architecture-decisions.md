@@ -201,6 +201,39 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 
 ---
 
+## 7. 工作流实例生命周期：绑定 / 状态机 / 完整性 / 归档（决策）
+
+> 完整设计见 `plan/design/workflow-lifecycle-design.md`；迭代落地在 development-plan.md Iter-16。
+
+### 7.1 数据模型与绑定
+- **workspace 与 Session = 1:N**：workspace 是共享存储单元（会话创建时显式指定的 `cwd` 即工作区根），同 workspace 的会话共享实例池。
+- **Session 与 workflow 实例 = 1:1 永久绑定**：绑定后禁再绑/切换（除非会话删除；删除时若 RUNNING 先 STOP，再解绑回 UNBOUND 池）。
+- **权威在实例侧**：绑定真相 = `instances/<id>/metadata.json.sessionId`；运行态 = `state.json`；归档态 = 归档 metadata。
+- **Session 状态一律派生**，不侵入 DSH Session。派生：BOUND（一结构完好实例声明 S）/ DONE（归档声明 S）/ UNBOUND（树自洽、无声明）/ BROKEN（整树缺场/退化/冲突）。
+
+### 7.2 纯完整性判定（重点修订，取代 Iter-15 的脆弱自由文本驱动）
+- **不设独立"绑定指针"**（避免一份可被一起删除的记录成为判断依据）。
+- 判断标准是 **`.workflow-agent` 整棵树完整性**而非某个文件记录：工作区首次挂接会话即物化骨架 `instances/` + `archive/`；骨架在场且自洽 → 按导出状态判；骨架缺场/退化/冲突 → BROKEN（需新建会话，不静默重建）。
+- 沿用"文件即状态"：删记录后重读文件即重新派生，无内存态不一致；运行中损坏会报错，重启 DSH / 刷新浏览器触发内存重载，按简单处理。
+
+### 7.3 运行状态机
+- 状态：`PENDING | RUNNING | STOPPED | COMPLETED | FAILED`；STAGE 枚举补 `STOPPED`。
+- start 仅 PENDING（全新 begin）；resume 仅 STOPPED（hydrate 续跑保进度）；stop 仅 RUNNING（保进度、active=false）。
+- reset/archive 仅 STOPPED/COMPLETED/FAILED；**PENDING 不支持 reset/archive**；RUNNING 须先 stop（优雅释放资源）。reset 到 PENDING（从头跑）。
+
+### 7.4 重置与归档
+- **重置**：确认框 → 先写 `reset_<state>` 归档备份 → 清 run 态 → 全新 begin。
+- **归档**：仅 STOPPED/COMPLETED/FAILED 可归档 → 实例目录**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（`kind`=reset|archive，`state`=归档时运行态，便于用户判断是否删归档）；配套 `manifest.json`；归档后会话 BOUND→DONE（不再执行工作流，新执行须新建会话）。
+- 归档管理：人工 copy，或归档 UI（list / download(zip) / delete）。
+
+### 7.5 预设门控
+- 仅 `workflow-orchestration` preset 会话显示 workflow 页签 / DAG / 控制按钮（Client 按当前 session 的 preset 类型门控）。
+
+### 7.6 待探针确认
+1. 会话 preset 类型字段路径（页签门控）。
+2. 会话删除检测（主动 stop+解绑；无事件则惰性孤儿清理）。
+3. 会话存活判定（`sessions.list`）。
+
 ## 总结
 
 ### 架构层次
