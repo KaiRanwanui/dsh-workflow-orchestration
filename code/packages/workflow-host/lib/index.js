@@ -940,6 +940,11 @@ function instanceDirPath(cwd, instanceId) {
   return instancesRootPath(cwd) + '/' + instanceId
 }
 
+// Iter-17：归档库路径（<cwd>/.workflow-agent/archive；移出池只读，Iter-19 起使用）
+function archiveRootPath(cwd) {
+  return (normalizeDir(cwd) + '/.workflow-agent/archive').replace(/\/+/g, '/')
+}
+
 // ── metadata.json 组装（lossless JSON；sessionId 缺省 null 而非 undefined）──
 function composeMetadata(m) {
   return {
@@ -982,6 +987,7 @@ function createInstanceRegistry(ctx, deps) {
     if (!fs) throw new Error('fs service unavailable')
     const cwd = normalizeDir(opts.cwd)
     if (!cwd) throw new Error('session cwd 未提供，无法创建实例目录')
+    await ensureWorkspaceSkeleton(cwd) // Iter-17：首次挂接物化骨架（instances/ + archive/）
     const workflowName = opts.workflowName || 'wf'
     const instanceId = slugifyName(workflowName) + '-' + makeUuid8()
     const dir = instanceDirPath(cwd, instanceId)
@@ -1191,6 +1197,161 @@ function createInstanceRegistry(ctx, deps) {
     }
   }
 
+  // ── Iter-17：工作区骨架物化（instances/ + archive/）────────────────────────
+  // 首次挂接 workflow 会话时调用；幂等。落 .gitkeep 标记，mock/真实 fs 均物化目录
+  // （fs.writeText 自动建父目录）。骨架在场是完整性判定（checkWorkspaceTreeIntegrity）
+  // 的前置，但物化本身不判定缺场（缺场=删除后异常，由完整性检查单独识别根异常）。
+  async function ensureWorkspaceSkeleton(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    const root = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
+    await fs.writeText(await fs.resolve(root + '/instances/.gitkeep'), '')
+    await fs.writeText(await fs.resolve(root + '/archive/.gitkeep'), '')
+    return root
+  }
+
+  // 读取某实例的有效 metadata（能解析且 instanceId 匹配目录名；否则视为损坏）
+  async function tryReadMeta(cwd, instanceId) {
+    const fs = ctx.get('fs')
+    const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
+    try {
+      const meta = JSON.parse(await fs.readText(await fs.resolve(p)))
+      if (!meta || meta.instanceId !== instanceId) return null
+      return meta
+    } catch (e) {
+      return null
+    }
+  }
+
+  // 扫描 archive/<instanceId>/<ts>_<kind>_<state>/metadata.json 是否含绑定 sessionId
+  // （Iter-19 起产生归档；DONE 派生依赖。当前无归档时恒 false）。
+  async function archiveDeclaresSession(cwd, sessionId) {
+    const fs = ctx.get('fs')
+    let instanceDirs = []
+    try {
+      const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
+      instanceDirs = ar.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      return false // 无 archive
+    }
+    for (const iid of instanceDirs) {
+      let subDirs = []
+      try {
+        const subs = await fs.listDir(await fs.resolve(archiveRootPath(cwd) + '/' + iid))
+        subDirs = subs.filter(en => en.type === 'directory').map(en => en.name)
+      } catch (e) { continue }
+      for (const sub of subDirs) {
+        try {
+          const m = JSON.parse(await fs.readText(await fs.resolve(archiveRootPath(cwd) + '/' + iid + '/' + sub + '/metadata.json')))
+          if (m && m.sessionId === sessionId) return true
+        } catch (e) { /* skip */ }
+      }
+    }
+    return false
+  }
+
+  // ── Iter-17：整树完整性判定（纯完整性，不设独立绑定指针）────────────────
+  // 判定标准 = .workflow-agent 整树：在场且自洽 → ok；骨架缺场 / 退化（实例目录
+  // 损坏）/ 冲突（1:1 违反）→ not ok。返回 {ok, reason?, instances, archives}。
+  async function checkWorkspaceTreeIntegrity(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return { ok: false, reason: 'fs-unavailable' }
+    const agentRoot = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
+    let children = []
+    try {
+      children = await fs.listDir(await fs.resolve(agentRoot))
+    } catch (e) {
+      // 未物化（更从未运行过）→ 空，非 BROKEN（首挂接由 ensureWorkspaceSkeleton 物化）
+      return { ok: true, instances: [], archives: [] }
+    }
+    const dirs = children.filter(c => c.type === 'directory').map(c => c.name)
+    // 骨架在场校验：agentRoot 有内容时必须含 instances/（archive/ 由物化补齐）
+    if (children.length > 0 && !dirs.includes('instances')) {
+      return { ok: false, reason: 'SKELETON_MISSING: 骨架缺场（缺 instances/）' }
+    }
+    let instanceDirs = []
+    try {
+      const ins = await fs.listDir(await fs.resolve(instancesRootPath(cwd)))
+      instanceDirs = ins.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      instanceDirs = []
+    }
+    const seenSession = new Map() // sessionId -> instanceId
+    const instances = []
+    for (const id of instanceDirs) {
+      const meta = await tryReadMeta(cwd, id)
+      if (!meta) return { ok: false, reason: 'CORRUPT: 实例目录损坏/' + id }
+      instances.push({ id, meta })
+      if (meta.sessionId) {
+        if (seenSession.has(meta.sessionId)) {
+          return { ok: false, reason: 'CONFLICT: 会话被多实例占用/' + meta.sessionId }
+        }
+        seenSession.set(meta.sessionId, id)
+      }
+    }
+    let archives = []
+    try {
+      const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
+      archives = ar.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) { archives = [] }
+    return { ok: true, instances, archives }
+  }
+
+  // ── Iter-17：派生会话状态（UNBOUND/BOUND/DONE/BROKEN）─────────────────────
+  // 权威在实例侧；会话状态不定存，实时从实例+整树派生，不侵入 DSH Session。
+  // BOUND=恰好一个结构完好实例声明 S；DONE=archive 声明 S；UNBOUND=无声明；
+  // BROKEN=整树损坏/冲突。
+  async function deriveSessionState(cwd, sessionId) {
+    await ensureWorkspaceSkeleton(cwd)
+    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    if (!integ.ok) return { state: 'BROKEN', reason: integ.reason }
+    const bound = integ.instances.filter(x => x.meta.sessionId === sessionId)
+    if (bound.length === 1) return { state: 'BOUND', instanceId: bound[0].id }
+    if (bound.length > 1) return { state: 'BROKEN', reason: 'CONFLICT: 会话被多实例占用/' + sessionId }
+    if (await archiveDeclaresSession(cwd, sessionId)) return { state: 'DONE' }
+    return { state: 'UNBOUND' }
+  }
+
+  // ── Iter-17：create-bind（UNBOUND→BOUND，新建实例并写 metadata.sessionId=S）──
+  async function createBind(cwd, sessionId, opts) {
+    if (!sessionId) throw new Error('createBind 需要 sessionId')
+    await ensureWorkspaceSkeleton(cwd)
+    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    if (!integ.ok) throw new Error('工作区完整性异常，无法绑定: ' + integ.reason)
+    if (integ.instances.some(x => x.meta.sessionId === sessionId)) {
+      throw new Error('会话 ' + sessionId + ' 已绑定实例（1:1 守卫，禁再绑）')
+    }
+    return beginInstance(Object.assign({}, opts, { cwd, sessionId }))
+  }
+
+  // ── Iter-17：adopt（UNBOUND→BOUND，采用池中 sessionId==null 实例并写 S）──
+  async function adoptInstance(cwd, sessionId, instanceId) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    if (!sessionId) throw new Error('adopt 需要 sessionId')
+    await ensureWorkspaceSkeleton(cwd)
+    const integ = await checkWorkspaceTreeIntegrity(cwd)
+    if (!integ.ok) throw new Error('工作区完整性异常，无法采用: ' + integ.reason)
+    if (integ.instances.some(x => x.meta.sessionId === sessionId)) {
+      throw new Error('会话 ' + sessionId + ' 已绑定实例（1:1 守卫，禁再绑）')
+    }
+    const target = integ.instances.find(x => x.id === instanceId)
+    if (!target) throw new Error('实例不存在: ' + instanceId)
+    if (target.meta.sessionId) {
+      throw new Error('实例 ' + instanceId + ' 已被会话占用（sessionId=' + target.meta.sessionId + '），不可采用')
+    }
+    // 运行态守卫：RUNNING 实例须先 stop 再采用（避免两会话驱动同一 RUNNING 实例）
+    let stage = null
+    try {
+      const st = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, instanceId) + '/state.json')))
+      if (st && st.workflow) stage = st.stage || null
+    } catch (e) { /* 无 state */ }
+    if (stage === 'RUNNING') throw new Error('实例 ' + instanceId + ' 运行中，先 stop 再采用')
+    await patchMeta(cwd, instanceId, { sessionId })
+    activeBySession.set(sessionId, instanceId)
+    return loadEntry(cwd, instanceId, { active: true })
+  }
+
   return {
     beginInstance,
     forSession,
@@ -1199,6 +1360,11 @@ function createInstanceRegistry(ctx, deps) {
     resolveEntry,
     listInstances,
     patchMeta,
+    ensureWorkspaceSkeleton,
+    checkWorkspaceTreeIntegrity,
+    deriveSessionState,
+    createBind,
+    adoptInstance,
     get,
     activeIdFor,
     sessionIdOf,
@@ -1209,7 +1375,7 @@ function createInstanceRegistry(ctx, deps) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, composeMetadata, createInstanceRegistry }
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, composeMetadata, createInstanceRegistry }
 }
 
 // ---- module: tools-preset ----

@@ -55,7 +55,9 @@
 
 | 今日 | **Iter-15 面板控制 start/stop/reset** | ✅ 完成（Host 路由 /wf/start + /wf/stop + /wf/reset；Client 工具条按钮；**消息注入功能实现**：apiProxy.sessions.prompt 调用格式 rpcId+payload；host v0.7.0 / client v0.4.0） |
 
-| 今日 | **Iter-16 运行状态机（Host）** | ✅ 代码完成（STAGE 补 STOPPED；engine 补 start/stop/resume/reset + setStage(STOPPED) 置 active=false；113 单测通过；host v0.8.0 已构建待重启部署验证） |
+| 今日 | **Iter-16 运行状态机（Host）** | ✅ 完成（STAGE 补 STOPPED；engine 补 start/stop/resume/reset + setStage(STOPPED) 置 active=false；113 单测通过；host v0.8.0；已重启部署验证 UI 可见部分） |
+
+| 今日 | **Iter-17 绑定模型 + 完整性（Host）** | ✅ 完成（工作区骨架物化 instances/+archive/；create-bind/adopt + 1:1 守卫；派生 UNBOUND/BOUND/DONE/BROKEN；整树完整性判定；125 单测通过；host v0.9.0 待重启部署） |
 
 ---
 
@@ -95,6 +97,24 @@
 **验证**：单测 113/113（原 104 + 新增 9）；lib/index.js 构建通过（v0.8.0）；awaiting 部署验证（重启 dsh.service）
 
 **范围**：纯 Host 状态机，未改路由/工具/前端（归 Iter-17/18/20）
+
+---
+
+### 14. Iter-17: 绑定模型 + 完整性（Host）（✅ 完成）
+
+**迭代报告**：`plan/development/iter17-report.md`
+
+**核心交付**：
+- **工作区骨架物化**：`<workspace>/.workflow-agent/{instances,archive}`（首次挂接 workflow 会话，幂等，`ensureWorkspaceSkeleton`）
+- **绑定语义（按用户确认）**：`create-bind`（新建实例写 `metadata.sessionId=S`）/ `adopt`（仅采用池中 `sessionId==null` 实例）；1:1 守卫（一会话一实例、一实例一会话、绑定后禁再绑）；仅删会话解绑；adopt 拒绝 RUNNING 实例
+- **派生状态**：`UNBOUND/BOUND/DONE/BROKEN`（不侵入 DSH Session，实时从实例+整树派生；DONE 由 archive 声明，Iter-19 起成立）
+- **整树完整性判定**：不设独立绑定指针；骨架缺场/实例目录损坏/1:1 冲突 → BROKEN
+
+**验证**：单测 125/125（用例 12 新增 12 断言）；lib/index.js 构建通过（v0.9.0）；awaiting 部署验证
+
+**设计确认（孤儿判定基准，源码佐证）**：归档≠死亡；孤儿=绑定会话离开 live store（`sessions.get(id)===undefined`）；孤儿回收挪 Iter-18（见 lifecycle-design §9.1）
+
+**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-19）、Client（Iter-20）
 
 ---
 

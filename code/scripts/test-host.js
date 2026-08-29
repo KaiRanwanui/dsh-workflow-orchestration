@@ -243,6 +243,75 @@ async function runCase11() {
   check('PENDING 不可 reset（抛错）', threw)
 }
 
+// ── 用例 12：绑定模型 + 完整性（Iter-17：create-bind/adopt + 1:1 + 派生状态 + BROKEN）──
+async function runCase12() {
+  console.log('［用例 12］绑定模型 + 完整性 — create-bind/adopt/1:1 + 派生状态 + BROKEN')
+  const deps = { createWorkflowEngine, createWorkflowStorage }
+  const cwd = '/ws/bind'
+
+  // 场景 1：create-bind（新建实例并绑 → BOUND）
+  const { reg, fs } = (() => { const m = makeMockFs(); return { reg: createInstanceRegistry({ get() { return m.fs } }, deps), fs: m.fs } })()
+  const a = await reg.createBind(cwd, 'sess-a', { workflowName: 'wfA', sourceText: 'name: wfA\n', sourcePath: null, params: {} })
+  check('create-bind: 新建实例 metadata.sessionId=sess-a', a.meta.sessionId === 'sess-a')
+  let st = await reg.deriveSessionState(cwd, 'sess-a')
+  check('create-bind: 派生 BOUND', st.state === 'BOUND' && st.instanceId === a.instanceId)
+
+  // 场景 2：重复绑定拒绝（1:1 一会话一实例）
+  let threw = false
+  try { await reg.createBind(cwd, 'sess-a', { workflowName: 'wfB', sourceText: 'name: wfB\n', sourcePath: null, params: {} }) } catch (e) { threw = true }
+  check('create-bind: 会话已绑定 → 拒绝(1:1)', threw)
+
+  // 场景 3：adopt（采用 sessionId==null 实例 → BOUND；已占用实例不可再 adopt）
+  const orphan = await reg.beginInstance({ cwd, sessionId: null, workflowName: 'wfPool', sourceText: 'name: wfPool\n', sourcePath: null, params: {} })
+  check('adopt 前置: 池实例 sessionId=null', orphan.meta.sessionId === null)
+  const adopted = await reg.adoptInstance(cwd, 'sess-b', orphan.instanceId)
+  check('adopt: 绑定后 metadata.sessionId=sess-b', adopted.meta.sessionId === 'sess-b' && adopted.instanceId === orphan.instanceId)
+  st = await reg.deriveSessionState(cwd, 'sess-b')
+  check('adopt: 派生 BOUND', st.state === 'BOUND')
+  threw = false
+  try { await reg.adoptInstance(cwd, 'sess-c', orphan.instanceId) } catch (e) { threw = true }
+  check('adopt: 已占用实例 → 拒绝', threw)
+
+  // 场景 4：骨架缺场 → BROKEN（agentRoot 有内容但缺 instances/，旧布局残留）
+  const bad = makeMockFs()
+  await bad.fs.writeText({ path: '/ws/bad/.workflow-agent/state.json' }, '{}\n')
+  const badReg = createInstanceRegistry({ get() { return bad.fs } }, deps)
+  const integ = await badReg.checkWorkspaceTreeIntegrity('/ws/bad') // 直接测完整性（不物化）
+  check('骨架缺场: checkWorkspaceTreeIntegrity → not ok', integ.ok === false && /instances/.test(integ.reason))
+
+  // 场景 5：实例目录损坏 → BROKEN
+  const cor = makeMockFs()
+  const corReg = createInstanceRegistry({ get() { return cor.fs } }, deps)
+  await corReg.ensureWorkspaceSkeleton('/ws/corrupt')
+  await cor.fs.writeText({ path: '/ws/corrupt/.workflow-agent/instances/broken1/metadata.json' }, '{bad json\n')
+  st = await corReg.deriveSessionState('/ws/corrupt', 'sess-x')
+  check('实例目录损坏: derive → BROKEN', st.state === 'BROKEN' && /CORRUPT/.test(st.reason))
+
+  // 场景 6：1:1 冲突（两会话同 S）→ BROKEN
+  const bip = makeMockFs()
+  const bipReg = createInstanceRegistry({ get() { return bip.fs } }, deps)
+  await bipReg.ensureWorkspaceSkeleton('/ws/conflict')
+  await bip.fs.writeText({ path: '/ws/conflict/.workflow-agent/instances/i1/metadata.json' }, JSON.stringify({ instanceId: 'i1', workflowName: 'w', sessionId: 'sess-conflict' }))
+  await bip.fs.writeText({ path: '/ws/conflict/.workflow-agent/instances/i2/metadata.json' }, JSON.stringify({ instanceId: 'i2', workflowName: 'w', sessionId: 'sess-conflict' }))
+  st = await bipReg.deriveSessionState('/ws/conflict', 'sess-conflict')
+  check('1:1 冲突: derive → BROKEN', st.state === 'BROKEN' && /CONFLICT/.test(st.reason))
+
+  // 场景 7：adopt RUNNING 实例 → 拒绝（两会话不得驱动同一 RUNNING 实例）
+  const run = makeMockFs()
+  const runReg = createInstanceRegistry({ get() { return run.fs } }, deps)
+  const running = await runReg.beginInstance({ cwd: '/ws/run', sessionId: null, workflowName: 'wfRun', sourceText: 'name: wfRun\n', sourcePath: null, params: {} })
+  running.engine.begin({ name: 'wfRun', version: '1', description: null, params: {}, tasks: [{ id: 'a', name: 'A', type: 'llm-task', processor: '/x', outputs: [], gate: null }] })
+  running.engine.setStage('RUNNING')
+  await running.storage.save()
+  threw = false
+  try { await runReg.adoptInstance('/ws/run', 'sess-run', running.instanceId) } catch (e) { threw = true }
+  check('adopt: RUNNING 实例 → 拒绝', threw)
+
+  // 场景 8：未绑定会话 → UNBOUND（骨架在场自洽、无 BOUND/DONE 声明）
+  st = await reg.deriveSessionState(cwd, 'sess-zzz')
+  check('未绑定会话: derive → UNBOUND', st.state === 'UNBOUND')
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -622,6 +691,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase10()
     // ── 用例 11：运行状态机（Iter-16）──
     await runCase11()
+    // ── 用例 12：绑定模型 + 完整性（Iter-17）──
+    await runCase12()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
