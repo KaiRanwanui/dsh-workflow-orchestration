@@ -21,8 +21,9 @@ export function register(ctx) {
   let wfSessionActive = false
   // Iter-21(R3)：会话切换检测（activeRoot 相同也需重置并重拉，消除状态残留）
   let wfLastSessionId = ''
-  // Iter-21：Stop/Resume 冷却——agent 处理指令需时间，防连点导致多条消息混淆 LLM
-  let wfStopCooldown = 0, wfResumeCooldown = 0
+  // Iter-21：控制中间态——Start/Stop/Resume 点击后进入 Starting/Stopping/Resuming（按钮禁用显示对应文案），
+  // 直到 agent 真正把实例切到目标 stage 才清掉、DAG 才切换。防 LLM 等待期重复点击。
+  let wfPendingCmd = null, wfPendingAt = 0
   // Iter-21(R3)：稳定组件类型——session 更新（subagent 创建等）会频繁触发 factory 重渲染，
   // 若 WorkflowView 每次重定义会 remount（闪烁 + 局部状态丢失）。用模块级缓存一次。
   let WfComponent = null
@@ -669,88 +670,120 @@ export function register(ctx) {
           const boundInstance = wfInstances.find(it => it.sessionId === wfSessionId)
           const currentInstanceId = (snap && snap.instanceId) || (boundInstance && boundInstance.instanceId) || ''
           const sessionBound = !!(wfSessionState && wfSessionState.state === 'BOUND')
+
+          // Iter-21：控制中间态终止——stage 已从 origin 移开（操作完成）或超时兜底
+          if (wfPendingCmd && currentStage) {
+            const originOk = wfPendingCmd === 'start'
+              ? (currentStage === 'CREATED' || currentStage === 'PENDING')
+              : wfPendingCmd === 'stop' ? (currentStage === 'RUNNING')
+              : (currentStage === 'STOPPED')
+            if (!originOk || (wfPendingAt && Date.now() - wfPendingAt > 30000)) {
+              wfPendingCmd = null; wfPendingAt = 0
+            }
+          }
           
           // Start 按钮（仅本会话已绑定实例（BOUND）且为可启动态时显示）
           if (sessionBound && (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING')) {
-            controlBtns.push(React.createElement('button', {
-              key: 'start', title: '启动实例',
-              onClick: async () => {
-                if (!currentInstanceId || !activeRoot) return
-                try {
-                  const resp = await fetch('/wf/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                      workspaceRoot: activeRoot, 
-                      instanceId: currentInstanceId,
-                      sessionId: sessionId, // 传递当前 session ID
-                      parentSessionId: parentSessionId // 传递 parent session ID（用于 subagent session）
+            if (wfPendingCmd === 'start') {
+              // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"启动中…"
+              controlBtns.push(React.createElement('button', {
+                key: 'start', title: '启动中…', disabled: true,
+                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+              }, '启动中…'))
+            } else {
+              controlBtns.push(React.createElement('button', {
+                key: 'start', title: '启动实例',
+                onClick: async () => {
+                  if (!currentInstanceId || !activeRoot) return
+                  wfPendingCmd = 'start'; wfPendingAt = Date.now()
+                  try {
+                    const resp = await fetch('/wf/start', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ 
+                        workspaceRoot: activeRoot, 
+                        instanceId: currentInstanceId,
+                        sessionId: sessionId, // 传递当前 session ID
+                        parentSessionId: parentSessionId // 传递 parent session ID（用于 subagent session）
+                      })
                     })
-                  })
-                  if (!resp.ok) {
-                    const err = await resp.json()
-                    alert('启动失败: ' + (err.error || '未知错误'))
+                    if (!resp.ok) {
+                      const err = await resp.json()
+                      alert('启动失败: ' + (err.error || '未知错误'))
+                    }
+                  } catch (e) {
+                    alert('启动失败: ' + e.message)
                   }
-                } catch (e) {
-                  alert('启动失败: ' + e.message)
-                }
-              },
-              style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-            }, '▶ Start'))
+                },
+                style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+              }, '▶ Start'))
+            }
           }
           
           // Stop 按钮（仅 RUNNING 时显示；PENDING 属待启动，非执行中）
           if (sessionBound && currentStage === 'RUNNING') {
-            controlBtns.push(React.createElement('button', {
-              key: 'stop', title: '停止实例',
-              onClick: async () => {
-                if (!currentInstanceId || !activeRoot) return
-                const now = Date.now()
-                if (now < wfStopCooldown) return // 冷却，防连点→多条消息混淆 agent
-                wfStopCooldown = now + 4000
-                try {
-                  const resp = await fetch('/wf/stop', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
-                  })
-                  if (!resp.ok) {
-                    const err = await resp.json()
-                    alert('停止失败: ' + (err.error || '未知错误'))
+            if (wfPendingCmd === 'stop') {
+              // Iter-21：中间态——agent 尚未把实例切到 STOPPED，禁用并显示"停止中…"
+              controlBtns.push(React.createElement('button', {
+                key: 'stop', title: '停止中…', disabled: true,
+                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+              }, '停止中…'))
+            } else {
+              controlBtns.push(React.createElement('button', {
+                key: 'stop', title: '停止实例',
+                onClick: async () => {
+                  if (!currentInstanceId || !activeRoot) return
+                  wfPendingCmd = 'stop'; wfPendingAt = Date.now()
+                  try {
+                    const resp = await fetch('/wf/stop', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
+                    })
+                    if (!resp.ok) {
+                      const err = await resp.json()
+                      alert('停止失败: ' + (err.error || '未知错误'))
+                    }
+                  } catch (e) {
+                    alert('停止失败: ' + e.message)
                   }
-                } catch (e) {
-                  alert('停止失败: ' + e.message)
-                }
-              },
-              style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-            }, '⏹ Stop'))
+                },
+                style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+              }, '⏹ Stop'))
+            }
           }
           
           // Iter-21(R5)：Resume 按钮（STOPPED 时显示；续跑保 DONE）
           if (sessionBound && currentStage === 'STOPPED') {
-            controlBtns.push(React.createElement('button', {
-              key: 'resume', title: '恢复实例（续跑，保留已完成）',
-              onClick: async () => {
-                if (!currentInstanceId || !activeRoot) return
-                const now = Date.now()
-                if (now < wfResumeCooldown) return // 冷却，防连点
-                wfResumeCooldown = now + 4000
-                try {
-                  const resp = await fetch('/wf/resume', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
-                  })
-                  if (!resp.ok) {
-                    const err = await resp.json()
-                    alert('恢复失败: ' + (err.error || '未知错误'))
+            if (wfPendingCmd === 'resume') {
+              // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"恢复中…"
+              controlBtns.push(React.createElement('button', {
+                key: 'resume', title: '恢复中…', disabled: true,
+                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+              }, '恢复中…'))
+            } else {
+              controlBtns.push(React.createElement('button', {
+                key: 'resume', title: '恢复实例（续跑，保留已完成）',
+                onClick: async () => {
+                  if (!currentInstanceId || !activeRoot) return
+                  wfPendingCmd = 'resume'; wfPendingAt = Date.now()
+                  try {
+                    const resp = await fetch('/wf/resume', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
+                    })
+                    if (!resp.ok) {
+                      const err = await resp.json()
+                      alert('恢复失败: ' + (err.error || '未知错误'))
+                    }
+                  } catch (e) {
+                    alert('恢复失败: ' + e.message)
                   }
-                } catch (e) {
-                  alert('恢复失败: ' + e.message)
-                }
-              },
-              style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-            }, '▶ Resume'))
+                },
+                style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+              }, '▶ Resume'))
+            }
           }
           
           // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
