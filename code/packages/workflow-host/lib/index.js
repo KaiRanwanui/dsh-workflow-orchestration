@@ -2840,6 +2840,9 @@ function registerWebRoutes(ctx, registry) {
               const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
                 : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
                 : `请继续工作流实例 ${instanceId}，工作区：${root}`
+              // 停止是紧急指令：agent 正在执行任务，队列消息会等本轮结束——用 steer 打断当前轮让 LLM 尽快响应；
+              // start/resume 在 agent 空闲/暂停时投递，用 queue。
+              const mode = verb === 'stop' ? 'steer' : 'queue'
               try {
                 const parentSessionId = args.parentSessionId
                 if (parentSessionId) {
@@ -2851,7 +2854,7 @@ function registerWebRoutes(ctx, registry) {
                 }
                 const promptResult = await apiProxy.sessions.prompt({
                   rpcId: `wf-${verb}-${Date.now()}`,
-                  payload: { sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+                  payload: { sessionId, mode, content: [{ type: 'text', text }] },
                 })
                 return { messageInjected: true, promptResult }
               } catch (e) {

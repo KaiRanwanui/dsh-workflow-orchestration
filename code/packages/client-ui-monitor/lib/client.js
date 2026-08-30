@@ -863,17 +863,6 @@ function register(ctx) {
             ])
           }
 
-          if (!hasData) {
-            return React.createElement('div', {
-              style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
-            },
-              toolbar,
-              formOverlay,
-              React.createElement('div', {
-                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
-              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...'))
-            )
-          }
 
           // ── Iter-20(R3)：移除常驻实例切换条；改为"采用"弹窗（可选未绑定实例并绑定本会话）──
           const poolInstances = wfInstances.filter(it => it.sessionId == null)
@@ -908,6 +897,20 @@ function register(ctx) {
                 }, it.workflowName + ' · ' + String(it.instanceId).slice(-6) + (it.stage ? ' · ' + it.stage : ' · 未绑定'))))),
             React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
           ]))
+
+          if (!hasData) {
+            return React.createElement('div', {
+              style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
+            },
+              toolbar,
+              formOverlay,
+            adoptOverlay,
+              React.createElement('div', {
+                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
+              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...'))
+            )
+          }
+
 
           return React.createElement('div', {
             style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
