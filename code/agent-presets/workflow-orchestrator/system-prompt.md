@@ -94,9 +94,10 @@
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
    - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入指令消息
-     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。收到后分别调用
-     `workflow_start` / `workflow_stop` / `workflow_resume` 驱动对应实例（镜像"请启动"→start 的既有模式）。
-     若实例已处于目标状态（如已 STOPPED 再收停止），直接确认并停驱，勿重复调用。
+     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。这是**明确指令**：
+     收到后**立即**调用 `workflow_start` / `workflow_stop` / `workflow_resume` 并简短确认即可，
+     **不要再读文件 / 复述状态 / 反复确认找原因**。若调用时实例已处于目标状态（Stop 已是 STOPPED、
+     Resume 已是 RUNNING），直接确认完成，不要追问"为何已停还在停"或反复读日志找原因。
 
 
 通用约束：

@@ -2908,12 +2908,11 @@ function registerWebRoutes(ctx, registry) {
             
             if (action === 'stop') {
               if (!entry.hasState) { writeJson(res, 400, { error: 'instance not started (CREATED)' }); return }
-              entry.engine.stop() // Iter-18：仅 RUNNING→STOPPED
-              const r = await entry.storage.save()
-              entry.engine.setPersist(r)
+              // Iter-21：停止只经 session 注入指令（steer 打断当前轮），由 agent 调 workflow_stop 置 STOPPED。
+              // 此前直接 engine.stop() + 注入造成双写：agent 收到时实例已 STOPPED → 困惑"已是 STOPPED 为何又停"/反复确认。
+              const inj = await injectSessionCmd(args, root, instanceId, 'stop')
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
-              const inj = await injectSessionCmd(args, root, instanceId, 'stop') // Iter-21：向 session 注入"停止"指令，让 agent 停驱
               snap.messageInjected = inj.messageInjected
               if (inj.error) snap.messageInjectionError = inj.error
               writeJson(res, 200, snap)
@@ -2942,12 +2941,10 @@ function registerWebRoutes(ctx, registry) {
               if (!entry.hasState) { writeJson(res, 400, { error: 'instance not started (CREATED)' }); return }
               const st = entry.engine.snapshot().stage
               if (st !== 'STOPPED') { writeJson(res, 400, { error: 'resume 仅 STOPPED（当前 ' + st + '）' }); return }
-              entry.engine.resume() // STOPPED→RUNNING
-              const r = await entry.storage.save()
-              entry.engine.setPersist(r)
+              // Iter-21：继续只经 session 注入指令，由 agent 调 workflow_resume 置 RUNNING（避免双写导致的 UI 提前回弹/状态冲突）
+              const inj = await injectSessionCmd(args, root, instanceId, 'resume')
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
-              const inj = await injectSessionCmd(args, root, instanceId, 'resume') // Iter-21：向 session 注入"继续"指令，让 agent 续驱
               snap.messageInjected = inj.messageInjected
               if (inj.error) snap.messageInjectionError = inj.error
               writeJson(res, 200, snap)

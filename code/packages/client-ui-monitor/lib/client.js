@@ -37,6 +37,8 @@ function register(ctx) {
   let wfSessionActive = false
   // Iter-21(R3)：会话切换检测（activeRoot 相同也需重置并重拉，消除状态残留）
   let wfLastSessionId = ''
+  // Iter-21：Stop/Resume 冷却——agent 处理指令需时间，防连点导致多条消息混淆 LLM
+  let wfStopCooldown = 0, wfResumeCooldown = 0
   // Iter-21(R3)：稳定组件类型——session 更新（subagent 创建等）会频繁触发 factory 重渲染，
   // 若 WorkflowView 每次重定义会 remount（闪烁 + 局部状态丢失）。用模块级缓存一次。
   let WfComponent = null
@@ -719,6 +721,9 @@ function register(ctx) {
               key: 'stop', title: '停止实例',
               onClick: async () => {
                 if (!currentInstanceId || !activeRoot) return
+                const now = Date.now()
+                if (now < wfStopCooldown) return // 冷却，防连点→多条消息混淆 agent
+                wfStopCooldown = now + 4000
                 try {
                   const resp = await fetch('/wf/stop', {
                     method: 'POST',
@@ -743,6 +748,9 @@ function register(ctx) {
               key: 'resume', title: '恢复实例（续跑，保留已完成）',
               onClick: async () => {
                 if (!currentInstanceId || !activeRoot) return
+                const now = Date.now()
+                if (now < wfResumeCooldown) return // 冷却，防连点
+                wfResumeCooldown = now + 4000
                 try {
                   const resp = await fetch('/wf/resume', {
                     method: 'POST',
