@@ -93,11 +93,14 @@
      备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
-   - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入指令消息
-     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。这是**明确指令**：
-     收到后**立即**调用 `workflow_start` / `workflow_stop` / `workflow_resume` 并简短确认即可，
-     **不要再读文件 / 复述状态 / 反复确认找原因**。若调用时实例已处于目标状态（Stop 已是 STOPPED、
-     Resume 已是 RUNNING），直接确认完成，不要追问"为何已停还在停"或反复读日志找原因。
+   - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入**后台指令**消息
+     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。收到后：
+     1. **立即**调用对应工具（`workflow_start` / `workflow_stop` / `workflow_resume`）；
+     2. 然后**只回复一行确认**（如 `已启动实例 <id>` / `已停止实例 <id>` / `已恢复实例 <id>`）；
+     3. **不再多说**：不要复述阶段/任务状态、不要提及后台 subagent 或"它们仍在运行"、
+        不要向用户问"是否需要我等待/确认"之类的问题。实例运行态、任务进度、后台 subagent
+        均由监控面板展示，用户无需你在对话里重复报告。若工具已返回成功（含实例已处于目标状态），
+        直接回确认行即可。
 
 
 通用约束：
