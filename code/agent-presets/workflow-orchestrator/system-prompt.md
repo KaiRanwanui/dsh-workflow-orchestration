@@ -93,6 +93,10 @@
      备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
+   - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入指令消息
+     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。收到后分别调用
+     `workflow_start` / `workflow_stop` / `workflow_resume` 驱动对应实例（镜像"请启动"→start 的既有模式）。
+     若实例已处于目标状态（如已 STOPPED 再收停止），直接确认并停驱，勿重复调用。
 
 
 通用约束：

@@ -63,7 +63,13 @@
 
 | 今日 | **Iter-19 WebUI↔workflow 配合调优（前后台联动）** | ✅ 代码完成（create 即绑定 /wf/create 绑 sessionId；执行期=RUNNING workflow_begin 补 start；编排 workflow_start 驱动已绑定实例；Client Start/Stop gating；**Session 启停同步** agent idle→stop、running→resume；143 单测通过；host v0.11.0 + client v0.5.0 待部署。手测发现阻塞后追加修复：/wf/create 与 create/begin 工具改走 createBind(1:1 守卫)+CONFLICT 自愈解绑，Client 创建按钮仅会话 UNBOUND 显示+仅未绑定实例可选+解绑弹窗告知；148 单测；host 0.11.1 + client 0.5.1） |
 
-| 今日 | **Iter-20 前后台状态一致（Iter-19 收尾）** | 🔄 进行中（R1 /wf/list 补 sessionState+Client gating、R2 面板 Start 不置 RUNNING（状态归 workflow_start）、R4 Session 启停同步进 listInstances、R3 移除常驻切换条+空态/创建/采用弹窗；**forSession 根因修复**（只返回本会话实例，不回退最新，修 Other3/A1/B1/D1/E1）；157 单测通过；host v0.11.3 + client v0.5.3。v3 手测发现 S1~S5（见下），归入 Iter-21 修复轮） |
+| 今日 | **Iter-20 前后台状态一致（Iter-19 收尾）** | ✅ 完成（R1 /wf/list 补 sessionState+Client gating、R2 面板 Start 不置 RUNNING、R4 Session 启停同步进 listInstances、R3 移除常驻切换条+空态/创建/采用弹窗；**forSession 根因修复**；157 单测通过；host v0.11.3 + client v0.5.3） |
+| 今日 | **Iter-20 未决项：预设门控 + BROKEN 展示（= Iter-21 S5）** | ✅ 完成（仅 workflow-orchestrator 会话显示面板：非编排会话占位提示+短路轮询；/wf/list sessionState 改用完整 deriveSessionState（含 BROKEN/DONE）；BROKEN 显示"环境异常需新建会话"告警卡、DONE 显示"已归档"提示，均隐藏操作按钮；host v0.11.4 + client v0.5.4；157 单测仍通过） |
+| 今日 | **内置默认模板改为可执行（免改免参）** | ✅ 完成（BUILTIN_TEMPLATES 由 /TODO 占位改为引用工作区已有 skills：default-demo（3 任务并发+汇总+门禁，默认选中）、serial-demo（2 任务串行）；更新 test-host 模板断言；同步更新测试工作区 templates/*.yaml；host v0.11.5；157 单测仍通过；awaiting 部署验证） |
+| 今日 | **Iter-20 v4 手工验证（host v0.11.5 / client v0.5.4）** | 🔄 已填（14 项通过 / 2 项 N/A（C1 归档界面、D5 无法构造前提）/ 5 项问题：A4 CREATED DAG 无任务节点、A6 子会话显示面板、其他#1 会话切换状态残留 + /wf/status 返 null、其他#2 采用池空/无反应、B2 删 metadata 二次不出现 BROKEN（难复现））。其余 S1~S4 中 D3(Resume) 提前并入后续迭代；详见 `plan/development/iter20-verification-report-v4.md` |
+| 今日 | **Iter-21 前后台状态一致·v4 手测问题闭环 + Resume 提前** | ✅ 代码完成（R1~R5；host v0.11.6 + client v0.5.5；157 单测；awaiting 部署验证） |
+| 今日 | **Iter-21 Client 热修（v0.5.6）** | ✅ 完成（**WfComponent 稳定组件**——session 更新/消息流频繁触发 factory 重渲染导致 WorkflowView remount 闪烁+局部状态丢失+按钮无反应，用模块级缓存一次组件类型根治；**R3 会话切换不再重置 wfInstances（工作区级列表，避免采用池空）与 latest（避免 DAG 闪白）**，仅重置 wfSessionState+重拉列表；**publish 去重**修复（fingerprint 取嵌套 state，避免状态未变时每 2s 无谓重渲染）；client v0.5.6；157 单测仍通过；awaiting 部署验证——覆盖验证单 F1/F2(Stop/Resume 无反应)、D1/D2(采用无反应)、B2(DAG 闪烁)） |
+| 今日 | **Iter-21 Client/Host 热修（stop/resume 经 session 注入指令；v0.11.7 + v0.5.7）** | ✅ 完成（**新增 injectSessionCmd 统一消息注入**：/wf/stop /wf/resume 在改实例态后**向 session 注入"请停止/请继续工作流实例 X"指令**（与 /wf/start 一致），使 agent 感知并停驱/续驱——此前只改实例态而 session 不感知→按钮"无效"；client Stop/Resume payload 补 sessionId/parentSessionId；system-prompt 增"面板控制指令"说明；采用按钮打开即刷新列表（缓解"点击无反应/创建后才弹出"，孤儿进池=S3 归 Iter-22）；host v0.11.7 + client v0.5.7；157 单测通过；awaiting 部署验证） |
 
 ---
 
@@ -286,17 +292,27 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 
 ## 待办（下次启动）
 
-### Iter-20~23: 流程控制剩余功能（按功能闭环组织）（计划中）
+### Iter-21~24: 流程控制剩余功能（按功能闭环组织）（计划中）
 
-**迭代计划**：`plan/development/development-plan.md`（Iter-20~23）；技术方案 `plan/design/workflow-lifecycle-design.md`
+**迭代计划**：`plan/development/development-plan.md`（Iter-21~24）；技术方案 `plan/design/workflow-lifecycle-design.md`
 
 **目标**：按"一个迭代 = 一个可端到端验证的功能"重组剩余工作——
-- **20 前后台状态一致**（Iter-19 收尾 + forSession 根因）：R1(/wf/list 补 sessionState+Client gating)、R2(面板 Start 不置 RUNNING、状态归 workflow_start)、R4(Session 启停同步进 listInstances)、R3(实例列表并入创建界面)；**forSession 只返回本会话实例**；
-- **21 前后台状态一致·修复轮**（S1~S5）：去掉自动 idle→stop、Resume 按钮+即时刷新、孤儿进采用池、reset 清对话、预设门控+BROKEN 展示；
-- **22 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
-- **23 编排可视化编辑**（23.1~23.4）。
+- **21 前后台状态一致·v4 手测问题闭环 + Resume 提前**（D3=原 S2 提前）：R1 CREATED 态 DAG 补任务节点(A4)、R2 子会话门控(A6)、R3 会话切换状态一致(其他#1/#2)、R4 BROKEN 加固(B2)、R5 Client Resume 按钮(D3)；
+- **22 前后台状态一致·剩余修复轮**（S1/S3/S4）：去掉自动 idle→stop、孤儿进采用池完整语义、reset 清对话；
+- **23 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
+- **24 编排可视化编辑**（24.1~24.4）。
 
-**前置条件**：Iter-19 完成 ✅（重组按功能闭环，用户确认）
+**前置条件**：Iter-20 完成 ✅（含 S5/默认模板/v4 手测，问题归 Iter-21）
+
+---
+
+### Iter-21: 前后台状态一致·v4 手测问题闭环 + Resume 提前（计划中；下一个启动迭代）
+
+**背景**：Iter-20 已修并过单测，v4 手工验证（`plan/development/iter20-verification-report-v4.md`）暴露 A4/A6/其他#1/#2/B2 问题 + STOPPED 无 Resume（原 S2）。
+
+**交付（R1~R5）**：A4 CREATED 态 DAG 补任务节点；A6 子会话门控（`origin !== 'subagent'`）；其他#1/#2 会话切换状态一致（重置+重拉列表）；B2 BROKEN 加固；D3 加 Client Resume 按钮。详细见 development-plan.md Iter-21。
+
+**验证（端到端）**：A4/A6/#1/#2/B2/D3 逐条，见 v4 报告编号。
 
 ---
 

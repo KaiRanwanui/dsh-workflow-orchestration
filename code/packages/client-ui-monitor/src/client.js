@@ -17,6 +17,13 @@ export function register(ctx) {
   let wfSessionId = ''
   // Iter-13：列表加载器引用（面板创建成功后即时刷新）
   let wfListLoader = null
+  // Iter-20(S5)：当前会话是否为 workflow-orchestrator 预设（预设门控；false 时短路轮询）
+  let wfSessionActive = false
+  // Iter-21(R3)：会话切换检测（activeRoot 相同也需重置并重拉，消除状态残留）
+  let wfLastSessionId = ''
+  // Iter-21(R3)：稳定组件类型——session 更新（subagent 创建等）会频繁触发 factory 重渲染，
+  // 若 WorkflowView 每次重定义会 remount（闪烁 + 局部状态丢失）。用模块级缓存一次。
+  let WfComponent = null
 
   function fingerprint(state) {
     if (!state || !state.tasks) return ''
@@ -25,7 +32,9 @@ export function register(ctx) {
   }
 
   function publish(state) {
-    const fp = state ? fingerprint(state) : ''
+    // /wf/status 返回包装 {state,error,instanceId}；fingerprint 应从嵌套 state 取 tasks/stage（否则去重恒失效 → 每 2s 无谓重渲染）
+    const inner = state && state.state ? state.state : state
+    const fp = inner ? fingerprint(inner) : ''
     if (fp && latest && latest.__fp === fp) return
     if (state) state.__fp = fp
     latest = state; lastError = state ? null : 'disconnected'
@@ -35,14 +44,14 @@ export function register(ctx) {
   // ── 实例列表轮询 ─────────────────────────────────────────────
   let listPollingTimer = null
   function startListPolling() {
-    if (!activeRoot) return
+    if (!activeRoot || !wfSessionActive) return
     // 清理旧的轮询
     if (listPollingTimer) {
       clearInterval(listPollingTimer)
     }
     
     const loadList = async () => {
-      if (!activeRoot) return
+      if (!activeRoot || !wfSessionActive) return
       try {
         const resp = await fetch('/wf/list?workspaceRoot=' + encodeURIComponent(activeRoot) + (wfSessionId ? '&sessionId=' + encodeURIComponent(wfSessionId) : ''))
         const r = await resp.json()
@@ -69,7 +78,7 @@ export function register(ctx) {
     window.__wfSetRoot = r => { wfRoot = r }
 
     const refresh = async () => {
-      if (stop) return
+      if (stop || !wfSessionActive) return
       try {
         // Iter-5：webServer HTTP 路由替代 harness RPC（host.call）
         // Iter-20：只查询**本会话绑定实例**（不存在→空态）；绝不取"工作区最新实例"
@@ -485,8 +494,24 @@ export function register(ctx) {
         const parentSessionId = useSessions
           ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
           : undefined
+        // Iter-20(S5)：当前会话 agent preset（预设门控；仅 workflow-orchestrator 显示面板）
+        const sessionPreset = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].agentPreset : undefined))
+          : undefined
+        // Iter-21(R2)：子会话（origin==='subagent'）一律占位，不显示工作流面板
+        const sessionOrigin = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
+          : undefined
+        const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
+        wfSessionActive = isWorkflowSession
 
-        function WorkflowView() {
+        if (!WfComponent) {
+          WfComponent = function(props) {
+            const sessionId = props.sessionId
+            const isWorkflowSession = props.isWorkflowSession
+            const sessionCwd = props.sessionCwd
+            const parentSessionId = props.parentSessionId
+            const workspaceHook = props.workspaceHook
           const [, forceUpdate] = React.useReducer(x => x + 1, 0)
           const [selectedId, setSelectedId] = React.useState(null)
 
@@ -494,6 +519,17 @@ export function register(ctx) {
             listeners.add(forceUpdate)
             return () => listeners.delete(forceUpdate)
           }, [])
+
+          // Iter-20(S5)：非编排会话 → 停止实例列表轮询（状态轮询由 wfSessionActive 短路）
+          React.useEffect(() => {
+            if (isWorkflowSession) {
+              // Iter-21(R3)：成为 workflow 会话（如 preset 异步加载 false→true）→ 启动列表轮询
+              if (activeRoot) startListPolling()
+            } else {
+              if (listPollingTimer) { clearInterval(listPollingTimer); listPollingTimer = null }
+            }
+            return () => {}
+          }, [isWorkflowSession])
 
           // ── Iter-12：workspaceRoot 解析——session cwd 优先，回退当前工作区首项 ──
           React.useEffect(() => {
@@ -524,6 +560,19 @@ export function register(ctx) {
             // 启动实例列表轮询
             startListPolling()
           }, [sessionCwd, workspaceHook])
+
+          // ── Iter-21(R3)：会话切换（含同工作区 cwd 不变）→ 重置会话派生态并重拉列表 ──
+          React.useEffect(() => {
+            const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
+            if (sid === wfLastSessionId) return
+            wfLastSessionId = sid
+            // 仅重置派生态（gating 用）；不重置 wfInstances（工作区级列表，同工作区仍有效/避免采用池空）
+            // 不重置 latest（由 /wf/status 按新 boundId 更新，避免 DAG 闪空白）
+            wfSessionState = null; wfInstanceId = ''
+            // 仅 workflow 会话重拉列表；非编排会话保持占位 + 短路轮询
+            if (isWorkflowSession && activeRoot) startListPolling()
+            listeners.forEach(fn => { try { fn() } catch (e) {} })
+          }, [sessionId, isWorkflowSession])
 
           // ── Iter-12：实例列表轮询（只读；选择经 wfInstanceId 参与 status 轮询）──
           // 注意：轮询在 workspaceRoot 解析 effect 里启动，不依赖 React state
@@ -658,7 +707,7 @@ export function register(ctx) {
                   const resp = await fetch('/wf/stop', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
                   })
                   if (!resp.ok) {
                     const err = await resp.json()
@@ -670,6 +719,30 @@ export function register(ctx) {
               },
               style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
             }, '⏹ Stop'))
+          }
+          
+          // Iter-21(R5)：Resume 按钮（STOPPED 时显示；续跑保 DONE）
+          if (sessionBound && currentStage === 'STOPPED') {
+            controlBtns.push(React.createElement('button', {
+              key: 'resume', title: '恢复实例（续跑，保留已完成）',
+              onClick: async () => {
+                if (!currentInstanceId || !activeRoot) return
+                try {
+                  const resp = await fetch('/wf/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
+                  })
+                  if (!resp.ok) {
+                    const err = await resp.json()
+                    alert('恢复失败: ' + (err.error || '未知错误'))
+                  }
+                } catch (e) {
+                  alert('恢复失败: ' + e.message)
+                }
+              },
+              style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+            }, '▶ Resume'))
           }
           
           // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
@@ -705,7 +778,7 @@ export function register(ctx) {
           }, '+ 创建') : null
           // Iter-20(R3)：会话 UNBOUND 时提供"采用"入口（选未绑定实例并绑定本会话）
           const adoptBtn = canCreate ? React.createElement('button', {
-            key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => setAdoptOpen(true),
+            key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => { if (activeRoot) startListPolling(); setAdoptOpen(true) }, // Iter-21：打开即刷新列表，避免采用池空/延迟;孤儿可采纳(需 S3 recoverOrphan)属 Iter-22
             style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
           }, '采用') : null
           // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮
@@ -735,6 +808,29 @@ export function register(ctx) {
               React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
             ]),
           ]))
+
+          // Iter-20(S5)：非 workflow-orchestrator 会话 → 占位（不显示面板/控件）
+          if (!isWorkflowSession) {
+            return React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+            }, '此会话不是 Workflow 编排会话，无监控面板。')
+          }
+          // Iter-20(S5)：BROKEN → 环境异常告警（隐藏操作按钮）
+          if (wfSessionState && wfSessionState.state === 'BROKEN') {
+            return React.createElement('div', {
+              style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, height: '100%', minHeight: 420, color: '#ef4444', fontSize: 13 }
+            }, [
+              React.createElement('div', { key: 't', style: { fontWeight: 600, fontSize: 14 } }, '⚠ 环境异常，需新建 workflow 会话'),
+              React.createElement('div', { key: 'r', style: { color: '#9ca3af', fontSize: 12, textAlign: 'center', maxWidth: 420 } },
+                wfSessionState.reason ? ('原因：' + wfSessionState.reason) : '工作流工作区损坏或存在绑定冲突，无法继续使用当前实例。'),
+            ])
+          }
+          // Iter-20(S5)：DONE（归档声明本会话）→ 已归档提示（不可再启动）
+          if (wfSessionState && wfSessionState.state === 'DONE') {
+            return React.createElement('div', {
+              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+            }, '该工作流实例已归档（完成）。如需新建请开启新的 Workflow 编排会话。')
+          }
 
           if (!wfLoaded) {
             return React.createElement('div', {
@@ -814,9 +910,9 @@ export function register(ctx) {
             formOverlay,
             adoptOverlay
           )
+          }
         }
-
-        return React.createElement(WorkflowView)
+        return React.createElement(WfComponent, { sessionId, isWorkflowSession, sessionCwd, parentSessionId, workspaceHook })
       },
     )
   })

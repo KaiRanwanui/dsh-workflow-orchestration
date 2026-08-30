@@ -2411,7 +2411,29 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
             state: {
               workflow: parsed.name,
               stage: 'CREATED',
-              tasks: [],
+              // Iter-21(R1)：CREATED 预览——从 instance.yaml 生成 PENDING 任务快照，使 DAG 在启动前即显示步骤节点
+              tasks: parsed.tasks.map((t) => ({
+                id: t.id,
+                name: t.name,
+                type: t.type || 'llmTask',
+                dependsOn: t.dependsOn || [],
+                status: 'PENDING',
+                processor: t.processorRaw || null,
+                outputs: t.outputsRaw || [],
+                gate: t.gateRaw ? { checker: t.gateRaw, onFailure: t.gateOnFailure, maxRetries: t.gateMaxRetries } : null,
+                gateResult: null,
+                retries: 0,
+                _loopGroup: t._loopGroup || null,
+                _loopItem: t._loopItem || null,
+                _loopIndex: t._loopIndex ?? 0,
+                _loopGroupName: t._loopGroupName || null,
+                _onError: t._onError || null,
+                _concurrentGroup: t._concurrentGroup || null,
+                _concurrentGroupName: t._concurrentGroupName || null,
+                _concurrentItem: t._concurrentItem || null,
+                _concurrentIndex: t._concurrentIndex ?? 0,
+                _concurrentMax: t._concurrentMax || null,
+              })),
               runnable: [],
               maxConcurrency: parsed.maxConcurrency || 1,
             },
@@ -2440,74 +2462,66 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 // POST /wf/create {workspaceRoot, workflowPath|workflowText, params}
 //                                    → 建实例目录（只 create 不 start）
 // ── Iter-13：内置基础流程模板（随包分发；实例=模板+配置，模板保持只读）────
-// 占位路径 /TODO/... 与 ${output_dir} 参数由用户在 start 前编辑/提供；
-// 内容数据内联于此（webserver-routes 为内联-only section，既定例外）。
+// Iter-20/S5：内置模板改为**可执行默认模板**——无需修改、无需填参数即可创建并运行。
+// 处理器/检查器/输入/输出全部引用工作区 skills/（相对路径，按会话 cwd=工作区解析），
+// 依赖工作区存在以下技能：skills/spec-writer|data-prep|integrator|integrator-checker。
 const BUILTIN_TEMPLATES = [
   {
-    name: 'serial-gate',
-    description: '两任务串行 + 质量门禁（最小骨架）',
+    name: 'default-demo',
+    description: '默认可执行模板（两任务并发 + 汇总 + 质量门禁；免改免参）',
     yaml: [
-      '# 内置模板：serial-gate（两任务串行 + 质量门禁）',
-      '# 使用前：把 /TODO/... 替换为真实技能路径，提供 output_dir 参数',
-      'name: serial-demo',
+      '# 绑定/创建/启动此类模板前无需修改、无需填参数（依赖工作区 skills/ 下有 spec-writer/data-prep/integrator/integrator-checker）',
+      'name: default-demo',
       'version: "1.0"',
-      'description: "串行双任务 + 质量门禁"',
-      'params:',
-      '  output_dir:',
-      '    type: string',
-      '    default: "output"',
+      'description: "默认可执行模板：并发两任务 + 汇总 + 门禁"',
+      'max-concurrency: 2',
       'tasks:',
-      '  - id: draft',
-      '    name: "起草"',
-      '    processor: /TODO/skills/draft/SKILL.md',
-      '    outputs: ["${output_dir}/draft.md"]',
-      '    depends-on: []',
+      '  - id: write-spec',
+      '    name: "编写规格说明"',
+      '    processor: skills/spec-writer/SKILL.md',
+      '    outputs: ["output/spec.md"]',
+      '',
+      '  - id: prep-data',
+      '    name: "准备测试数据"',
+      '    processor: skills/data-prep/SKILL.md',
+      '    outputs: ["output/data.md"]',
+      '',
+      '  - id: integrate',
+      '    name: "汇总集成"',
+      '    processor: skills/integrator/SKILL.md',
+      '    inputs:',
+      '      spec: "output/spec.md"',
+      '      data: "output/data.md"',
+      '    outputs: ["output/summary.md"]',
+      '    depends-on: [write-spec, prep-data]',
       '    quality-gate:',
-      '      checker: /TODO/skills/review/SKILL.md',
+      '      checker: skills/integrator-checker/SKILL.md',
       '      on-failure: retry',
       '      max-retries: 2',
-      '',
-      '  - id: finalize',
-      '    name: "定稿"',
-      '    processor: /TODO/skills/finalize/SKILL.md',
-      '    outputs: ["${output_dir}/final.md"]',
-      '    depends-on: [draft]',
       '',
     ].join('\n'),
   },
   {
-    name: 'concurrent-summary',
-    description: '并发两任务 + 汇总依赖（最小骨架）',
+    name: 'serial-demo',
+    description: '串行可执行模板（写规格 → 汇总；免改免参）',
     yaml: [
-      '# 内置模板：concurrent-summary（并发 + 汇总）',
-      '# 使用前：把 /TODO/... 替换为真实技能路径，提供 output_dir 参数',
-      'name: concurrent-demo',
+      '# 串行示例：写规格 → 汇总。无需修改、无需填参数（依赖工作区 skills/spec-writer、skills/integrator）',
+      'name: serial-demo',
       'version: "1.0"',
-      'description: "并发两任务 + 汇总"',
-      'max-concurrency: 2',
-      'params:',
-      '  output_dir:',
-      '    type: string',
-      '    default: "output"',
+      'description: "串行两任务：写规格 + 汇总"',
       'tasks:',
-      '  - id: task-a',
-      '    name: "任务A"',
-      '    processor: /TODO/skills/a/SKILL.md',
-      '    outputs: ["${output_dir}/a.md"]',
-      '    depends-on: []',
-      '  - id: task-b',
-      '    name: "任务B"',
-      '    processor: /TODO/skills/b/SKILL.md',
-      '    outputs: ["${output_dir}/b.md"]',
-      '    depends-on: []',
-      '  - id: summary',
-      '    name: "汇总"',
-      '    processor: /TODO/skills/summary/SKILL.md',
+      '  - id: write-spec',
+      '    name: "编写规格说明"',
+      '    processor: skills/spec-writer/SKILL.md',
+      '    outputs: ["output/spec.md"]',
+      '',
+      '  - id: integrate',
+      '    name: "汇总集成"',
+      '    processor: skills/integrator/SKILL.md',
       '    inputs:',
-      '      a: "${output_dir}/a.md"',
-      '      b: "${output_dir}/b.md"',
-      '    outputs: ["${output_dir}/summary.md"]',
-      '    depends-on: [task-a, task-b]',
+      '      spec: "output/spec.md"',
+      '    outputs: ["output/summary.md"]',
+      '    depends-on: [write-spec]',
       '',
     ].join('\n'),
   },
@@ -2553,7 +2567,7 @@ function registerWebRoutes(ctx, registry) {
         if (registry && root) {
           try {
             instances = await registry.listInstances(root)
-            sessionState = await registry.sessionBindState(root, sessionId || null) // Iter-20：轻量绑定态
+            sessionState = await registry.deriveSessionState(root, sessionId || null) // Iter-20/S5：完整派生（含 BROKEN/DONE），供面板门控与告警
           } catch (e) {
             instances = []
           }
@@ -2808,6 +2822,34 @@ function registerWebRoutes(ctx, registry) {
               return expandDefinition(fs, { text, base }, params)
             }
             
+            // Iter-21：面板控制统一经 session 注入指令（与 Start 一致——此前 Stop/Resume 只改实例态而 session 不感知，导致按钮"无效"）
+            async function injectSessionCmd(args, root, instanceId, verb) {
+              const sessionId = args.sessionId
+              if (!sessionId) return { messageInjected: false, reason: 'no sessionId' }
+              const apiProxy = ctx.get('apiProxy')
+              if (!apiProxy) return { messageInjected: false, reason: 'apiProxy unavailable' }
+              const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
+                : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
+                : `请继续工作流实例 ${instanceId}，工作区：${root}`
+              try {
+                const parentSessionId = args.parentSessionId
+                if (parentSessionId) {
+                  const promptResult = await apiProxy.subagents.prompt({
+                    rpcId: `wf-${verb}-subagent-${Date.now()}`,
+                    payload: { parentSessionId, childSessionId: sessionId, mode: 'continuable', content: [{ type: 'text', text }] },
+                  })
+                  return { messageInjected: true, promptResult }
+                }
+                const promptResult = await apiProxy.sessions.prompt({
+                  rpcId: `wf-${verb}-${Date.now()}`,
+                  payload: { sessionId, mode: 'queue', content: [{ type: 'text', text }] },
+                })
+                return { messageInjected: true, promptResult }
+              } catch (e) {
+                return { messageInjected: false, error: e && e.message ? e.message : String(e) }
+              }
+            }
+
             if (action === 'start') {
               const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
               if (stage === 'RUNNING') { writeJson(res, 400, { error: 'instance is already running' }); return }
@@ -2868,6 +2910,9 @@ function registerWebRoutes(ctx, registry) {
               entry.engine.setPersist(r)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
+              const inj = await injectSessionCmd(args, root, instanceId, 'stop') // Iter-21：向 session 注入"停止"指令，让 agent 停驱
+              snap.messageInjected = inj.messageInjected
+              if (inj.error) snap.messageInjectionError = inj.error
               writeJson(res, 200, snap)
               return
             }
@@ -2899,6 +2944,9 @@ function registerWebRoutes(ctx, registry) {
               entry.engine.setPersist(r)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
+              const inj = await injectSessionCmd(args, root, instanceId, 'resume') // Iter-21：向 session 注入"继续"指令，让 agent 续驱
+              snap.messageInjected = inj.messageInjected
+              if (inj.error) snap.messageInjectionError = inj.error
               writeJson(res, 200, snap)
               return
             }
