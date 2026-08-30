@@ -525,16 +525,26 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-22: 前后台状态一致·剩余修复轮（S1/S3/S4）
+### Iter-22: 前后台状态一致·剩余修复轮（S1/S3/S4 + reset 修复）
 
-**背景**：Iter-21 聚焦 v4 手测问题（A4/A6/#1/#2/B2）+ Resume 提前；本迭代收尾其余状态语义问题（原 S1/S3/S4）。
+**背景**：Iter-21 聚焦 v4 手测问题（A4/A6/#1/#2/B2）+ Resume 提前；本迭代收尾其余状态语义问题（原 S1/S3/S4）+ 新增 reset 修复。
 
 **交付**：
-- **S1 状态同步语义**：去掉自动 idle→stop（agent idle ≠ workflow 停止；提问等待/暂停不置 STOPPED）；workflow 状态由用户显式控制（面板 Stop/Resume）。`syncInstanceState` 不再自动 idle→stop / running→resume。
-- **S3 孤儿/采用池完整语义**：采用池先对孤儿（sessionId 为死会话）跑 `recoverOrphan` 解绑再列入；池只列 CREATED 或明确标注状态（不含莫名 STOPPED 误导）。
-- **S4 会话对话**：reset 时清理/重置编排会话上下文（或编排侧忽略旧对话），避免重跑时 LLM 反复对比状态。
+- **S1 状态同步语义**（✅ 设计定稿）：
+  - **idle→stop：保留 + 加 pendingInteraction 守卫**——仅当「agent idle **且 无 pendingInteraction（非等待用户输入）**」→ `engine.stop()`；「idle **且 有 pendingInteraction（提问等待）**」→ **不 stop**（wf 保持 RUNNING）。信号来源：**Host 读 `agents.get(sid).inbox.hasPending`**，**先最小探针确认**能否稳定区分"提问等待"vs"用户停止"。（AgentStatus 仅 idle/running 无法区分；不能简单移除 idle→stop，否则"手工点停止"失效。）
+  - **running→resume：移除自动**（用户拍板 B）。wf 只能由 agent 依消息显式 `workflow_resume` 恢复；在 system-prompt 指引 agent：识别"继续执行/恢复/续跑"类指令时调 `workflow_resume`。避免"非继续消息（如'为什么停了?'）也自动把停止的 wf 拉回 RUNNING"。
+- **S3 孤儿/采用池完整语义**（✅ 设计定稿）：`/wf/list` **自动 recover 孤儿**（`scanOrphans`→逐个 `recoverOrphan`：死会话孤儿解绑 `sessionId→null` 回 UNBOUND 池；RUNNING 先 stop——用户拍板 D4 仅 /wf/list，不做 adopt 兜底）；采用池 = 恢复后孤儿 + `sessionId==null` 实例；**允许"未启动(CREATED)"与"已停止·含进度"孤儿**（D3，采用后可 resume 续跑），**RUNNING 拒绝**；列表带状态标注（未启动/已停止·含进度），避免莫名 RUNNING/STOPPED 误导。
+- **S4 会话对话（重置后不复述旧状态）**（✅ 设计定稿）：
+  - **A**：面板 **reset 按钮注入"工作流已重置，忽略此前对话，按全新工作流执行"** 消息（agent 确认，不复述旧状态）。优先用对话提示，不用 `/new`（需实测）。
+  - **C**：**system-prompt 强化**——"每次 begin/重置视为全新运行；以 workflow_begin/status 返回为准，勿将对话旧 stage/task 与新状态对比；收到'已重置'消息后不回溯旧进度"。
+  - **agent 识别自然语言控制短语**："请启动/停止/继续/重置工作流"（无论面板注入还**是人工在会话输入**）→ 调对应工具（`workflow_begin/start/stop/resume/reset`）并只回一行确认。统一"面板注入 + 人工输入"两条控制入口。
+- **reset 修复（单列，新发现）**：
+  - **问题**：COMPLETED/STOPPED/FAILED 或 hydrate-only（引擎不在内存）实例 reset 失败——根因 `state.def`（reset 重新 begin 的解析定义）`save()` 未写、`hydrate()` 未恢复 → `engine.reset()` 抛"reset 需要已 begin 的定义"。（设计定义 §4 允许 COMPLETED→reset→PENDING，非设计问题；是代码 bug。）
+  - **修复**：**reset 不依赖在内存 `state.def`，改为重置时从 `instance.yaml` 重新解析展开定义**（`registry.expandInstanceDefinition(entry)`）再重置（`engine.resetWithDefinition(parsed)` 或注入 def 后 `reset`）。对任何实例（含 COMPLETED/STOPPED/FAILED、历史会话、DSH 重启后）都能 reset。
 
-**验证（端到端）**：提问等待不被误停；孤儿实例可被采用并正常执行；reset 后重跑状态一致。
+**S1 剩余待办**：① 最小探针确认 `agents.get(sid).inbox.hasPending` 在"提问等待"vs"用户停止"的取值；② 移除 syncInstanceState 的 running→resume 分支；③ system-prompt 增"继续执行→workflow_resume"指引。
+
+**验证（端到端）**：提问等待不被误停；孤儿实例可被采用并正常执行；reset 后重跑状态一致（且 COMPLETED/STOPPED/FAILED、历史会话、重启后实例均能 reset）；人工输入"请重置/请启动/请停止/请继续工作流"与面板注入等效。
 
 ---
 
