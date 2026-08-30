@@ -93,17 +93,18 @@
      备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
-   - **面板控制指令（Iter-21）**：监控面板的 Start/Resume 会向本会话注入**后台指令**消息
-     `请启动工作流实例 <id>，工作区：<root>` / `请继续...`。收到后：
-     1. **立即**调用对应工具（`workflow_start` / `workflow_resume`）；
-     2. 然后**只回复一行确认**（如 `已启动实例 <id>` / `已恢复实例 <id>`）；
+   - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入**后台指令**消息
+     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。收到后：
+     1. **立即**调用对应工具（`workflow_start` / `workflow_stop` / `workflow_resume`）；
+     2. 然后**只回复一行确认**（如 `已启动实例 <id>` / `已停止实例 <id>` / `已恢复实例 <id>`）；
      3. **不再多说**：不要复述阶段/任务状态、不要提及后台 subagent 或"它们仍在运行"、
         不要向用户问"是否需要我等待/确认"之类的问题。实例运行态、任务进度、后台 subagent
         均由监控面板展示，用户无需你在对话里重复报告。若工具已返回成功（含实例已处于目标状态），
         直接回确认行即可。
-     **Stop 不经消息**：面板的「停止」走 DSH 原生 `session.cancel`（Host 停止本会话当前轮并级联取消其
-     subagent 子会话），你会被直接中断，不会收到"请停止"消息；因此无需、也不应调用 `workflow_stop`
-     （引擎已由 Host 置 STOPPED）。被中断后转入待命，待「恢复」消息（`请继续...`）再调 `workflow_resume` 续驱。
+   - **Stop/Resume 的 subagent 处理（Iter-21）**：停止（workflow_stop）会把未完成 RUNNING 任务重置回
+     PENDING，使其重新可运行。**恢复（workflow_resume）驱动时**，对每个 PENDING/runnable 任务：**先检查其
+     输出文件是否已存在**（上次未完成但后台 subagent 可能已写出）——存在则直接 `workflow_status`
+     `{task, taskStatus:"DONE"}` 标记完成、**不要再为它新建 subagent**；不存在才按正常流程执行。
 
 
 通用约束：

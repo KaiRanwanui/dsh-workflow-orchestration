@@ -2859,20 +2859,6 @@ function registerWebRoutes(ctx, registry) {
               }
             }
 
-            // Iter-21：仿 DSH 原生"停止"——session.cancel 停止工作流会话当前轮（DSH 会级联 cancel 其 subagent 子会话）
-            async function cancelWorkflowSession(args) {
-              const sessionId = args.sessionId
-              if (!sessionId) return { messageInjected: false, reason: 'no sessionId' }
-              const apiProxy = ctx.get('apiProxy')
-              if (!apiProxy) return { messageInjected: false, reason: 'apiProxy unavailable' }
-              try {
-                const r = await apiProxy.sessions.cancel({ rpcId: `wf-stop-cancel-${Date.now()}`, payload: { sessionId } })
-                return { messageInjected: true, promptResult: r }
-              } catch (e) {
-                return { messageInjected: false, error: e && e.message ? e.message : String(e) }
-              }
-            }
-
             if (action === 'start') {
               const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
               if (stage === 'RUNNING') { writeJson(res, 400, { error: 'instance is already running' }); return }
@@ -2928,16 +2914,11 @@ function registerWebRoutes(ctx, registry) {
             
             if (action === 'stop') {
               if (!entry.hasState) { writeJson(res, 400, { error: 'instance not started (CREATED)' }); return }
-              // Iter-21：仿 DSH 原生"停止"——先 session.cancel 停止工作流会话当前轮（级联 cancel 其 subagent 子会话），
-              // 再把引擎置 STOPPED。此前只用 steer 注入"请停止"靠 agent 调 workflow_stop，但 agent 循环与其 subagent 未真正停。
-              const inj = await cancelWorkflowSession(args)
-              let snap
-              if (entry.engine.snapshot().stage === 'RUNNING') {
-                entry.engine.stop() // RUNNING→STOPPED；subagent 已被 session.cancel 级联停止，无残留重复
-                const r = await entry.storage.save()
-                entry.engine.setPersist(r)
-              }
-              snap = entry.engine.snapshot()
+              // Iter-21：Stop 用 steer 注入"请停止"打断当前轮，由 agent 调 workflow_stop 置 STOPPED（并重置 RUNNING→PENDING）。
+              // 不能走 session.cancel：工作流会话是其 subagent 的父会话（hasSubagentOwner），cancel 会被 subagentOwnershipError 拒绝。
+              // runnable 子会话为 one-shot 不可级联取消；重复避免靠 agent resume 前查产物（见 system-prompt）。
+              const inj = await injectSessionCmd(args, root, instanceId, 'stop')
+              const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               snap.messageInjected = inj.messageInjected
               if (inj.error) snap.messageInjectionError = inj.error
