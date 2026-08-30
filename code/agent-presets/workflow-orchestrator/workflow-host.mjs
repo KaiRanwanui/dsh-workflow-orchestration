@@ -2474,14 +2474,19 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 const BUILTIN_TEMPLATES = [
   {
     name: 'default-demo',
-    description: '默认可执行模板（两任务并发 + 汇总 + 质量门禁；免改免参）',
+    description: '默认可执行模板·延长版（含深度分析长任务，用于控制/暂停验证；免改免参）',
     yaml: [
-      '# 绑定/创建/启动此类模板前无需修改、无需填参数（依赖工作区 skills/ 下有 spec-writer/data-prep/integrator/integrator-checker）',
+      '# 延长版：含 deep-analysis（≥2500 字）长任务，给 STOP/RESUME 留出反应窗口。依赖工作区 skills/ 下 spec-writer/data-prep/integrator/integrator-checker/deep-analysis',
       'name: default-demo',
       'version: "1.0"',
-      'description: "默认可执行模板：并发两任务 + 汇总 + 门禁"',
+      'description: "默认可执行模板·延长版：深度分析 + 并发两任务 + 汇总 + 门禁"',
       'max-concurrency: 2',
       'tasks:',
+      '  - id: deep-analysis',
+      '    name: "深度分析"',
+      '    processor: skills/deep-analysis/SKILL.md',
+      '    outputs: ["output/analysis.md"]',
+      '',
       '  - id: write-spec',
       '    name: "编写规格说明"',
       '    processor: skills/spec-writer/SKILL.md',
