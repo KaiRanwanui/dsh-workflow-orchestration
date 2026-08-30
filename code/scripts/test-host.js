@@ -242,6 +242,24 @@ async function runCase11() {
   threw = false
   try { e.reset() } catch (err) { threw = true }
   check('PENDING 不可 reset（抛错）', threw)
+
+  // 场景 5（Iter-21）：stop 把 RUNNING 重置为 PENDING，resume 不再死锁
+  const e2 = createWorkflowEngine()
+  e2.begin({ name: 'sm2', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [
+    { id: 'x', name: 'X', type: 'llm-task', processor: '/x/x', outputs: [], gate: null },
+    { id: 'y', name: 'Y', type: 'llm-task', processor: '/x/y', outputs: [], gate: null },
+    { id: 'z', name: 'Z', type: 'llm-task', processor: '/x/z', outputs: [], gate: null, dependsOn: ['x', 'y'] },
+  ] })
+  e2.start()
+  e2.updateTask('x', { status: 'RUNNING' })
+  e2.updateTask('y', { status: 'RUNNING' })
+  check('deadlock 前置: 2 RUNNING 占满槽后 runnable=[]', e2.snapshot().runnable.length === 0)
+  e2.stop()
+  s = e2.snapshot()
+  check('stop: RUNNING 任务重置为 PENDING', s.tasks.find(t => t.id === 'x').status === 'PENDING' && s.tasks.find(t => t.id === 'y').status === 'PENDING')
+  e2.resume()
+  s = e2.snapshot()
+  check('resume: runnable 恢复（不死锁）', Array.isArray(s.runnable) && s.runnable.length === 2, String(s.runnable.length))
 }
 
 // ── 用例 12：绑定模型 + 完整性（Iter-17：create-bind/adopt + 1:1 + 派生状态 + BROKEN）──

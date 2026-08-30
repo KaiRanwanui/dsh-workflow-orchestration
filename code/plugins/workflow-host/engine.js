@@ -306,6 +306,12 @@ function createWorkflowEngine() {
     if (state.stage !== E_STAGE.RUNNING) {
       throw new Error('stop 仅允许 RUNNING 状态（当前: ' + state.stage + '）')
     }
+    // Iter-21：STOPPED 时把进行中的 RUNNING 任务重置回 PENDING——否则 resume 后这些任务仍占并发槽且
+    // 实际无人执行（其 subagent 已停/终态），导致 runnable=[] 死锁（依赖它们的 PENDING 任务永不可分派）。
+    // DONE/SKIPPED/FAILED 保留（终态）；仅"未完成"的 RUNNING 回退。
+    state.tasks.forEach((t) => {
+      if (t.status === E_TASK_STATUS.RUNNING) t.status = E_TASK_STATUS.PENDING
+    })
     setStage(E_STAGE.STOPPED) // setStage 将 active 置 false；保留 DONE 进度
     return snapshot()
   }
