@@ -150,6 +150,9 @@ function createWorkflowEngine() {
   // 就绪 = 所有前驱均 DONE 或 SKIPPED（FAILED 前驱不放行）；
   // 可用并发槽位 = maxConcurrency - 当前 RUNNING 数。
   function getRunnableTasks() {
+    // Iter-21：非 active（STOPPED/COMPLETED/FAILED）不派发任何任务——否则 STOPPED 后 agent 仍看到 runnable
+    // 非空而继续驱动（subagent 返回后主 session 又被触发继续）。
+    if (!state.active) return []
     const running = state.tasks.filter((t) => t.status === E_TASK_STATUS.RUNNING).length
     const slots = Math.max(0, state.maxConcurrency - running)
     if (slots === 0) return []

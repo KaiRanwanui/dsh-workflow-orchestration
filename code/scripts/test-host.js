@@ -257,6 +257,7 @@ async function runCase11() {
   e2.stop()
   s = e2.snapshot()
   check('stop: RUNNING 任务重置为 PENDING', s.tasks.find(t => t.id === 'x').status === 'PENDING' && s.tasks.find(t => t.id === 'y').status === 'PENDING')
+  check('stop: STOPPED 时 runnable=[]（不派发，防 stop 后 agent 继续驱动）', e2.snapshot().runnable.length === 0)
   e2.resume()
   s = e2.snapshot()
   check('resume: runnable 恢复（不死锁）', Array.isArray(s.runnable) && s.runnable.length === 2, String(s.runnable.length))
