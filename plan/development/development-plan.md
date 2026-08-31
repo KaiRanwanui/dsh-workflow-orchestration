@@ -560,7 +560,8 @@ workflow_list → 列出所有实例 + 状态
 3. 定位 DSH 前端子对话"停止/继续"实际走的接口（interrupt 还是 prompt），以此为蓝本。
 4. 确认主会话 await 中断是否可行；可行则设计"workflow Stop→枚举 running 子会话→逐个中断/提示停止"。
 5. **（Iter-22 验证转入）会话树聚合状态探针**：确认 Host 侧 agents registry 中 child 条目的字段（是否带 parentSessionId）与枚举方式，验证"枚举某 parentSessionId 的 running subagent"可行。
-6. 产出可行方案设计（含 Resume 语义复核、与 getRunnableTasks=[]/engine.stop 重置 PENDING/面板中间态协同）。
+6. **（2026-09-01 追加）同任务双 subAgent 检测探针**：验证能否建立"子会话 ↔ 任务 dispatch"对应关系（如派发时 prompt 内嵌任务 id + dispatch 序号，或 registry 条目元数据），识别"同一任务仍有 in-flight 旧 subAgent"。
+7. 产出可行方案设计（含 Resume 语义复核、与 getRunnableTasks=[]/engine.stop 重置 PENDING/面板中间态协同）。
 
 **Iter-22 验证转入的方案设计（已与用户拍板方向，2026-09-01）——会话树聚合守卫 + stopReason 定向恢复**：
 - **聚合守卫**：`syncInstanceState` 的 idle→stop 条件从 `!isAgentPending(sid)` 推广为 `!isAgentPending(sid) && !hasRunningChildren(sid)`。语义：主 idle + 子 running → wf 保持 RUNNING；主 idle + 子全部完成 → STOPPED（`stopReason='session-idle'`）；主 running → RUNNING。解决 Iter-22 B1 实测的后台 subagent 等待被误停问题。
@@ -568,9 +569,18 @@ workflow_list → 列出所有实例 + 状态
 - **边界**：文本提问（主 idle、无子）守卫覆盖不了，由 system-prompt 约束"编排期间提问必须用 ask 工具"配套（Iter-22 已先行落地止血）。
 - **验证标准（追加）**：后台 subagent 等待期间 wf 保持 RUNNING；子完成后主恢复驱动 wf 自动回 RUNNING；手工停后任何唤醒均不自动 resume；test-host 全绿。
 
-**验证标准**：Stop 后正在运行的 task subagent **立即停止**且主会话不再被触发继续；Resume 重新建立 subagent 续跑且**不重复**；与现有面板控制无回归；test-host 全绿。
+**追加问题（2026-09-01 用户提出，Iter-22 关闭时）——同任务双 subAgent 并发冲突**：
+- **现象**：Start 派发 subAgent 执行任务 → Stop（RUNNING 任务重置 PENDING，Iter-21 死锁修复的设计行为；DSH 层无法取消 one-shot subAgent）→ 再 Start/Resume **新建 subAgent** 执行同一任务 → 新旧两个 subAgent 同时运行、读写同一任务文件 → **文件冲突 / 内容互相覆盖**。
+- **设计路径（三线并行，根治优先）**：
+  1. **根治·级联停止**（依赖探索步骤 2/4）：Stop 时枚举 running 子会话，对 continuable 子会话注入"停止"/interrupt，从源头消灭旧 subAgent；
+  2. **根治·迟到回报丢弃**（依赖探索步骤 6）：dispatch 带纪元号/任务映射（探索步骤 6），旧 subAgent 完成回报时因 dispatch 不匹配被编排 agent 忽略（配合 stopReason/实例态校验），并同步旧子会话"你的结果已作废"；
+  3. **兜底·任务产物 epoch 隔离**（不依赖 DSH 接口，可独立先行交付）：每次派发 subAgent 输出到 `output/<task>/<dispatchN>/` 独立子目录，编排 agent 采纳**最新 dispatch** 的产物为任务输出——旧 subAgent 无论跑多久只写自己的目录，物理消除文件冲突。
+- **system-prompt 配套**：resume 派发前识别"刚被 stop 重置 PENDING 的任务可能有旧 subAgent 在跑"；对新派发声明产物子目录与"只采信本 dispatch"约束。
+- **验证标准（追加）**：构造 Stop→Start 双 subAgent 场景：新旧 subAgent 各写各目录、无文件冲突；旧 subAgent 迟到回报被忽略不污染任务结果；若级联停止可行则同场景不产生双跑。
 
-**交付**：探索报告（子会话模式确认、interrupt vs prompt 实测、DSH UI 机制定位、方案选型）。
+**验证标准**：Stop 后正在运行的 task subagent **立即停止**且主会话不再被触发继续；Resume 重新建立 subagent 续跑且**不重复**；**Stop→Start 双 subAgent 场景无文件冲突、迟到回报不污染**；与现有面板控制无回归；test-host 全绿。
+
+**交付**：探索报告（子会话模式确认、interrupt vs prompt 实测、DSH UI 机制定位、方案选型）+ 会话树聚合守卫/stopReason 方案落地 + 双 subAgent 冲突治理（级联停止/回报丢弃/产物 epoch 隔离，其中 epoch 隔离兜底可独立先行交付）。
 
 > **排序**：本探索迭代**放在 Iter-22（S1/S3/S4）之后**（Iter-22 为增量修复、相对不复杂）；若探索结论会改变 Stop 最终形态，可提前到 Iter-22 之前。启动时先按约定确认设计。
 
