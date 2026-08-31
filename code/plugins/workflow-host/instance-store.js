@@ -80,6 +80,13 @@ function createInstanceRegistry(ctx, deps) {
   // 探针结论（Iter-22 S1 探针）：提问等待（ask_user_question 阻塞）期间 status 仍为 running，
   // 不产生 idle；hasPending=true 仅出现在用户消息已排队、driver 尚未认领的间隙——该间隙不得误停。
   const isAgentPending = typeof deps.isAgentPending === 'function' ? deps.isAgentPending : (() => false)
+  // Iter-SUBA(P1/P3)：会话树子会话聚合探针。生产由 apply 注入 apiProxy.subagents 包装：
+  //   listRunningChildren(sid) → 仍在上跑（activity==='running'）的子会话 id 数组（含历史枚举，
+  //   activity 由 apiProxy 用 agents.get(id)?.status==='running' 重算——官方同款判活）
+  //   interruptChild(sid, childId) → 级联打断子会话当前回合（fire-and-return；one-shot/absent=no-op）
+  // 缺省 no-op（无子会话信息 → 不守卫直接停，保持既有行为）。
+  const listRunningChildren = typeof deps.listRunningChildren === 'function' ? deps.listRunningChildren : (async () => [])
+  const interruptChild = typeof deps.interruptChild === 'function' ? deps.interruptChild : (async () => {})
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -653,10 +660,13 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   // ── Iter-19：Session 启停同步（前后台状态配合）────────────────────────────
-  // Iter-22(S1) 修订：仅保留 idle→stop（加排队输入守卫）：
-  //   agent idle 且无排队输入（hasPending=false）→ 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
-  //   agent idle 但有排队输入（hasPending=true，用户消息即将被认领）→ 不 stop（防误停）
-  //   running→resume 自动恢复已移除（Iter-22 用户拍板 B）：wf 只能由 agent 依消息显式 workflow_resume
+  // Iter-22(S1)：idle→stop + 排队输入守卫；running→resume 自动恢复移除（wf 只能显式 workflow_resume）。
+  // Iter-SUBA(P1/P2) 修订——会话树聚合三态语义（用户拍板）：
+  //   主 idle + 有 running 子会话 → 不 stop（wf 保持 RUNNING：后台 task subagent 等待非误停）
+  //   主 idle + 无 running 子会话 → stop + stopReason='session-idle'（自然编排间隙）
+  //   主 running + STOPPED + stopReason='session-idle' → 定向自动 resume（主会话被唤醒即无缝续跑）
+  //   stopReason='user-stop'（workflow_stop 权威急停）→ 永不自动恢复（Iter-22 权威停止语义保留）
+  // 闭环不变式：子会话在跑 ⇔ wf RUNNING → Start/派发必被拒 → 永无双 subAgent 同任务并发。
   // 仅在能判定 agent 状态时触发；CREATED/PENDING/COMPLETED/FAILED 不误改。
   async function syncInstanceState(cwd, instanceId) {
     const entry = await loadEntry(cwd, instanceId)
@@ -668,12 +678,25 @@ function createInstanceRegistry(ctx, deps) {
     const stage = entry.engine.snapshot().stage // 以引擎实际状态为准（hasState 仅缓存标记）
     if (running === false) {
       if (stage === 'RUNNING' && !isAgentPending(sid)) {
+        // Iter-SUBA(P1)：会话树聚合守卫——有 running 子会话（如后台 task subagent）不得误停；
+        // 探针失败降级为空（保持可停，不因探针故障卡死 RUNNING）。
+        let childIds = []
+        try { childIds = await listRunningChildren(sid) } catch (e) { childIds = [] }
+        if (childIds.length > 0) return entry
         entry.engine.stop() // RUNNING→STOPPED，保 DONE 进度
         await entry.storage.save()
         entry.engine.setPersist('ok (session-idle sync)')
+        // Iter-SUBA(P2)：自然编排间隙停 → 记 session-idle，供主会话活跃时定向自动恢复
+        await patchMeta(cwd, instanceId, { stopReason: 'session-idle' })
       }
+    } else if (stage === 'STOPPED' && entry.meta && entry.meta.stopReason === 'session-idle') {
+      // Iter-SUBA(P2)：定向自动恢复——仅自然空闲停（session-idle）且主会话重新活跃时；
+      // user-stop 永不自动恢复（权威停止）；resume 后清 stopReason（下轮不再误判）。
+      entry.engine.resume() // STOPPED→RUNNING，保 DONE 进度
+      await entry.storage.save()
+      entry.engine.setPersist('ok (session-idle auto-resume)')
+      await patchMeta(cwd, instanceId, { stopReason: null })
     }
-    // Iter-22(S1)：running→resume 自动恢复分支移除——非"继续"类消息不得把停止的 wf 拉回 RUNNING
     return entry
   }
 

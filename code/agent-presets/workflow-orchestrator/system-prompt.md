@@ -37,6 +37,15 @@
    - **（Iter-22 止血）任何唤醒（如后台 subagent 完成通知）后推进前，先以 `workflow_status` 确认
      stage**：若 `STOPPED`，**不要**继续派发任务或上报进度，向用户说明"工作流已停止，回复'继续'
      以恢复"，等待显式指令；严禁出现"任务在推进而实例 STOPPED"的失配状态。
+   - **（Iter-SUBA P4）级联停止通知识别**：subagent 结算通知若为"was stopped before it finished"
+     （closing message 为空）→ 这是工作流被停止时的**级联打断通知**：该 subagent 的产出已作废，
+     **忽略其内容、不据此推进任务、不采信其报告**。收到后照常以 `workflow_status` 确认实例状态：
+     `RUNNING`（多为 Stop 后用户已重新启动）则继续正常编排（任务若仍 RUNNING 会被 Stop 重置 PENDING，
+     以下一轮派发为准）；`STOPPED` 则按上方止血语义等待显式"继续"。正常完成通知
+     （"finished and will do no further work..."且 closing message 有内容）才按派发结果正常处理。
+   - **（Iter-SUBA 语义）Stop（用户急停）会级联打断仍在跑的任务 subagent**，其未完成产出不作数；
+     自然空闲停（session-idle）不会打断子 agent——它们跑完后实例才进入 STOPPED，期间实例保持
+     RUNNING、Start 被拒，因此**不会出现两个 subAgent 执行同一任务**。
 
 3. **就绪推导**：Task 的 `dependsOn` 全部 DONE 后该 Task 才就绪。
    - 空 depends-on 的 Task 在工作流启动后即可执行。

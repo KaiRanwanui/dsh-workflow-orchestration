@@ -461,19 +461,30 @@ async function runCase14() {
   check('workflow_begin: 实例绑定 sess-a', registry.get(r.instanceId).meta.sessionId === 'sess-a')
   const iid = r.instanceId
 
-  // 2) Session 停止同步（agent idle 且无排队输入 → 实例 STOPPED）
+  // 2) Session 停止同步（agent idle 且无排队输入、无 running 子会话 → 实例 STOPPED + stopReason='session-idle'）
   runningAgents.delete('sess-a')
   let e = await registry.syncInstanceState('/ws/c14', iid)
-  check('sync:idle(无排队) → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('sync:idle(无排队/无子) → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('sync:自然空闲停记录 stopReason=session-idle（Iter-SUBA P2）', registry.get(iid).meta.stopReason === 'session-idle', registry.get(iid).meta.stopReason)
 
-  // 3) Iter-22(S1)：running→resume 自动恢复已移除——agent running 不再把 STOPPED 拉回 RUNNING
+  // 3) Iter-SUBA(P2)：定向自动恢复——自然空闲停（session-idle）+ 主会话重新活跃 → 无缝续跑
   runningAgents.add('sess-a')
   e = await registry.syncInstanceState('/ws/c14', iid)
-  check('sync:running → 仍 STOPPED（S1 移除自动 resume）', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('sync:running + session-idle → 定向自动 resume → RUNNING（Iter-SUBA P2）', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+  check('sync:自动恢复后 stopReason 已清（Iter-SUBA P2）', registry.get(iid).meta.stopReason == null, registry.get(iid).meta.stopReason)
 
-  // 3b) 显式恢复（等价于 agent 依消息调 workflow_resume）
+  // 3b) Iter-SUBA(P2) 反例：user-stop（workflow_stop 权威停止）永不自动恢复
+  runningAgents.delete('sess-a')
+  e = await registry.syncInstanceState('/ws/c14', iid) // idle → 再次自然停
+  check('sync:idle → 再次 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  await registry.patchMeta('/ws/c14', iid, { stopReason: 'user-stop' }) // 模拟 workflow_stop 权威标记
+  runningAgents.add('sess-a')
+  e = await registry.syncInstanceState('/ws/c14', iid)
+  check('sync:running + user-stop → 仍 STOPPED（权威停止不自动恢复）', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  // 显式恢复（等价 agent 依消息调 workflow_resume），恢复 RUNNING 现场供步骤 4/5
   e.engine.resume()
   await e.storage.save()
+  await registry.patchMeta('/ws/c14', iid, { stopReason: null })
   check('显式 resume → RUNNING（保 DONE）', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
 
   // 4) Iter-22(S1) 守卫：idle 但 hasPending（排队输入未认领）→ 不 stop，保持 RUNNING
@@ -563,10 +574,9 @@ async function runCase15() {
   runningAgents.add('sess-a') // 会话 running
   list = await registry.listInstances(cwd)
   const runItem = list.find(x => x.instanceId === b.instanceId)
-  check('R4 list: 会话 running → 仍 STOPPED（S1 移除自动 resume）', runItem && runItem.stage === 'STOPPED', runItem && runItem.stage)
-  // Iter-22(S1) 守卫：显式 resume 回 RUNNING 后，idle + 排队输入 → 列表同步不误停
-  b.engine.resume()
-  await b.storage.save()
+  // Iter-SUBA(P2)：自然空闲停（session-idle）+ 主会话重新活跃 → 定向自动 resume（无缝续跑）
+  check('R4 list: 会话 running + session-idle → 定向自动 resume（Iter-SUBA P2）', runItem && runItem.stage === 'RUNNING', runItem && runItem.stage)
+  // Iter-22(S1) 守卫：RUNNING 下，idle + 排队输入 → 列表同步不误停
   runningAgents.delete('sess-a')
   pendingAgents.add('sess-a')
   list = await registry.listInstances(cwd)
@@ -637,6 +647,87 @@ async function runCase15() {
   check('forSession: 未绑定会话 → undefined（不取最新实例，防跨会话污染）', r1 === undefined, r1 && r1.instanceId)
   const r2 = await registry.forSession({ agent: { session: { header: { id: 'sess-a', cwd } } } })
   check('forSession: 已绑定会话 → 返回本会话实例', r2 && r2.instanceId === b.instanceId, r2 && r2.instanceId)
+}
+
+// ── 用例 16：主从聚合控制（Iter-SUBA P1/P2/P3）────────────────────────────
+async function runCase16() {
+  console.log('［用例 16］主从聚合控制 — P1 子会话聚合守卫 / P2 stopReason / P3 stop 级联 / 探针降级')
+  const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { fs: mockFs } = makeMockFs()
+  const runningAgents = new Set(['sess-a'])
+  const pendingAgents = new Set()
+  const childrenBySession = { 'sess-a': ['child-1', 'child-2'] } // 预置子会话
+  const runningChildren = new Set(['child-1']) // child-1 在跑
+  const interrupted = []
+  const deps = {
+    createWorkflowEngine, createWorkflowStorage,
+    isSessionLive: () => true,
+    isAgentRunning: (sid) => runningAgents.has(sid),
+    isAgentPending: (sid) => pendingAgents.has(sid),
+    // Iter-SUBA(P1) 生产依赖的 mock：list 返回仍在跑的子会话 id；interrupt 记录并停止
+    listRunningChildren: async (sid) => (childrenBySession[sid] || []).filter((c) => runningChildren.has(c)),
+    interruptChild: async (sid, childId) => { interrupted.push(childId); runningChildren.delete(childId) },
+  }
+  const registered = {}
+  const ctxF = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) {
+      if (n === 'fs') return mockFs
+      if (n === 'tools') return { register(t) { bag[t.name] = t } }
+      if (n === 'apiProxy') {
+        return { subagents: {
+          // Iter-SUBA(P3) 工具级联依赖的 mock：响应形状对齐 apiProxy 实测（payload.result.value）
+          list: async (req) => ({ payload: { rpcId: req.rpcId, result: { ok: true, value: { entries: (childrenBySession['sess-a'] || []).map((id) => ({ kind: 'child', id, activity: runningChildren.has(id) ? 'running' : 'inactive' })), parentAvailable: true } } } }),
+          interrupt: async (req) => { interrupted.push(req.payload.childSessionId); runningChildren.delete(req.payload.childSessionId); return { payload: { rpcId: req.rpcId, result: { ok: true, value: { accepted: true } } } } },
+        } }
+      }
+      return undefined
+    },
+  })
+  const registry = createInstanceRegistry(ctxF(registered), deps)
+  registerWorkflowToolsPreset(ctxF(registered), null, null, registry)
+  const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c16' } } } }
+  const WF = `name: c16demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c16/output/a.md"]\n    depends-on: []\n`
+
+  // 1) P1：主 idle + 子在跑 → 聚合守卫，保持 RUNNING（后台 task subagent 等待非误停）
+  let r = await registered.workflow_begin.execute({ workflowText: WF }, exec)
+  check('c16: begin → RUNNING', r.stage === 'RUNNING', r.stage)
+  const iid = r.instanceId
+  runningAgents.delete('sess-a')
+  let e = await registry.syncInstanceState('/ws/c16', iid)
+  check('c16 P1:idle + 子在跑 → 仍 RUNNING（聚合守卫）', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+
+  // 2) 子全部结束 → 自然停 + stopReason='session-idle'（P2）
+  runningChildren.delete('child-1')
+  e = await registry.syncInstanceState('/ws/c16', iid)
+  check('c16:子结束 → idle → STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('c16 P2:自然空闲停 stopReason=session-idle', registry.get(iid).meta.stopReason === 'session-idle', registry.get(iid).meta.stopReason)
+
+  // 3) workflow_stop 工具：user-stop 标记 + 级联 interrupt running 子会话（P3）
+  runningAgents.add('sess-a')
+  e.engine.resume(); await e.storage.save() // → RUNNING
+  runningChildren.add('child-2') // child-2 重新在跑，stop 后应被级联打断
+  interrupted.length = 0
+  r = await registered.workflow_stop.execute({}, exec)
+  check('c16 P3:workflow_stop → STOPPED', r.stage === 'STOPPED', r.stage)
+  check('c16 P3:级联打断 running 子会话', interrupted.includes('child-2'), JSON.stringify(interrupted))
+  check('c16 P3:返回 stoppedChildren=1', r.stoppedChildren === 1, r.stoppedChildren)
+  check('c16 P2:stopReason=user-stop', registry.get(iid).meta.stopReason === 'user-stop', registry.get(iid).meta.stopReason)
+
+  // 4) user-stop + agent running → 永不自动恢复（P2 反例，权威停止语义）
+  e = await registry.syncInstanceState('/ws/c16', iid)
+  check('c16 P2:user-stop + running → 仍 STOPPED（不自动恢复）', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+
+  // 5) 探针故障降级：listRunningChildren 抛异常 → 不守卫，仍可停（不卡死 RUNNING）
+  const deps2 = Object.assign({}, deps, { listRunningChildren: async () => { throw new Error('probe down') } })
+  const registered2 = {}
+  const registry2 = createInstanceRegistry(ctxF(registered2), deps2)
+  registerWorkflowToolsPreset(ctxF(registered2), null, null, registry2)
+  const exec2 = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c16b' } } } }
+  const r2 = await registered2.workflow_begin.execute({ workflowText: WF }, exec2)
+  runningAgents.delete('sess-a')
+  const e2 = await registry2.syncInstanceState('/ws/c16b', r2.instanceId)
+  check('c16 降级:探针故障 → 照常停（不卡死 RUNNING）', e2.engine.snapshot().stage === 'STOPPED', e2.engine.snapshot().stage)
 }
 
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
@@ -1026,6 +1117,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase14()
     // ── 用例 15：前后台状态一致（Iter-20）──
     await runCase15()
+    // ── 用例 16：主从聚合控制（Iter-SUBA）──
+    await runCase16()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

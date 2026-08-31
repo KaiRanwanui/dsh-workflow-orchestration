@@ -606,8 +606,35 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         entry.engine.stop() // Iter-18：仅 RUNNING→STOPPED（保进度，active=false）
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
+        // Iter-SUBA(P3)：权威急停——级联 interrupt 仍在跑的任务子会话（fire-and-return，one-shot/absent=no-op）；
+        // apiProxy 不可用/单子失败均不阻断 stop 主流程。手工停 DSH 会话路径无级联：P1 聚合守卫令 wf
+        // 保持 RUNNING 直至子会话自然跑完收敛（停止期间不会二次派发，无双跑窗口）。
+        let stoppedChildren = 0
+        try {
+          const sid = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.id : undefined
+          const apiProxy = ctx && ctx.get ? ctx.get('apiProxy') : undefined
+          if (apiProxy && apiProxy.subagents && sid) {
+            const lst = await apiProxy.subagents.list({ rpcId: 'wf-stop-list-' + Date.now(), payload: { parentSessionId: sid } })
+            const body = lst && lst.payload !== undefined ? lst.payload : lst
+            const value = body && body.result && body.result.value ? body.result.value : body
+            const entries = value && Array.isArray(value.entries) ? value.entries : []
+            for (const ch of entries) {
+              if (ch && ch.kind === 'child' && ch.activity === 'running') {
+                try {
+                  await apiProxy.subagents.interrupt({ rpcId: 'wf-stop-int-' + Date.now() + '-' + ch.id, payload: { parentSessionId: sid, childSessionId: ch.id } })
+                  stoppedChildren += 1
+                } catch (e2) { /* 单子失败不阻断 */ }
+              }
+            }
+          }
+        } catch (e2) { /* 级联失败不阻断 stop 主流程 */ }
+        // Iter-SUBA(P2)：权威停止标记 user-stop——syncInstanceState 据此永不自动恢复（区别于自然空闲停）
+        const cwd = sessionCwd(exec)
+        if (cwd) await registry.patchMeta(cwd, entry.instanceId, { stopReason: 'user-stop' })
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
+        snap.stopReason = 'user-stop'
+        snap.stoppedChildren = stoppedChildren
         return snap
       } catch (e) {
         return errPayload(e)
@@ -651,7 +678,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         entry.engine.setError(null)
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
-        await registry.patchMeta(cwd, entry.instanceId, { lastResetAt: new Date().toISOString() })
+        await registry.patchMeta(cwd, entry.instanceId, { lastResetAt: new Date().toISOString(), stopReason: null }) // Iter-SUBA(P2)：重置即全新运行，清除停止标记
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
         snap.resetNote = '状态已重置（output/logs 产物保留，同名文件将被覆盖）'
@@ -689,6 +716,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         entry.engine.resume() // STOPPED→RUNNING，保 DONE
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
+        // Iter-SUBA(P2)：显式 resume 清 stopReason（自动恢复语义只对 session-idle 生效，防残留误判）
+        const cwdResume = sessionCwd(exec)
+        if (cwdResume) await registry.patchMeta(cwdResume, entry.instanceId, { stopReason: null })
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
         return snap
