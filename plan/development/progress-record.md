@@ -470,3 +470,12 @@ Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 
 ## 团队约定
 
 行为准则见 `plan/development/team-conventions.md`。
+
+---
+
+## 备注：DSH 版本迁移（待规划）
+
+- **状态**：待规划。项目仍以 DSH `0.1.1-rc.2`（`latest` 稳定版）为基线迭代，暂不迁移。
+- **触发背景**：`0.1.2-alpha.2` 已确认**退役 APIProxy**，改用 Remote/Controller（Typert）架构，属破坏性变更。
+- **影响分析与迁移要点**：见 `plan/development/alpha-0.1.2-migration-impact.md`。
+- **计划**：本项不并入迭代节奏；待 DSH `0.1.2` 出稳定版、且时机成熟时，再单独立项规划（先探针确认 `ctx.get('sessionController')` 签名 → 跑通 rc2 基线回归 → 迁移 inject + 两处 prompt 调用 → 回归面板 4 键）。

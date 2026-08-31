@@ -614,9 +614,25 @@ workflow_list → 列出所有实例 + 状态
 | R1 | `subagent` 并发启动多个是否稳定 | 高 | Iter-7 |
 | R2 | Agent prompt 在复杂循环下的推理准确性 | 中 | Iter-6 |
 | R3 | 多实例切换时的状态一致性 | 高 | Iter-11/12 |
-| R4 | DSH 版本产生接口变化 | 中 | 随时 |
+| R4 | DSH 版本产生接口变化（已确认：alpha.2 退役 APIProxy） | 中 | 随时 |
 | R5 | webServer 路由冲突（`/wf/*` 与既有路由） | 中 | Iter-5 |
 | R6 | fetch 轮询跨域/同源策略限制 | 中 | Iter-5 |
 | R7 | concurrent 组级/工作流级 max 取最严格的调度执行 | 中 | Iter-8 |
 | R8 | 实例=session 映射（sessionId↔instanceId via metadata）可靠性 | 中 | Iter-10 |
 | R9 | 多 session 并行资源占用 / DSH 前端 session 切换跟随 | 中 | Iter-12 |
+
+---
+
+## 5. 待规划：DSH 版本迁移（`0.1.2-alpha.x`+）
+
+> **状态：待规划**。当前仍以 DSH `0.1.1-rc.2`（`latest` 稳定版）为基线迭代，**暂不迁移**。
+> 本小节仅登记迁移事项，待 DSH `0.1.2` 出稳定版且时机成熟时再单独立项规划具体执行。
+
+- **背景**：`0.1.2-alpha.2` 已确认**退役 `APIProxy`**，改用 Remote/Controller（Typert）架构。这属于破坏性变更。
+- **对 workflow-agent 的直接影响**：插件 `inject` 把 `apiProxy` 声明为硬依赖（`code/packages/workflow-host/lib/index.js:7`、`code/agent-presets/workflow-orchestrator/workflow-host.mjs:8`），且面板控制（启动/停止/继续/重置）的消息注入依赖 `apiProxy.sessions.prompt` / `apiProxy.subagents.prompt`。
+- **影响分析与迁移方案要点**：见 **`plan/development/alpha-0.1.2-migration-impact.md`**（已建，含详细定位、新旧接口对照、迁移 Checklist、初步方案）。
+- **规划时点**：等 DSH `0.1.2` 进入稳定通道后再评估；alpha 属测试通道，不在其上进行功能迭代。
+- **迁移前必做**：
+  1. 确认 `ctx.get('sessionController')` 存在及其 `prompt` 精确签名（当前 GitHub 在本机不可达，需对照 alpha `.d.ts` 复核）。
+  2. 先跑通 rc2 基线回归用例，锁定行为基线。
+  3. 重点回归「面板 4 键 → agent 是否真正感知」（Iter-21 曾修「按钮无效/agent 不感知」）。
