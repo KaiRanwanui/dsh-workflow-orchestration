@@ -17,6 +17,7 @@
 |---|---|
 | `origin` | `ssh://git@github.com/KaiRanwanui/dsh-workflow-orchestration.git` |
 | `core.sshCommand` | `ssh -o HostName=140.82.114.3 -o IdentityFile=/home/zhaokai/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new` |
+| `push.default` | `upstream`（仓库级；因本地 `master` 与远端 `main` 分支名不同，需设为 `upstream` 才能让 bare `git push` 推到上游） |
 | 本地分支 | `master`（tracking `origin/main`） |
 | 远端默认分支 | `main` |
 
@@ -50,15 +51,15 @@
 
 ## 4. 日常使用（本机）
 
-一切照常，无需额外操作：
+一切照常，无需额外操作（`core.sshCommand` 与 `push.default=upstream` 均已写入仓库级 `.git/config`）：
 
 ```bash
 git pull     # 拉取 origin/main
 git add -A && git commit -m "..."
-git push     # 推送 master → origin/main（自动走 core.sshCommand 到真实 IP）
+git push     # 推送 master → origin/main（绕开 DNS，经真实 IP；需已设 push.default=upstream）
 ```
 
-已验证：**不带任何环境变量**，`git fetch origin` 即可成功（`core.sshCommand` 已持久化于 `.git/config`）。
+已验证：**不带任何环境变量**，`git fetch origin` 与 bare `git push` 均能成功。
 
 ---
 
