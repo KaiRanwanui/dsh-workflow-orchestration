@@ -580,6 +580,10 @@ workflow_list → 列出所有实例 + 状态
 
 **验证标准**：Stop 后正在运行的 task subagent **立即停止**且主会话不再被触发继续；Resume 重新建立 subagent 续跑且**不重复**；**Stop→Start 双 subAgent 场景无文件冲突、迟到回报不污染**；与现有面板控制无回归；test-host 全绿。
 
+**探索结论（2026-09-01 技术验证完成，报告 `iter-suba-report.md`，探针存档 `code/probes/suba-master-slave-probe.js`）**：源码侦察（packages/subagent + host/apiproxy，逐一对照部署版 rc.2 .d.ts）+ 运行时探针双重确认——①主从关系=持久 header（parentSession/origin/delegationDepth）；②`apiProxy.subagents.{list,interrupt,prompt,history}` rc.2 全量可用，list 的 activity 即官方 `agents.get(id)?.status==='running'` 重算（hasRunningChildren 现成实现）；③interrupt 实测毫秒级生效（stopReason='aborted'，子 agent 移出 registry，父收"was stopped before it finished"空 closing 通知）；④followup 可唤醒冷子会话（直调必须显式传 AbortSignal——工具内 exec.signal 可用）；⑤任务 subAgent 已配 `backgroundMode: continuable` 全链可控；⑥stopReason 枚举 completed/aborted/error/max-tokens；⑦事件 `subagent/start|end` Host 全局可达（响应式同步素材）。**主从状态控制方案定稿**：聚合守卫 P1 / stopReason 定向恢复 P2 / Stop 级联停止 P3 / 迟到回报治理 P4 / 事件驱动同步 P5——全部在 workflow-host 插件内闭环、Host 侧权威、不依赖 DSH 改动。
+
+**阶段 2（实现迭代，待用户确认后开工）**：P1+P2+P3+P4 四件套——instance-store（stopReason 字段 + syncInstanceState 聚合守卫/定向恢复/级联 interrupt）、tools-preset（workflow_stop 级联）、system-prompt（级联停止通知语义）、单测 + 手测。阶段 3 可选：P5 事件驱动同步、P4 的产物 epoch 隔离后备（仅当阶段 2 手测见冲突残留）。
+
 **交付**：探索报告（子会话模式确认、interrupt vs prompt 实测、DSH UI 机制定位、方案选型）+ 会话树聚合守卫/stopReason 方案落地 + 双 subAgent 冲突治理（级联停止/回报丢弃/产物 epoch 隔离，其中 epoch 隔离兜底可独立先行交付）。
 
 > **排序**：本探索迭代**放在 Iter-22（S1/S3/S4）之后**（Iter-22 为增量修复、相对不复杂）；若探索结论会改变 Stop 最终形态，可提前到 Iter-22 之前。启动时先按约定确认设计。
