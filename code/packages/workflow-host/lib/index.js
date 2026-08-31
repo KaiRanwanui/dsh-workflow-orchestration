@@ -33,7 +33,16 @@ function applyInternal(ctx) {
     if (!a) return undefined
     return a.status === 'running'
   }
-  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning })
+  // Iter-22(S1)：排队用户输入判定（idle→stop 守卫用；agents.get(sid).inbox.hasPending）。
+  // 探针结论（Iter-22 S1 探针）：提问等待（ask_user_question 阻塞）期间 status 仍为 running，
+  // 不产生 idle；hasPending=true 仅出现在用户消息已排队、driver 尚未认领的间隙——该间隙不得误停。
+  const isAgentPending = (sid) => {
+    if (!agents || typeof agents.get !== 'function') return false
+    const a = agents.get(sid)
+    if (!a) return false
+    try { return a.inbox ? a.inbox.hasPending === true : false } catch (e) { return false }
+  }
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning, isAgentPending })
   // 单实例兼容绑定（显式 statePath/workspaceRoot 参数或无会话上下文时回退）
   const engine = createWorkflowEngine()
   const storage = createWorkflowStorage(ctx, engine)
@@ -768,6 +777,20 @@ function createWorkflowEngine() {
     return snapshot()
   }
 
+  // Iter-22：reset 不依赖内存 state.def 的变体。hydrate() 不恢复 def——COMPLETED/STOPPED/FAILED
+  // 的历史实例、跨会话/DSH 重启后的 hydrate-only 实例，其 state.def 必为空，reset() 会抛
+  // "reset 需要已 begin 的定义"。调用方（workflow_reset 工具 / /wf/reset 路由）从实例
+  // instance.yaml 重新解析展开定义后传入；语义与 reset() 相同（仅 STOPPED/COMPLETED/FAILED
+  // → 丢弃进度，全新 PENDING）。
+  function resetWithDefinition(parsed) {
+    if (state.stage === E_STAGE.PENDING || state.stage === E_STAGE.RUNNING) {
+      throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED 状态（当前: ' + state.stage + '）；RUNNING 须先 stop，PENDING 无执行内容')
+    }
+    if (!parsed) throw new Error('resetWithDefinition 需要解析后的工作流定义')
+    begin(parsed) // 丢弃进度，全新 PENDING
+    return snapshot()
+  }
+
   return {
     begin,
     clear,
@@ -784,6 +807,7 @@ function createWorkflowEngine() {
     stop,
     resume,
     reset,
+    resetWithDefinition,
     snapshot,
   }
 }
@@ -997,6 +1021,11 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-19：会话 agent 是否运行中（Session 启停同步依赖）。生产由 apply 注入 agents 服务包装；
   // 缺省返回 undefined（无法判定 → 不触发同步，保持既有行为）。
   const isAgentRunning = typeof deps.isAgentRunning === 'function' ? deps.isAgentRunning : (() => undefined)
+  // Iter-22(S1)：排队用户输入判定（idle→stop 守卫依赖）。生产由 apply 注入 agents 服务包装
+  // （agents.get(sid).inbox.hasPending）；缺省恒 false（无信号不阻止 stop，保持既有行为）。
+  // 探针结论（Iter-22 S1 探针）：提问等待（ask_user_question 阻塞）期间 status 仍为 running，
+  // 不产生 idle；hasPending=true 仅出现在用户消息已排队、driver 尚未认领的间隙——该间隙不得误停。
+  const isAgentPending = typeof deps.isAgentPending === 'function' ? deps.isAgentPending : (() => false)
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -1249,6 +1278,28 @@ function createInstanceRegistry(ctx, deps) {
             }
           } catch (e) { /* 无 state.json → CREATED */ }
         }
+        // Iter-22(D4 修复)：池内（sessionId==null）不应存在 RUNNING——历史 recoverOrphan 未落盘
+        // 的残留，或异常路径产物。发现即从磁盘状态水合全新引擎补 stop+落盘（幂等自愈），
+        // 并同步既有内存条目，避免采用池出现误导性 RUNNING。
+        if (!meta.sessionId && item.phase === 'READY' && item.stage === 'RUNNING') {
+          try {
+            const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
+            if (state && state.workflow) {
+              const nEngine = deps.createWorkflowEngine()
+              nEngine.hydrate(state)
+              nEngine.stop()
+              const nStorage = deps.createWorkflowStorage(ctx, nEngine)
+              nStorage.setInstanceDir(instanceDirPath(cwd, id))
+              const nr = await nStorage.save()
+              const memEntry = engines.get(id)
+              if (memEntry && memEntry.hasState) {
+                memEntry.engine.hydrate(nr)
+                memEntry.engine.setPersist(nr)
+              }
+              item.stage = 'STOPPED'
+            }
+          } catch (e) { /* 自愈失败降级为原状态标注，不阻塞列表 */ }
+        }
         out.push(item)
       } catch (e) { /* 残缺实例目录跳过 */ }
     }
@@ -1490,11 +1541,20 @@ function createInstanceRegistry(ctx, deps) {
     const sid = entry.meta.sessionId
     if (!sid) throw new Error('实例 ' + instanceId + ' 无绑定，非孤儿')
     if (isSessionLive(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
-    // RUNNING 先 stop（保留 DONE 进度）
-    if (entry.hasState) {
-      const st = entry.engine.snapshot()
-      if (st.stage === 'RUNNING') entry.engine.stop()
-    }
+    // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
+    // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
+    try {
+      const fsSvc = ctx.get('fs')
+      const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
+      if (state && state.workflow) {
+        if (!entry.hasState) { entry.engine.hydrate(state); entry.hasState = true }
+        if (entry.engine.snapshot().stage === 'RUNNING') {
+          entry.engine.stop()
+          const r = await entry.storage.save()
+          entry.engine.setPersist(r)
+        }
+      }
+    } catch (e) { /* 无 state.json（CREATED 孤儿）→ 跳过 stop */ }
     await patchMeta(cwd, instanceId, { sessionId: null })
     activeBySession.delete(sid)
     return loadEntry(cwd, instanceId)
@@ -1539,9 +1599,10 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   // ── Iter-19：Session 启停同步（前后台状态配合）────────────────────────────
-  // 用户起停 DSH Session（agent idle⇄running）时，绑定实例状态需对齐：
-  //   agent idle（用户停了 session）  → 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
-  //   agent running（用户重启 session）→ 实例 STOPPED 则 engine.resume() → RUNNING（续跑）
+  // Iter-22(S1) 修订：仅保留 idle→stop（加排队输入守卫）：
+  //   agent idle 且无排队输入（hasPending=false）→ 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
+  //   agent idle 但有排队输入（hasPending=true，用户消息即将被认领）→ 不 stop（防误停）
+  //   running→resume 自动恢复已移除（Iter-22 用户拍板 B）：wf 只能由 agent 依消息显式 workflow_resume
   // 仅在能判定 agent 状态时触发；CREATED/PENDING/COMPLETED/FAILED 不误改。
   async function syncInstanceState(cwd, instanceId) {
     const entry = await loadEntry(cwd, instanceId)
@@ -1552,18 +1613,13 @@ function createInstanceRegistry(ctx, deps) {
     if (running === undefined || running === null) return entry // 无法判定，不触发
     const stage = entry.engine.snapshot().stage // 以引擎实际状态为准（hasState 仅缓存标记）
     if (running === false) {
-      if (stage === 'RUNNING') {
+      if (stage === 'RUNNING' && !isAgentPending(sid)) {
         entry.engine.stop() // RUNNING→STOPPED，保 DONE 进度
         await entry.storage.save()
         entry.engine.setPersist('ok (session-idle sync)')
       }
-    } else {
-      if (stage === 'STOPPED') {
-        entry.engine.resume() // STOPPED→RUNNING，续跑
-        await entry.storage.save()
-        entry.engine.setPersist('ok (session-running sync)')
-      }
     }
+    // Iter-22(S1)：running→resume 自动恢复分支移除——非"继续"类消息不得把停止的 wf 拉回 RUNNING
     return entry
   }
 
@@ -2246,7 +2302,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (stage === 'CREATED' || stage === 'PENDING') throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED（当前 ' + stage + '）')
         // Iter-18：先写 reset 归档备份（<ts>_reset_<state>/），再 engine.reset()
         const backupDir = await registry.writeArchiveBackup(cwd, entry.instanceId, 'reset', (stage || 'UNKNOWN'))
-        entry.engine.reset() // → 全新 PENDING
+        // Iter-22：reset 不依赖内存 state.def（hydrate 不恢复 def，历史/重启/hydrate-only 实例
+        // 必无 def）——从 instance.yaml 重新解析展开定义再重置，任意可 reset 实例都能重跑。
+        const parsed = await expandInstanceDefinition(entry)
+        entry.engine.resetWithDefinition(parsed) // → 全新 PENDING
         entry.engine.setError(null)
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
@@ -2587,15 +2646,43 @@ function registerWebRoutes(ctx, registry) {
         const sessionId = query.get('sessionId') || '' // Iter-20：Client 传当前会话用于 gating
         let instances = []
         let sessionState = null
+        const recoveredOrphans = []
         if (registry && root) {
           try {
+            // Iter-22(S3)：自动回收孤儿进采用池（用户拍板 D4：仅 /wf/list 触发，不做 adopt 兜底）。
+            // 死会话孤儿解绑 sessionId→null 回 UNBOUND 池；RUNNING 先 stop（保 DONE 进度）。
+            // 单个回收失败不阻塞列表（下一轮轮询重试）。
+            let orphans = []
+            try { orphans = await registry.scanOrphans(root) } catch (e) { orphans = [] }
+            for (const o of orphans) {
+              try {
+                await registry.recoverOrphan(root, o.id)
+                recoveredOrphans.push(o.id)
+              } catch (e) { /* skip */ }
+            }
             instances = await registry.listInstances(root)
             sessionState = await registry.deriveSessionState(root, sessionId || null) // Iter-20/S5：完整派生（含 BROKEN/DONE），供面板门控与告警
           } catch (e) {
             instances = []
           }
         }
-        writeJson(res, 200, { workspaceRoot: root, instances, sessionState: sessionState && sessionState.state ? sessionState : null })
+        // Iter-22(S3)：采用池状态标注——sessionId==null（UNBOUND 池，含刚回收的孤儿）标注可采用的
+        // 运行态，避免"莫名 RUNNING/STOPPED"误导：未启动（CREATED/PENDING）/已停止·含进度（STOPPED）。
+        // Iter-22(D4 修复)：listInstances 已对池内 RUNNING 残留自愈（stop+落盘→STOPPED）；
+        // 此处 RUNNING 仅在自愈失败时出现，标注为异常残留（adopt 本就拒绝 RUNNING）。
+        for (const it of instances) {
+          if ((it.sessionId === null || it.sessionId === undefined) && it.phase === 'READY') {
+            it.adoptable = true
+            if (it.stage === 'STOPPED') it.poolNote = '已停止·含进度，可采用后 resume 续跑'
+            else if (it.stage === 'PENDING') it.poolNote = '未启动'
+            else if (it.stage === 'COMPLETED' || it.stage === 'FAILED') it.poolNote = '已结束，可采用后 reset 重跑'
+            else if (it.stage === 'RUNNING') it.poolNote = '运行中（异常残留，不可采用）'
+          } else if (it.sessionId === null || it.sessionId === undefined) {
+            it.adoptable = true
+            it.poolNote = '未启动'
+          }
+        }
+        writeJson(res, 200, { workspaceRoot: root, instances, sessionState: sessionState && sessionState.state ? sessionState : null, recoveredOrphans })
         return
       }
 
@@ -2853,6 +2940,7 @@ function registerWebRoutes(ctx, registry) {
               if (!apiProxy) return { messageInjected: false, reason: 'apiProxy unavailable' }
               const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
                 : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
+                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准，按全新工作流继续执行。`
                 : `请继续工作流实例 ${instanceId}，工作区：${root}`
               // 停止是紧急指令：agent 正在执行任务，队列消息会等本轮结束——用 steer 打断当前轮让 LLM 尽快响应；
               // start/resume 在 agent 空闲/暂停时投递，用 queue。
@@ -2948,7 +3036,9 @@ function registerWebRoutes(ctx, registry) {
               if (stage === 'RUNNING') { writeJson(res, 400, { error: 'RUNNING 先 stop' }); return }
               if (stage === 'CREATED' || stage === 'PENDING') { writeJson(res, 400, { error: 'reset 仅 STOPPED/COMPLETED/FAILED' }); return }
               const backupDir = await registry.writeArchiveBackup(root, instanceId, 'reset', (stage || 'UNKNOWN'))
-              entry.engine.reset() // → 全新 PENDING
+              // Iter-22：reset 不依赖内存 state.def（hydrate 不恢复 def）——从 instance.yaml 重解析展开
+              const parsedDef = await expandInstanceDef(entry)
+              entry.engine.resetWithDefinition(parsedDef) // → 全新 PENDING
               entry.engine.setError(null)
               const r = await entry.storage.save()
               entry.engine.setPersist(r)
@@ -2957,6 +3047,11 @@ function registerWebRoutes(ctx, registry) {
               snap.instanceId = entry.instanceId
               snap.resetNote = 'state reset (output/logs preserved)'
               snap.resetBackup = backupDir
+              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知——agent 确认并按全新工作流执行，
+              // 不复述/回溯旧状态（与 stop/resume 注入同模式；queue 投递，reset 时 agent 通常空闲）。
+              const injReset = await injectSessionCmd(args, root, instanceId, 'reset')
+              snap.messageInjected = injReset.messageInjected
+              if (injReset.error) snap.messageInjectionError = injReset.error
               writeJson(res, 200, snap)
               return
             }

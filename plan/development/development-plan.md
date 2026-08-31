@@ -26,7 +26,7 @@
 
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优) → Iter-20(前后台状态一致 + S5 预设门控/BROKEN 展示 + 内置默认模板可执行；v4 手测 14 通过/2 N/A/5 问题归 Iter-21)
-当前:   Iter-21(前后台状态一致·v4 手测问题闭环 + Resume 提前)   ✅ 完成（R1~R5 + 死锁修复 + 面板控制定稿 + getRunnableTasks 非 active 不派发 + 内置 default-demo 改延长版；host v0.11.14 / client v0.5.10；161 单测；git 至 88d6ba0）   （其后 Iter-22 剩余 S1/S3/S4 → Iter-SUBA DSH 子会话可控性探索 → 23 生命周期闭环+归档 → 24 编排可视化编辑）
+当前:   Iter-22(S1 状态同步语义 + S3 孤儿采用池 + S4 重置语义 + reset 修复)   ✅ 完成（S1 探针先行：hasPending=排队信号/ask 等待不产生 idle；idle→stop 加排队守卫 + 移除自动 resume；/wf/list 自动回收孤儿进池 + poolNote 标注；reset 注入"已重置" + 全新运行语义 + 自然语言控制短语统一；resetWithDefinition 摆脱内存 state.def；手测 33/35，B1 误停真源=回合结束 idle，止血 prompt 已落、聚合守卫+stopReason 设计转 Iter-SUBA；host v0.11.16 / client v0.5.12；179 单测）   （其后 Iter-SUBA DSH 子会话可控性探索[含会话树聚合守卫+stopReason 定向恢复] → 23 生命周期闭环+归档 → 24 编排可视化编辑）
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -559,7 +559,14 @@ workflow_list → 列出所有实例 + 状态
 2. 实测 `subagent.interrupt`（硬中断）vs `subagent.prompt`（注入"停止"）对运行中子会话的效果与耗时。
 3. 定位 DSH 前端子对话"停止/继续"实际走的接口（interrupt 还是 prompt），以此为蓝本。
 4. 确认主会话 await 中断是否可行；可行则设计"workflow Stop→枚举 running 子会话→逐个中断/提示停止"。
-5. 产出可行方案设计（含 Resume 语义复核、与 getRunnableTasks=[]/engine.stop 重置 PENDING/面板中间态协同）。
+5. **（Iter-22 验证转入）会话树聚合状态探针**：确认 Host 侧 agents registry 中 child 条目的字段（是否带 parentSessionId）与枚举方式，验证"枚举某 parentSessionId 的 running subagent"可行。
+6. 产出可行方案设计（含 Resume 语义复核、与 getRunnableTasks=[]/engine.stop 重置 PENDING/面板中间态协同）。
+
+**Iter-22 验证转入的方案设计（已与用户拍板方向，2026-09-01）——会话树聚合守卫 + stopReason 定向恢复**：
+- **聚合守卫**：`syncInstanceState` 的 idle→stop 条件从 `!isAgentPending(sid)` 推广为 `!isAgentPending(sid) && !hasRunningChildren(sid)`。语义：主 idle + 子 running → wf 保持 RUNNING；主 idle + 子全部完成 → STOPPED（`stopReason='session-idle'`）；主 running → RUNNING。解决 Iter-22 B1 实测的后台 subagent 等待被误停问题。
+- **stopReason 定向恢复**：实例状态记录停止原因——`user-stop`（面板/自然语言/手工停会话）时主会话重新活跃**不**自动恢复（S1 语义保留）；`session-idle`（自然空闲停）时主会话新回合 running → **自动 resume**（精准恢复 S1 移除的自动恢复，仅限自然停场景）。消除"任务在推进、wf=STOPPED"失配（Iter-22 B1-3）。
+- **边界**：文本提问（主 idle、无子）守卫覆盖不了，由 system-prompt 约束"编排期间提问必须用 ask 工具"配套（Iter-22 已先行落地止血）。
+- **验证标准（追加）**：后台 subagent 等待期间 wf 保持 RUNNING；子完成后主恢复驱动 wf 自动回 RUNNING；手工停后任何唤醒均不自动 resume；test-host 全绿。
 
 **验证标准**：Stop 后正在运行的 task subagent **立即停止**且主会话不再被触发继续；Resume 重新建立 subagent 续跑且**不重复**；与现有面板控制无回归；test-host 全绿。
 

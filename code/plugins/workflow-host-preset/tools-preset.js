@@ -644,7 +644,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (stage === 'CREATED' || stage === 'PENDING') throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED（当前 ' + stage + '）')
         // Iter-18：先写 reset 归档备份（<ts>_reset_<state>/），再 engine.reset()
         const backupDir = await registry.writeArchiveBackup(cwd, entry.instanceId, 'reset', (stage || 'UNKNOWN'))
-        entry.engine.reset() // → 全新 PENDING
+        // Iter-22：reset 不依赖内存 state.def（hydrate 不恢复 def，历史/重启/hydrate-only 实例
+        // 必无 def）——从 instance.yaml 重新解析展开定义再重置，任意可 reset 实例都能重跑。
+        const parsed = await expandInstanceDefinition(entry)
+        entry.engine.resetWithDefinition(parsed) // → 全新 PENDING
         entry.engine.setError(null)
         const r = await entry.storage.save()
         entry.engine.setPersist(r)

@@ -797,7 +797,7 @@ export function register(ctx) {
                   const resp = await fetch('/wf/reset', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId })
+                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-22(S4)：带 session 供"已重置"消息注入
                   })
                   if (!resp.ok) {
                     const err = await resp.json()
@@ -919,7 +919,7 @@ export function register(ctx) {
                 poolInstances.map(it => React.createElement('button', {
                   key: it.instanceId, onClick: () => doAdopt(it.instanceId),
                   style: { textAlign: 'left', border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }
-                }, it.workflowName + ' · ' + String(it.instanceId).slice(-6) + (it.stage ? ' · ' + it.stage : ' · 未绑定'))))),
+                }, it.workflowName + ' · ' + String(it.instanceId).slice(-8) + (it.poolNote ? ' · ' + it.poolNote : (it.stage ? ' · ' + it.stage : ' · 未启动')))))),
             React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
           ]))
 

@@ -261,6 +261,28 @@ async function runCase11() {
   e2.resume()
   s = e2.snapshot()
   check('resume: runnable 恢复（不死锁）', Array.isArray(s.runnable) && s.runnable.length === 2, String(s.runnable.length))
+
+  // 场景 6（Iter-22）：hydrate-only 实例 reset —— state.def 不持久化，resetWithDefinition 从
+  // instance.yaml 重解析后传入；reset() 在 hydrate-only 下抛错（现状约束，调用方已改走新变体）。
+  const hdef = { name: 'h22', version: '1', description: null, params: {}, tasks: [
+    { id: 'x', name: 'X', type: 'llm-task', processor: '/x/x', outputs: [], gate: null },
+  ] }
+  const e3 = createWorkflowEngine()
+  e3.begin(hdef)
+  e3.start()
+  e3.updateTask('x', { status: 'DONE' })
+  e3.stop()
+  const e4 = createWorkflowEngine()
+  e4.hydrate(e3.snapshot()) // 模拟从磁盘恢复：hydrate 不恢复 def
+  threw = false
+  try { e4.reset() } catch (err) { threw = /reset 需要已 begin 的定义/.test(err && err.message) }
+  check('hydrate-only reset() 抛错（state.def 缺失，根因留档）', threw)
+  e4.resetWithDefinition(hdef)
+  s = e4.snapshot()
+  check('resetWithDefinition: hydrate-only STOPPED→全新 PENDING', s.stage === 'PENDING' && s.active === true && s.tasks.length === 1 && s.tasks[0].status === 'PENDING', JSON.stringify({ stage: s.stage, n: s.tasks.length }))
+  threw = false
+  try { createWorkflowEngine().resetWithDefinition(null) } catch (err) { threw = true }
+  check('resetWithDefinition: 缺定义抛错', threw)
 }
 
 // ── 用例 12：绑定模型 + 完整性（Iter-17：create-bind/adopt + 1:1 + 派生状态 + BROKEN）──
@@ -374,6 +396,19 @@ async function runCase13() {
   r = await registered.workflow_status.execute({ task: 'a', taskStatus: 'RUNNING' }, exec)
   check('c13 status: a RUNNING', r.tasks.some(t => t.id === 'a' && t.status === 'RUNNING'))
 
+  // Part A2（Iter-22）：hydrate-only reset —— 全新注册表（内存 engines 为空、state.def 必缺失）
+  // 对同一实例直接 workflow_reset：模拟 DSH 重启/历史会话场景，必须从 instance.yaml 重解析定义。
+  const registered2 = {}
+  const registry2 = createInstanceRegistry(ctx(registered2), deps)
+  registerWorkflowToolsPreset(ctx(registered2), null, null, registry2)
+  const exec2 = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c13' } } } }
+  const c13saved = JSON.parse(files.get(statePath(iid)))
+  c13saved.stage = 'COMPLETED'
+  c13saved.tasks.forEach(t => { t.status = 'DONE' })
+  files.set(statePath(iid), JSON.stringify(c13saved)) // 直接落盘 COMPLETED 状态（模拟历史实例）
+  r = await registered2.workflow_reset.execute({ instanceId: iid }, exec2)
+  check('c13 reset(hydrate-only): COMPLETED→PENDING（不依赖内存 state.def）', r && r.stage === 'PENDING' && Array.isArray(r.runnable) && r.runnable.length === 1, r && r.stage !== undefined ? r.stage : JSON.stringify(r).slice(0, 140))
+
   // Part B：孤儿识别 + 回收（绑定会话死亡 → unlock → adopt）
   const orph = await registry.createBind('/ws/c13', 'sess-dead', { workflowName: 'orphan', sourceText: 'name: orphan\n', sourcePath: null, params: {} })
   let orphans = await registry.scanOrphans('/ws/c13')
@@ -384,6 +419,18 @@ async function runCase13() {
   check('孤儿回收: 解绑 sessionId=null', rec.meta.sessionId === null)
   orphans = await registry.scanOrphans('/ws/c13')
   check('孤儿回收后: 不再被识别为孤儿', !orphans.some(o => o.id === orph.instanceId))
+
+  // Part B2（Iter-22 D4 修复）：RUNNING 孤儿回收后必须落盘 STOPPED——此前 engine.stop() 未 save，
+  // state.json 残留 RUNNING 进采用池 → 被误标"未启动"（D4 实测问题）
+  const orph2 = await registry.createBind('/ws/c13', 'sess-dead2', { workflowName: 'orphan2', sourceText: 'name: orphan2\n', sourcePath: null, params: {} })
+  files.set(statePath(orph2.instanceId), JSON.stringify({
+    workflow: { name: 'orphan2', version: '1', tasks: [{ id: 'a', name: 'a', type: 'llm-task', processor: '/x', outputs: [], 'depends-on': [] }] },
+    stage: 'RUNNING',
+    tasks: [{ id: 'a', status: 'RUNNING' }, { id: 'b', status: 'DONE' }],
+  }))
+  await registry.recoverOrphan('/ws/c13', orph2.instanceId)
+  const recState = JSON.parse(files.get(statePath(orph2.instanceId)))
+  check('孤儿回收(D4): RUNNING 孤儿回收后 state.json 落盘 STOPPED（保 DONE）', recState.stage === 'STOPPED' && recState.tasks.some(t => t.id === 'b' && t.status === 'DONE'), recState.stage)
 }
 
 // ── 用例 14：前后台配合（Iter-19）─────────────────────────────────────────
@@ -393,9 +440,11 @@ async function runCase14() {
   const { files, fs: mockFs } = makeMockFs()
   const live = new Set(['sess-a'])
   const runningAgents = new Set(['sess-a'])
+  const pendingAgents = new Set()
   const isSessionLive = (sid) => live.has(sid)
   const isAgentRunning = (sid) => runningAgents.has(sid)
-  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning }
+  const isAgentPending = (sid) => pendingAgents.has(sid)
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning, isAgentPending }
   const registered = {}
   const ctx = (bag) => ({
     tools: { register(t) { bag[t.name] = t } },
@@ -412,15 +461,31 @@ async function runCase14() {
   check('workflow_begin: 实例绑定 sess-a', registry.get(r.instanceId).meta.sessionId === 'sess-a')
   const iid = r.instanceId
 
-  // 2) Session 停止同步（agent idle → 实例 STOPPED）
+  // 2) Session 停止同步（agent idle 且无排队输入 → 实例 STOPPED）
   runningAgents.delete('sess-a')
   let e = await registry.syncInstanceState('/ws/c14', iid)
-  check('sync:idle → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('sync:idle(无排队) → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
 
-  // 3) Session 启动同步（agent running → 实例 resume RUNNING）
+  // 3) Iter-22(S1)：running→resume 自动恢复已移除——agent running 不再把 STOPPED 拉回 RUNNING
   runningAgents.add('sess-a')
   e = await registry.syncInstanceState('/ws/c14', iid)
-  check('sync:running → 实例 resume RUNNING', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+  check('sync:running → 仍 STOPPED（S1 移除自动 resume）', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+
+  // 3b) 显式恢复（等价于 agent 依消息调 workflow_resume）
+  e.engine.resume()
+  await e.storage.save()
+  check('显式 resume → RUNNING（保 DONE）', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+
+  // 4) Iter-22(S1) 守卫：idle 但 hasPending（排队输入未认领）→ 不 stop，保持 RUNNING
+  runningAgents.delete('sess-a')
+  pendingAgents.add('sess-a')
+  e = await registry.syncInstanceState('/ws/c14', iid)
+  check('sync:idle+排队输入 → 仍 RUNNING（S1 守卫）', e.engine.snapshot().stage === 'RUNNING', e.engine.snapshot().stage)
+
+  // 5) 守卫解除（排队输入已被认领/清空）→ idle 正常停
+  pendingAgents.delete('sess-a')
+  e = await registry.syncInstanceState('/ws/c14', iid)
+  check('sync:idle(守卫解除) → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
 
   // 4) create 即绑定（/wf/create 路由带 sessionId → metadata.sessionId）
   const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
@@ -466,7 +531,8 @@ async function runCase15() {
   const { files, fs: mockFs } = makeMockFs()
   const live = new Set(['sess-a'])
   const runningAgents = new Set(['sess-a'])
-  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive: (s) => live.has(s), isAgentRunning: (s) => runningAgents.has(s) }
+  const pendingAgents = new Set()
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive: (s) => live.has(s), isAgentRunning: (s) => runningAgents.has(s), isAgentPending: (s) => pendingAgents.has(s) }
   const registry = createInstanceRegistry({ get() { return mockFs } }, deps)
   const cwd = '/ws/c15'
 
@@ -485,8 +551,8 @@ async function runCase15() {
   const wfb = allWfaWfb.find(x => x.workflowName === 'wfb')
   if (wfb) await registry.patchMeta(cwd, wfb.instanceId, { sessionId: null })
 
-  // 2) R4：listInstances 对绑定实例做 Session 启停同步（idle→stop / running→resume）
-  const b = await registry.beginInstance({ cwd, sessionId: 'sess-a', workflowName: 'wfc', sourceText: 'name: wfc\n', sourcePath: null, params: {} })
+  // 2) R4：listInstances 对绑定实例做 Session 启停同步（idle→stop；Iter-22(S1) 守卫排队输入）
+  const b = await registry.beginInstance({ cwd, sessionId: 'sess-a', workflowName: 'wfc', sourceText: 'name: wfc\nversion: "1"\ndescription: d\ntasks:\n  - id: t\n    name: t\n    type: llm-task\n    processor: /x\n    outputs: []\n    depends-on: []\n', sourcePath: null, params: {} })
   b.engine.begin({ name: 'wfc', version: '1', description: null, params: {}, tasks: [{ id: 't', name: 't', type: 'llm-task', processor: '/x', outputs: [], gate: null }] })
   b.engine.start()
   await b.storage.save()
@@ -497,7 +563,19 @@ async function runCase15() {
   runningAgents.add('sess-a') // 会话 running
   list = await registry.listInstances(cwd)
   const runItem = list.find(x => x.instanceId === b.instanceId)
-  check('R4 list: 会话 running → 实例 resume RUNNING', runItem && runItem.stage === 'RUNNING', runItem && runItem.stage)
+  check('R4 list: 会话 running → 仍 STOPPED（S1 移除自动 resume）', runItem && runItem.stage === 'STOPPED', runItem && runItem.stage)
+  // Iter-22(S1) 守卫：显式 resume 回 RUNNING 后，idle + 排队输入 → 列表同步不误停
+  b.engine.resume()
+  await b.storage.save()
+  runningAgents.delete('sess-a')
+  pendingAgents.add('sess-a')
+  list = await registry.listInstances(cwd)
+  const guardItem = list.find(x => x.instanceId === b.instanceId)
+  check('R4 list: idle+排队输入 → 仍 RUNNING（S1 守卫）', guardItem && guardItem.stage === 'RUNNING', guardItem && guardItem.stage)
+  pendingAgents.delete('sess-a')
+  list = await registry.listInstances(cwd)
+  const guardOffItem = list.find(x => x.instanceId === b.instanceId)
+  check('R4 list: idle(守卫解除) → 实例 STOPPED', guardOffItem && guardOffItem.stage === 'STOPPED', guardOffItem && guardOffItem.stage)
 
   // 3) /wf/list 路由返回 sessionState（轻量）；/wf/start 路由不置 RUNNING
   const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
@@ -517,6 +595,42 @@ async function runCase15() {
   const unbound = await registry2.beginInstance({ cwd, sessionId: null, workflowName: 'wfd', sourceText: 'name: wfd\n', sourcePath: null, params: {} })
   const sr = await call('POST', '/wf/start', { workspaceRoot: cwd, instanceId: unbound.instanceId, sessionId: 'sess-a' })
   check('R2 /wf/start 路由: 不置 RUNNING（未改引擎状态）', sr.code === 200 && sr.body.stage !== 'RUNNING', JSON.stringify(sr.body).slice(0, 80))
+
+  // 3b) Iter-22(S3)：/wf/list 自动回收孤儿进采用池 + 状态标注（未启动 / 已停止·含进度）
+  const orph9 = await registry2.createBind(cwd, 'sess-dead9', { workflowName: 'orph9', sourceText: 'name: orph9\nversion: "1"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    type: llm-task\n    processor: /x/a\n    outputs: []\n    depends-on: []\n', sourcePath: null, params: {} })
+  files.set(cwd + '/.workflow-agent/instances/' + orph9.instanceId + '/state.json',
+    JSON.stringify({ workflow: 'orph9', version: '1', stage: 'STOPPED', active: false, tasks: [{ id: 'a', status: 'DONE' }] })) // 已停止·含进度
+  const lr2 = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(cwd) + '&sessionId=sess-a')
+  const orphItem = lr2.body.instances.find(x => x.instanceId === orph9.instanceId)
+  check('S3 /wf/list: 死会话孤儿被自动回收（sessionId→null 进池）', orphItem && orphItem.sessionId === null, orphItem && orphItem.sessionId)
+  check('S3 /wf/list: 停止孤儿标注 已停止·含进度 + adoptable', orphItem && orphItem.adoptable === true && /已停止·含进度/.test(orphItem.poolNote || ''), orphItem && orphItem.poolNote)
+  check('S3 /wf/list: recoveredOrphans 上报', Array.isArray(lr2.body.recoveredOrphans) && lr2.body.recoveredOrphans.includes(orph9.instanceId), JSON.stringify(lr2.body.recoveredOrphans))
+  const lr3 = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(cwd) + '&sessionId=sess-a')
+  check('S3 /wf/list: 二次轮询无新增回收（幂等）', lr3.body.recoveredOrphans.length === 0, JSON.stringify(lr3.body.recoveredOrphans))
+
+  // 3b2) Iter-22(D4 修复)：池内 RUNNING 残留自愈——历史版本 recoverOrphan 未落盘的 polluted 实例
+  const poll = await registry2.beginInstance({ cwd, sessionId: null, workflowName: 'wfe', sourceText: 'name: wfe\nversion: "1"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    type: llm-task\n    processor: /x/a\n    outputs: []\n    depends-on: []\n', sourcePath: null, params: {} })
+  files.set(cwd + '/.workflow-agent/instances/' + poll.instanceId + '/state.json',
+    JSON.stringify({ workflow: { name: 'wfe', version: '1', tasks: [{ id: 'a', name: 'A', type: 'llm-task', processor: '/x/a', outputs: [], 'depends-on': [] }] }, stage: 'RUNNING', tasks: [{ id: 'a', status: 'RUNNING' }, { id: 'b', status: 'DONE' }] }))
+  const lr4 = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(cwd) + '&sessionId=sess-a')
+  const pollItem = lr4.body.instances.find(x => x.instanceId === poll.instanceId)
+  check('S3 自愈(D4): 池内 RUNNING 残留被落盘为 STOPPED（不再标未启动）', pollItem && pollItem.stage === 'STOPPED' && /已停止·含进度/.test(pollItem.poolNote || ''), pollItem && (pollItem.stage + ' / ' + pollItem.poolNote))
+  const healedState = JSON.parse(files.get(cwd + '/.workflow-agent/instances/' + poll.instanceId + '/state.json'))
+  check('S3 自愈(D4): 磁盘 state.json 已落盘 STOPPED 且保 DONE', healedState.stage === 'STOPPED' && healedState.tasks.some(t => t.id === 'b' && t.status === 'DONE'), healedState.stage)
+
+  // 3c) Iter-22(S4)：/wf/reset 注入"已重置"通知（queue 模式，含全新运行语义文案）
+  const promptCalls = []
+  ctx2.get = (n) => {
+    if (n === 'webServer') return { register(def) { routeHandler = def.handler } }
+    if (n === 'fs') return mockFs
+    if (n === 'apiProxy') return { sessions: { prompt: async (p) => { promptCalls.push(p); return { ok: true } } } }
+    return undefined
+  }
+  const rr = await call('POST', '/wf/reset', { workspaceRoot: cwd, instanceId: b.instanceId, sessionId: 'sess-a' })
+  const lastPrompt = promptCalls[promptCalls.length - 1]
+  const lastText = lastPrompt && lastPrompt.payload && Array.isArray(lastPrompt.payload.content) && lastPrompt.payload.content[0] ? lastPrompt.payload.content[0].text : ''
+  check('S4 /wf/reset: 状态重置为 PENDING + 注入已重置消息', rr.code === 200 && rr.body.stage === 'PENDING' && rr.body.messageInjected === true, JSON.stringify({ code: rr.code, stage: rr.body.stage, mi: rr.body.messageInjected, error: rr.body.error }))
+  check('S4 /wf/reset: 注入文案含"已重置"+全新运行语义 + queue', /已重置/.test(lastText) && /全新工作流/.test(lastText) && lastPrompt.payload.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.payload && lastPrompt.payload.mode, text: String(lastText).slice(0, 80) }))
 
   // 4) forSession 根修复：未绑定会话 → undefined（绝不取工作区最新实例）；已绑定 → 返回本会话实例
   const r1 = await registry.forSession({ agent: { session: { header: { id: 'sess-zzz', cwd } } } })

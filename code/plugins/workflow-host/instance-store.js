@@ -75,6 +75,11 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-19：会话 agent 是否运行中（Session 启停同步依赖）。生产由 apply 注入 agents 服务包装；
   // 缺省返回 undefined（无法判定 → 不触发同步，保持既有行为）。
   const isAgentRunning = typeof deps.isAgentRunning === 'function' ? deps.isAgentRunning : (() => undefined)
+  // Iter-22(S1)：排队用户输入判定（idle→stop 守卫依赖）。生产由 apply 注入 agents 服务包装
+  // （agents.get(sid).inbox.hasPending）；缺省恒 false（无信号不阻止 stop，保持既有行为）。
+  // 探针结论（Iter-22 S1 探针）：提问等待（ask_user_question 阻塞）期间 status 仍为 running，
+  // 不产生 idle；hasPending=true 仅出现在用户消息已排队、driver 尚未认领的间隙——该间隙不得误停。
+  const isAgentPending = typeof deps.isAgentPending === 'function' ? deps.isAgentPending : (() => false)
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -327,6 +332,28 @@ function createInstanceRegistry(ctx, deps) {
             }
           } catch (e) { /* 无 state.json → CREATED */ }
         }
+        // Iter-22(D4 修复)：池内（sessionId==null）不应存在 RUNNING——历史 recoverOrphan 未落盘
+        // 的残留，或异常路径产物。发现即从磁盘状态水合全新引擎补 stop+落盘（幂等自愈），
+        // 并同步既有内存条目，避免采用池出现误导性 RUNNING。
+        if (!meta.sessionId && item.phase === 'READY' && item.stage === 'RUNNING') {
+          try {
+            const state = JSON.parse(await fs.readText(await fs.resolve(instanceDirPath(cwd, id) + '/state.json')))
+            if (state && state.workflow) {
+              const nEngine = deps.createWorkflowEngine()
+              nEngine.hydrate(state)
+              nEngine.stop()
+              const nStorage = deps.createWorkflowStorage(ctx, nEngine)
+              nStorage.setInstanceDir(instanceDirPath(cwd, id))
+              const nr = await nStorage.save()
+              const memEntry = engines.get(id)
+              if (memEntry && memEntry.hasState) {
+                memEntry.engine.hydrate(nr)
+                memEntry.engine.setPersist(nr)
+              }
+              item.stage = 'STOPPED'
+            }
+          } catch (e) { /* 自愈失败降级为原状态标注，不阻塞列表 */ }
+        }
         out.push(item)
       } catch (e) { /* 残缺实例目录跳过 */ }
     }
@@ -568,11 +595,20 @@ function createInstanceRegistry(ctx, deps) {
     const sid = entry.meta.sessionId
     if (!sid) throw new Error('实例 ' + instanceId + ' 无绑定，非孤儿')
     if (isSessionLive(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
-    // RUNNING 先 stop（保留 DONE 进度）
-    if (entry.hasState) {
-      const st = entry.engine.snapshot()
-      if (st.stage === 'RUNNING') entry.engine.stop()
-    }
+    // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
+    // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
+    try {
+      const fsSvc = ctx.get('fs')
+      const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
+      if (state && state.workflow) {
+        if (!entry.hasState) { entry.engine.hydrate(state); entry.hasState = true }
+        if (entry.engine.snapshot().stage === 'RUNNING') {
+          entry.engine.stop()
+          const r = await entry.storage.save()
+          entry.engine.setPersist(r)
+        }
+      }
+    } catch (e) { /* 无 state.json（CREATED 孤儿）→ 跳过 stop */ }
     await patchMeta(cwd, instanceId, { sessionId: null })
     activeBySession.delete(sid)
     return loadEntry(cwd, instanceId)
@@ -617,9 +653,10 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   // ── Iter-19：Session 启停同步（前后台状态配合）────────────────────────────
-  // 用户起停 DSH Session（agent idle⇄running）时，绑定实例状态需对齐：
-  //   agent idle（用户停了 session）  → 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
-  //   agent running（用户重启 session）→ 实例 STOPPED 则 engine.resume() → RUNNING（续跑）
+  // Iter-22(S1) 修订：仅保留 idle→stop（加排队输入守卫）：
+  //   agent idle 且无排队输入（hasPending=false）→ 实例 RUNNING 则 engine.stop() → STOPPED（保进度）
+  //   agent idle 但有排队输入（hasPending=true，用户消息即将被认领）→ 不 stop（防误停）
+  //   running→resume 自动恢复已移除（Iter-22 用户拍板 B）：wf 只能由 agent 依消息显式 workflow_resume
   // 仅在能判定 agent 状态时触发；CREATED/PENDING/COMPLETED/FAILED 不误改。
   async function syncInstanceState(cwd, instanceId) {
     const entry = await loadEntry(cwd, instanceId)
@@ -630,18 +667,13 @@ function createInstanceRegistry(ctx, deps) {
     if (running === undefined || running === null) return entry // 无法判定，不触发
     const stage = entry.engine.snapshot().stage // 以引擎实际状态为准（hasState 仅缓存标记）
     if (running === false) {
-      if (stage === 'RUNNING') {
+      if (stage === 'RUNNING' && !isAgentPending(sid)) {
         entry.engine.stop() // RUNNING→STOPPED，保 DONE 进度
         await entry.storage.save()
         entry.engine.setPersist('ok (session-idle sync)')
       }
-    } else {
-      if (stage === 'STOPPED') {
-        entry.engine.resume() // STOPPED→RUNNING，续跑
-        await entry.storage.save()
-        entry.engine.setPersist('ok (session-running sync)')
-      }
     }
+    // Iter-22(S1)：running→resume 自动恢复分支移除——非"继续"类消息不得把停止的 wf 拉回 RUNNING
     return entry
   }
 

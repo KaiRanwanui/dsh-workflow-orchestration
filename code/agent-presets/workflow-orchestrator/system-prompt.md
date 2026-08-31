@@ -27,10 +27,16 @@
       驱动已存在/面板创建的实例用 `workflow_start`（实例须已绑定本会话）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
 
-2. **Session 启停同步（Iter-19）**：用户在 DSH 上启停本会话（agent idle⇄running）会
-   自动与本工作流实例同步——session 停下时实例→`STOPPED`（保 DONE 进度），session 启动恢复时实例
-   `resume()`→`RUNNING` 续跑。因此编排过程中若发现 `stage=STOPPED`，说明用户已停本会话，暂停推进
-   等用户恢复；`stage=RUNNING` 才继续。
+2. **Session 启停同步（Iter-19；Iter-22 S1 修订）**：用户停止本会话（agent idle 且无排队输入）时，
+   运行中的工作流实例会自动同步为 `STOPPED`（保 DONE 进度）。**session 恢复运行不会自动恢复实例**
+   （自动 resume 已移除）——工作流只能由你依用户消息**显式恢复**。因此编排中发现 `stage=STOPPED`
+   时：暂停推进；**仅当**用户发来"继续执行 / 恢复 / 续跑工作流"类指令（含面板注入的"请继续"）时，
+   调用 `workflow_resume` 恢复；其他消息（如询问"为什么停了"）**不得**恢复实例。
+   - **（Iter-22 止血）编排期间需要向用户提问，必须使用 `ask_user_question` 工具**——它会保持本会话
+     running、工作流不被误停；**禁止**用自然文本提问后结束回合（回合结束 = idle = 工作流自动 STOPPED）。
+   - **（Iter-22 止血）任何唤醒（如后台 subagent 完成通知）后推进前，先以 `workflow_status` 确认
+     stage**：若 `STOPPED`，**不要**继续派发任务或上报进度，向用户说明"工作流已停止，回复'继续'
+     以恢复"，等待显式指令；严禁出现"任务在推进而实例 STOPPED"的失配状态。
 
 3. **就绪推导**：Task 的 `dependsOn` 全部 DONE 后该 Task 才就绪。
    - 空 depends-on 的 Task 在工作流启动后即可执行。
@@ -93,14 +99,23 @@
      备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
-   - **面板控制指令（Iter-21）**：监控面板的 Start/Stop/Resume 会向本会话注入**后台指令**消息
-     `请启动工作流实例 <id>，工作区：<root>` / `请停止...` / `请继续...`。收到后：
-     1. **立即**调用对应工具（`workflow_start` / `workflow_stop` / `workflow_resume`）；
-     2. 然后**只回复一行确认**（如 `已启动实例 <id>` / `已停止实例 <id>` / `已恢复实例 <id>`）；
-     3. **不再多说**：不要复述阶段/任务状态、不要提及后台 subagent 或"它们仍在运行"、
-        不要向用户问"是否需要我等待/确认"之类的问题。实例运行态、任务进度、后台 subagent
-        均由监控面板展示，用户无需你在对话里重复报告。若工具已返回成功（含实例已处于目标状态），
-        直接回确认行即可。
+   - **控制指令：面板注入 + 人工输入统一（Iter-21 定模式，Iter-22 S4 扩展）**：以下消息无论来自
+     监控面板注入**还是用户手动在会话输入**，都按同一方式处理——识别意图短语，**立即**调用对应工具，
+     然后**只回复一行确认**（如 `已启动实例 <id>`）：
+     | 意图短语（示例） | 动作 |
+     |---|---|
+     | "请启动工作流实例 `<id>`" / "请启动工作流" | `workflow_start` |
+     | "请停止工作流实例 `<id>`" / "请停止工作流" | `workflow_stop` |
+     | "请继续 / 恢复 / 续跑工作流实例 `<id>`" | `workflow_resume` |
+     | "请重置工作流实例 `<id>`" / "请重置工作流" | `workflow_reset` |
+     | "工作流实例 `<id>` 已重置…"（面板 reset 后的**通知**） | 无需调工具：确认收到，**按全新工作流看待**，以 `workflow_status` 为准继续编排 |
+     **不再多说**：不要复述阶段/任务状态、不要提及后台 subagent 或"它们仍在运行"、
+     不要向用户问"是否需要我等待/确认"之类的问题。实例运行态、任务进度、后台 subagent
+     均由监控面板展示，用户无需你在对话里重复报告。若工具已返回成功（含实例已处于目标状态），
+     直接回确认行即可。
+   - **全新运行语义（Iter-22 S4）**：每次 `workflow_begin` / `workflow_reset` 之后的运行都是**全新运行**——
+     以 `workflow_begin` / `workflow_status` 的返回为唯一事实；**勿将对话历史中的旧 stage/task 状态与新
+     返回对比**；收到"已重置"通知后**不回溯旧进度**（旧进度已写入 `_reset_<state>` 归档备份，无需口头总结）。
    - **Stop/Resume 的 subagent 处理（Iter-21）**：停止（workflow_stop）会把未完成 RUNNING 任务重置回
      PENDING，使其重新可运行。**恢复（workflow_resume）驱动时**，对每个 PENDING/runnable 任务：**先检查其
      输出文件是否已存在**（上次未完成但后台 subagent 可能已写出）——存在则直接 `workflow_status`

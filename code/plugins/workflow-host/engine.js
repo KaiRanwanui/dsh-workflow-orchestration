@@ -337,6 +337,20 @@ function createWorkflowEngine() {
     return snapshot()
   }
 
+  // Iter-22：reset 不依赖内存 state.def 的变体。hydrate() 不恢复 def——COMPLETED/STOPPED/FAILED
+  // 的历史实例、跨会话/DSH 重启后的 hydrate-only 实例，其 state.def 必为空，reset() 会抛
+  // "reset 需要已 begin 的定义"。调用方（workflow_reset 工具 / /wf/reset 路由）从实例
+  // instance.yaml 重新解析展开定义后传入；语义与 reset() 相同（仅 STOPPED/COMPLETED/FAILED
+  // → 丢弃进度，全新 PENDING）。
+  function resetWithDefinition(parsed) {
+    if (state.stage === E_STAGE.PENDING || state.stage === E_STAGE.RUNNING) {
+      throw new Error('reset 仅允许 STOPPED/COMPLETED/FAILED 状态（当前: ' + state.stage + '）；RUNNING 须先 stop，PENDING 无执行内容')
+    }
+    if (!parsed) throw new Error('resetWithDefinition 需要解析后的工作流定义')
+    begin(parsed) // 丢弃进度，全新 PENDING
+    return snapshot()
+  }
+
   return {
     begin,
     clear,
@@ -353,6 +367,7 @@ function createWorkflowEngine() {
     stop,
     resume,
     reset,
+    resetWithDefinition,
     snapshot,
   }
 }
