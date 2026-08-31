@@ -599,8 +599,9 @@ workflow_list → 列出所有实例 + 状态
 - **Host 归档**：归档实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态）+ `manifest.json`；`listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具+路由；归档后会话 BOUND→DONE；重置写 `reset_<state>`、显式归档用 `archive_<state>` 区分；
 - **Client 状态机按钮**：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset/归档确认）；
 - **归档管理 UI**：list / download / delete。
+- **方向 A：手工停 DSH 会话 = 权威停止（2026-09-02 用户拍板并入）**：现状=session cancel 无痕（AgentStatus 只有 idle/running），子会话跑完后结算通知唤醒已 cancel 的 agent 继续编排（用户实测确认）。改法：syncInstanceState 判定"主 idle + 会话处于已停状态"→ 视同 user-stop（wf STOPPED + 级联 interrupt 子会话），与面板 Stop 同级权威。前置探查：sessions 服务层的"已停"状态信号（Iter-21 线索：已停 session 拒绝 prompt 注入，说明 sessions 层有状态可读）——开工前先做半小时级探针确认信号与读取方式；探不到则降级方案=维持现状+文档化。
 
-**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete。
+**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete；**方向 A**：手工停会话 + 子会话在跑 → wf STOPPED(user-stop) + 子会话秒级消失 + 主会话不再被结算通知唤醒推进；resume 语义不回归。
 
 ---
 
