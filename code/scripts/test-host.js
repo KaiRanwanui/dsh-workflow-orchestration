@@ -9,7 +9,7 @@ const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
 const { expandLoopTasks } = require('../plugins/workflow-host/tools.js')
 const { expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
-const { createInstanceRegistry, slugifyName, instanceDirPath } = require('../plugins/workflow-host/instance-store.js')
+const { createInstanceRegistry, slugifyName, instanceDirPath, isUserAbortTurnEnd, detectUserAbortFromLog } = require('../plugins/workflow-host/instance-store.js')
 const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
 
 let pass = 0
@@ -730,6 +730,103 @@ async function runCase16() {
   check('c16 降级:探针故障 → 照常停（不卡死 RUNNING）', e2.engine.snapshot().stage === 'STOPPED', e2.engine.snapshot().stage)
 }
 
+// ── 用例 17：方向 A 手工停权威停止（Iter-23 A1/A2）────────────────────────
+async function runCase17() {
+  console.log('［用例 17］方向 A — A1 aborted(user) 判定矩阵 / A2 轮询兜底 / 权威停止语义')
+  const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { fs: mockFs } = makeMockFs()
+
+  // 1) A1 判定纯函数矩阵（探针实证事件形态：payload 在 data 包装下）
+  check('c17 A1: turn/end+aborted+user → true', isUserAbortTurnEnd({ type: 'turn/end', data: { turn: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } } }) === true)
+  check('c17 A1: parent 原因（级联 interrupt）→ false', isUserAbortTurnEnd({ type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'parent' } } } }) === false)
+  check('c17 A1: hook 原因 → false', isUserAbortTurnEnd({ type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'hook' } } } }) === false)
+  check('c17 A1: disposed 原因 → false', isUserAbortTurnEnd({ type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'disposed' } } } }) === false)
+  check('c17 A1: legacy 原因 → false', isUserAbortTurnEnd({ type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'legacy' } } } }) === false)
+  check('c17 A1: 正常完成（completed）→ false', isUserAbortTurnEnd({ type: 'turn/end', data: { reason: { kind: 'completed' } } }) === false)
+  check('c17 A1: 无 reason → false', isUserAbortTurnEnd({ type: 'turn/end', data: {} }) === false)
+  check('c17 A1: 非 turn-end → false', isUserAbortTurnEnd({ type: 'assistant/chunk', data: {} }) === false)
+  check('c17 A1: 畸形事件（null）→ false', isUserAbortTurnEnd(null) === false)
+
+  // 2) A2 log 尾扫纯函数
+  check('c17 A2: 日志不可读（null）→ undefined（降级）', detectUserAbortFromLog(null) === undefined)
+  check('c17 A2: 空日志 → undefined（降级）', detectUserAbortFromLog([]) === undefined)
+  check('c17 A2: 无 turn/end → false', detectUserAbortFromLog([{ type: 'session/started' }, { type: 'assistant/chunk' }]) === false)
+  const abortLog = [{ type: 'session/started' }, { type: 'assistant/chunk' }, { type: 'turn/end', data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } }]
+  check('c17 A2: 末条=aborted(user) → true', detectUserAbortFromLog(abortLog) === true)
+  const supersededLog = abortLog.concat([{ type: 'user/message', data: {} }, { type: 'turn/end', data: { reason: { kind: 'completed' } } }])
+  check('c17 A2: 末条被新回合覆盖 → false（该窗口归 A1 即时处置）', detectUserAbortFromLog(supersededLog) === false)
+
+  // 3) A1 registry 入口：RUNNING+绑定 → 权威停止 + 级联打断
+  const runningAgents = new Set()
+  const pendingAgents = new Set()
+  const childrenBySession = { 'sess-a': ['child-1', 'child-2'] }
+  const runningChildren = new Set(['child-1', 'child-2'])
+  const interrupted = []
+  let abortVerdict = undefined // detectUserAbort mock 可控（undefined=探针故障降级）
+  const deps = {
+    createWorkflowEngine, createWorkflowStorage,
+    isSessionLive: () => true,
+    isAgentRunning: (sid) => runningAgents.has(sid),
+    isAgentPending: (sid) => pendingAgents.has(sid),
+    listRunningChildren: async (sid) => (childrenBySession[sid] || []).filter((c) => runningChildren.has(c)),
+    interruptChild: async (sid, childId) => { interrupted.push(childId); runningChildren.delete(childId) },
+    detectUserAbort: async () => abortVerdict,
+  }
+  const registered = {}
+  const ctxF = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) {
+      if (n === 'fs') return mockFs
+      if (n === 'tools') return { register(t) { bag[t.name] = t } }
+      return undefined
+    },
+  })
+  const registry = createInstanceRegistry(ctxF(registered), deps)
+  registerWorkflowToolsPreset(ctxF(registered), null, null, registry)
+  const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c17' } } } }
+  const WF = `name: c17demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c17/output/a.md"]\n    depends-on: []\n`
+  const r = await registered.workflow_begin.execute({ workflowText: WF }, exec)
+  check('c17 A1: begin → RUNNING', r.stage === 'RUNNING', r.stage)
+  const iid = r.instanceId
+  runningAgents.delete('sess-a') // 模拟：UI 停止按钮打断活动回合 → agent idle
+  let res = await registry.handleSessionUserStop('sess-a')
+  check('c17 A1: RUNNING → 处置返回 instanceId', !!res && res.instanceId === iid, res && res.instanceId)
+  check('c17 A1: 引擎 STOPPED', registry.get(iid).engine.snapshot().stage === 'STOPPED', registry.get(iid).engine.snapshot().stage)
+  check('c17 A1: stopReason=user-stop', registry.get(iid).meta.stopReason === 'user-stop', registry.get(iid).meta.stopReason)
+  check('c17 A1: 级联打断全部 running 子会话', interrupted.includes('child-1') && interrupted.includes('child-2') && res.stoppedChildren === 2, JSON.stringify(interrupted))
+  check('c17 A1: 幂等（非 RUNNING 再调 → null）', (await registry.handleSessionUserStop('sess-a')) === null)
+  check('c17 A1: 未绑定 sid → null', (await registry.handleSessionUserStop('sess-other')) === null)
+
+  // 4) P2 回归：A1 user-stop 后主会话再活跃 → 不自动恢复（权威停止语义）
+  runningAgents.add('sess-a')
+  let e = await registry.syncInstanceState('/ws/c17', iid)
+  check('c17 P2 回归: user-stop + running → 仍 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+
+  // 5) A2 轮询兜底：user-abort 优先于 P1 守卫（权威性高于子会话聚合）
+  e.engine.resume(); await e.storage.save() // → RUNNING（模拟再次运行后被手工停）
+  runningChildren.add('child-2') // 子会话又在跑
+  interrupted.length = 0
+  abortVerdict = true
+  runningAgents.delete('sess-a')
+  e = await registry.syncInstanceState('/ws/c17', iid)
+  check('c17 A2: idle+aborted+子在跑 → 权威 STOPPED（高于 P1 守卫）', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
+  check('c17 A2: 权威停 stopReason=user-stop', registry.get(iid).meta.stopReason === 'user-stop', registry.get(iid).meta.stopReason)
+  check('c17 A2: 级联打断在跑子会话', interrupted.includes('child-2'), JSON.stringify(interrupted))
+
+  // 6) A2 降级：探针故障（undefined）→ 既有 session-idle 语义不回归
+  runningAgents.add('sess-a'); e.engine.resume(); await e.storage.save() // → RUNNING
+  abortVerdict = undefined // 探针故障
+  runningChildren.clear() // 无子会话
+  runningAgents.delete('sess-a')
+  e = await registry.syncInstanceState('/ws/c17', iid)
+  check('c17 A2: 探针 undefined → 降级 session-idle', e.engine.snapshot().stage === 'STOPPED' && registry.get(iid).meta.stopReason === 'session-idle', registry.get(iid).meta.stopReason)
+
+  // 7) P2 回归：session-idle + 主会话活跃 → 定向自动 resume
+  runningAgents.add('sess-a')
+  e = await registry.syncInstanceState('/ws/c17', iid)
+  check('c17 P2 回归: session-idle + running → 自动 resume', e.engine.snapshot().stage === 'RUNNING' && registry.get(iid).meta.stopReason === null, registry.get(iid).meta.stopReason)
+}
+
 // ── 用例 8：实例注册表（Iter-10：实例目录 + metadata 映射 + 双实例隔离 + 惰性恢复）──
 async function runCase8() {
   console.log('［用例 8］实例注册表 — 实例目录 + metadata 映射 + 隔离 + 惰性恢复')
@@ -1119,6 +1216,7 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase15()
     // ── 用例 16：主从聚合控制（Iter-SUBA）──
     await runCase16()
+    await runCase17()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

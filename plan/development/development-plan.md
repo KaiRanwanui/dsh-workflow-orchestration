@@ -27,7 +27,7 @@
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优) → Iter-20(前后台状态一致 + S5 预设门控/BROKEN 展示 + 内置默认模板可执行；v4 手测 14 通过/2 N/A/5 问题归 Iter-21)
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
-当前:   **Iter-SUBA（DSH 子会话可控性 + 主从聚合控制）✅**：探索（探针实证 apiProxy.subagents.{list,interrupt,prompt} + interrupt 毫秒级级联 + followup 唤醒冷子，报告 iter-suba-report.md、探针存档 code/probes/suba-master-slave-probe.js）+ 实现 P1 聚合守卫 / P2 stopReason 定向恢复（session-idle 自动 resume、user-stop 永不）/ P3 workflow_stop 级联 interrupt / P4 级联通知忽略（host v0.11.17，193 单测）；手测 T1-T7 全过（T2 经构造 session-idle 补测，引擎日志实证 00:05:04 无调用瞬态 RUNNING；"手工停会话复活"未复现转观察项，方向 A 记录在案）；手测报告 iter-suba-verification-report.md   （其后 23 生命周期闭环+归档 → 24 编排可视化编辑）
+当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）🔄 设计定稿（2026-09-02 用户确认），开发中**：前置探针完成（stopa-6 动态插件用后 undefine；报告 iter23-probe-report.md——Case R 停在活动回合=持久 aborted(user) 信号 live/冷双路可读；Case I 停在空闲=零痕迹不可检测，RPC 假性 accepted）。方案：A1 session/event 事件驱动即时权威停止（STOPPED(user-stop)+级联 interrupt+通知免疫）+ A2 syncInstanceState 轮询兜底（live log 尾扫 aborted(user)）+ A3 面板常驻提示条（Case I 引导用面板 Stop；纯插件 UI）。队列其后：**24 生命周期闭环+归档（原 23 归档范围）→ 25 编排可视化编辑（原 24）**
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -55,8 +55,9 @@
 | **21** | 前后台状态一致·v4 手测问题闭环 + Resume 提前 | R1 CREATED 态 DAG 补任务节点（A4：loadStateFromFile 从 instance.yaml 生成 PENDING tasks）；R2 子会话门控（A6：isWorkflowSession 加 `origin !== 'subagent'`）；R3 会话切换状态一致（其他#1/#2：切会话重置 wfSessionState/wfInstances/latest + 重拉列表，cwd 相同也刷新，采用池即时更新）；R4 BROKEN 加固（B2：BROKEN 每次从 /wf/list 重派生，展示态不中断轮询，防御性重置）；R5 Client Resume 按钮（D3/原 S2：STOPPED 显示 Resume → /wf/resume） | 端到端：A4 新建实例 DAG 显示任务节点；A6 子会话占位；#1 同工作区切会话状态即时正确且 /wf/status 非空；#2 采用池即时列出；B2 反复删 metadata→BROKEN 始终正确；D3 STOPPED 显示 Resume 并续跑 | ✅ **代码完成**（host v0.11.6 / client v0.5.5；157 单测；awaiting 部署验证） | Iter-20 |
 | **22** | 前后台状态一致·剩余修复轮（S1/S3/S4） | S1 去掉自动 idle→stop（状态由用户显式控制，避免提问等待误停）；S3 孤儿进采用池（recoverOrphan 解绑）+ 采用池只列 CREATED/标注；S4 reset 清理会话对话（或编排侧忽略旧对话） | 端到端：提问等待不停、孤儿可采用、reset 后重跑状态一致 | Iter-21 |
 | **SUBA** | **DSH 子会话可控性探索（研究迭代）** | 摸清 DSH 主/子会话会话级控制接口：确认 task subagent 模式（continuable/one-shot）、`subagent.interrupt` vs `subagent.prompt` 停止子会话、主会话 await 中断/级联停止的可行方案；产出可行方案设计 | 探索报告 + 方案选型；目标：workflow Stop 级联停止运行中的 subagent、Resume 不重复 | Iter-22 |
-| **23** | 实例生命周期闭环 + 归档（Host+Client） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-22 |
-| **24** | 编排可视化编辑（体量最大，拆子迭代） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-23 |
+| **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫+Start 被拒；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | Iter-SUBA + 探针（iter23-probe-report.md） |
+| **24** | 实例生命周期闭环 + 归档（Host+Client）（原 Iter-23 归档范围，2026-09-02 拆分顺延） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-23 |
+| **25** | 编排可视化编辑（体量最大，拆子迭代）（原 Iter-24 范围，2026-09-02 顺延） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-24 |
 
 ---
 
@@ -591,34 +592,62 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-23: 实例生命周期闭环 + 归档（Host+Client）
+### Iter-23: 方向 A — 手工停 DSH 会话 = 权威停止（Host+Client）
+
+**状态**：🔄 设计定稿（2026-09-02 用户确认效果级方案），开发中
+**前置**：探针报告 `iter23-probe-report.md`（stopa-6 动态插件用后 undefine；代码存档 `code/probes/stopa-user-stop-signal-probe.js`）
+
+**问题（现状执行效果）**：
+
+- **场景一**（停时编排 agent 正在回合中干活）：点会话停止 → agent 回断，但 wf 仍 RUNNING；子会话跑完的结算通知把 agent 再次唤醒继续编排——"停了又动"。
+- **场景二**（停时编排 agent 空闲等子会话，即"复活"实测场景）：点击对 Host 零痕迹（cancel 纯 no-op 且 RPC 假性 accepted:true）——"点了像没点"。
+
+**交付（效果承诺）**：
+
+- **A1 场景一权威停止（Host 事件驱动主路径）**：workflow-host `ctx.on('session/event')` 监听绑定会话 `turn/end` 且 `data.reason={kind:'aborted',reason:{kind:'user'}}` → 即时处置：wf STOPPED + stopReason='user-stop' + 级联 interrupt running 子会话（复用 Iter-SUBA P3 路径）。用户效果：点停止瞬间面板 STOPPED(用户停止)、子会话秒级消失、后续完成通知免疫（P4）、Start 被拒（闭环不变式）。
+- **A2 轮询兜底（Host）**：`syncInstanceState` 在 wf RUNNING+主 idle 的将停分支，先检会话日志**末条回合终局**是否 aborted(user)（live `agents.get(sid).session.log` 尾扫；探针实证部署版事件 payload 在 `data` 包装下）；命中走同一权威停止处置。检测失败/无信号降级为现状 session-idle 语义（不卡停）。
+- **A3 场景二常驻提示条（Client，纯插件 UI，不动 DSH）**：`/wf/list` 新增 `stopHint` 字段（本会话绑定实例 RUNNING + 主会话 agent idle + 有 running 子会话时激活）；面板在实例卡片上方渲染提示条"编排会话空闲等待中：会话内的停止按钮此刻无效。后台任务执行中——要停止工作流请点面板 Stop"；状态解除自动消失。触发条件是**状态组合**而非点击事件（点击本身无信号，探针实证）。
+
+**边界（探针实证，用户知情确认）**：Case I（空闲停）Host 原理性不可检测——场景二只承诺"即时提示+引导面板 Stop"，不承诺点击即停。
+
+**验证（端到端）**：
+
+- **V1 场景一**：RUNNING+agent 驱动中 → UI 停会话 → 面板 3 秒内 STOPPED(用户停止)+子会话消失；发"看下进度"不复活（P2/P4 不回归）；Start 被拒。
+- **V2 场景二**：RUNNING+子在跑+主 idle → UI 停 → 提示条出现；按引导用面板 Stop → 子会话秒停。
+- **V3 回归**：面板 Stop / 自然语言"请停止" / 自然收敛，三条路径行为与现状一致；单测全绿（aborted 原因判定矩阵：user 命中，parent/hook/disposed/legacy/完成/无记录排除）。
+
+**改动面**：`plugins/workflow-host/instance-store.js`（isUserAbortTurnEnd/detectUserAbortFromLog 纯函数 + applyUserStop/handleSessionUserStop + sync 分支）→ sync-modules 同步；`workflow-host.mjs`（session/event tap + detectUserAbort 注入 + /wf/list stopHint）直接编辑；`client.js`（提示条渲染）；单测用例 17。
+
+---
+
+### Iter-24: 实例生命周期闭环 + 归档（Host+Client）（原 Iter-23 归档范围，2026-09-02 拆分顺延）
 
 **技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
 
 **交付**：
-- **Host 归档**：归档实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态）+ `manifest.json`；`listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具+路由；归档后会话 BOUND→DONE；重置写 `reset_<state>`、显式归档用 `archive_<state>` 区分；
+
+- **Host 归档**：归档实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态）+ `manifest.json`；`listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具+路由；归档后会话 BOUND→DONE；重置写 `reset_<state>`、显式归档用 `archive_<state>` 区分；reset 的 `_reset_<state>` 文件备份升级为目录归档（kind=reset，2026-09-02 确认方向）；
 - **Client 状态机按钮**：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset/归档确认）；
 - **归档管理 UI**：list / download / delete。
-- **方向 A：手工停 DSH 会话 = 权威停止（2026-09-02 用户拍板并入）**：现状=session cancel 无痕（AgentStatus 只有 idle/running），子会话跑完后结算通知唤醒已 cancel 的 agent 继续编排（用户实测确认）。改法：syncInstanceState 判定"主 idle + 会话处于已停状态"→ 视同 user-stop（wf STOPPED + 级联 interrupt 子会话），与面板 Stop 同级权威。前置探查：sessions 服务层的"已停"状态信号（Iter-21 线索：已停 session 拒绝 prompt 注入，说明 sessions 层有状态可读）——开工前先做半小时级探针确认信号与读取方式；探不到则降级方案=维持现状+文档化。
 
-**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete；**方向 A**：手工停会话 + 子会话在跑 → wf STOPPED(user-stop) + 子会话秒级消失 + 主会话不再被结算通知唤醒推进；resume 语义不回归。
+**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete；resume 语义不回归。
 
 ---
 
-### Iter-24: 编排可视化编辑（体量最大，拆子迭代顺序推进）
+### Iter-25: 编排可视化编辑（体量最大，拆子迭代顺序推进）（原 Iter-24 范围，2026-09-02 顺延）
 
 **范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
 
-**输入**：Iter-23 生命周期闭环（编辑器"保存并启动"依赖控制通道）。
+**输入**：Iter-24 归档全链（编辑器"保存并启动"依赖控制通道）。
 
 **拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
 
 | 子迭代 | 交付 | 验证 |
 |--------|------|------|
-| 24.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 24.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 24.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 24.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+| 25.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
+| 25.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
+| 25.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
+| 25.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
 
 **验证标准**：
 

@@ -607,8 +607,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
         // Iter-SUBA(P3)：权威急停——级联 interrupt 仍在跑的任务子会话（fire-and-return，one-shot/absent=no-op）；
-        // apiProxy 不可用/单子失败均不阻断 stop 主流程。手工停 DSH 会话路径无级联：P1 聚合守卫令 wf
-        // 保持 RUNNING 直至子会话自然跑完收敛（停止期间不会二次派发，无双跑窗口）。
+        // apiProxy 不可用/单子失败均不阻断 stop 主流程。Iter-23(方向A)：手工停 DSH 会话路径（A1 事件
+        // tap 即时处置 / A2 sync 轮询兜底）走 instance-store.applyUserStop，与本工具同一处置语义
+        // （STOPPED(user-stop)+级联），面板 Stop 与 UI 停止按钮自此同级权威。
         let stoppedChildren = 0
         try {
           const sid = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.id : undefined

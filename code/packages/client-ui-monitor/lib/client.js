@@ -29,6 +29,8 @@ function register(ctx) {
   let activeRoot = null, wfInstances = [], wfInstanceId = ''
   // Iter-19：当前会话派生状态（/wf/list 返回；create 按钮 gating 用）
   let wfSessionState = null
+  // Iter-23(A3)：Case I 停止无效提示（/wf/list stopHint；状态触发：RUNNING+主 idle+子会话在跑）
+  let wfStopHint = null
   // Iter-20：当前会话 id（/wf/list 查询用，路由据此返回轻量 sessionState）
   let wfSessionId = ''
   // Iter-13：列表加载器引用（面板创建成功后即时刷新）
@@ -76,6 +78,7 @@ function register(ctx) {
         const r = await resp.json()
         wfInstances = r && Array.isArray(r.instances) ? r.instances : []
         wfSessionState = r && r.sessionState ? r.sessionState : null
+        wfStopHint = r && r.stopHint && r.stopHint.active ? r.stopHint : null // Iter-23(A3)
         listeners.forEach(fn => { try { fn() } catch (e2) {} })
       } catch (e) {
         // 静默失败，下次轮询重试
@@ -587,7 +590,7 @@ function register(ctx) {
             wfLastSessionId = sid
             // 仅重置派生态（gating 用）；不重置 wfInstances（工作区级列表，同工作区仍有效/避免采用池空）
             // 不重置 latest（由 /wf/status 按新 boundId 更新，避免 DAG 闪空白）
-            wfSessionState = null; wfInstanceId = ''
+            wfSessionState = null; wfInstanceId = ''; wfStopHint = null
             // 仅 workflow 会话重拉列表；非编排会话保持占位 + 短路轮询
             if (isWorkflowSession && activeRoot) startListPolling()
             listeners.forEach(fn => { try { fn() } catch (e) {} })
@@ -939,11 +942,19 @@ function register(ctx) {
             React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
           ]))
 
+          // Iter-23(A3)：Case I 停止无效提示条（状态触发非点击触发：绑定实例 RUNNING + 主会话
+          // 空闲 + 子会话在跑时 /wf/list 返回 stopHint；状态解除自动消失）
+          const stopHintBar = !wfStopHint ? null : React.createElement('div', {
+            key: 'stopHint', role: 'status',
+            style: { margin: '6px 12px 0', padding: '7px 12px', borderRadius: 8, fontSize: 12, lineHeight: '18px', border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b' }
+          }, '⏸ ' + (wfStopHint.message || '编排会话空闲等待中：会话内的停止按钮此刻无效。后台任务执行中——要停止工作流请点面板 Stop'))
+
           if (!hasData) {
             return React.createElement('div', {
               style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
             },
               toolbar,
+              stopHintBar,
               formOverlay,
             adoptOverlay,
               React.createElement('div', {
@@ -957,6 +968,7 @@ function register(ctx) {
             style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
           },
             toolbar,
+            stopHintBar,
             React.createElement(DagCanvas, {
               stage: stateData.stage,
               gateResult: stateData.gateResult || null,

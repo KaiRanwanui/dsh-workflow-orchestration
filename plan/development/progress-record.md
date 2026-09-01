@@ -80,10 +80,23 @@
 | 今日 | **Iter-SUBA 阶段 2 编码完成（P1-P4 四件套，host 0.11.17）** | ✅ 代码+单测+部署就绪（用户确认范围后开工。instance-store：deps 注入 listRunningChildren/interruptChild，syncInstanceState 聚合守卫+stopReason 定向恢复；tools-preset：workflow_stop 级联 interrupt+user-stop 标记+stoppedChildren 回传，resume/reset 清标记；mjs：生产探针实现+路由 reset 清标记+sync-modules 同步；system-prompt：P4 级联停止通知识别。**闭环不变式=子在跑⇔wf RUNNING→Start 被拒→永不双跑**。单测 193 全绿（case16 新增 9 项；case14/15 断言按 P2 语义更新）。preset 三件已部署 ~/.dsh（danger-full-access），host lib 经 link: 生效，**待用户手动重启 dsh.service**；手测清单 iter-suba-verification-report.md（T1-T7）。 |
 | 今日 | **Iter-SUBA 关闭 ✅（T1-T7 全过；"复活"现象立案方向 A）** | ✅ 收官（①T2 补测通过：用户构造 session-idle（启动后不派发即结束回合），"看下进展"触发引擎日志 00:05:04 无调用瞬态 RUNNING→回落 STOPPED，P2 实证；②手测判读全程以 sessions.sqlite 会话记录交叉取证（t_session_events 全 tool/call 可还原按钮动作），曾凭引擎日志误立案"P1 失效"已撤销——方法论教训入报告；③"手工停 DSH 会话后主会话复活"：用户确认真实出现，机制源码定位（cancel 无痕+结算通知唤醒 cancelled agent+P1 保持 wf RUNNING 全程未停），无需复现，**立案方向 A（sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话），建议并入 Iter-23，待用户拍板**）。报告结论已填、development-plan 状态行更新。**下一步：Iter-23 生命周期闭环+归档（含方向 A 决策）**。 |
 | 今日 | **方向 A 拍板并入 Iter-23；计划/进展刷新，今日收工** | ✅ 用户拍板：方向 A（手工停 DSH 会话=权威停止：sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话）**并入 Iter-23**，development-plan §Iter-23 已增补交付项与验证标准（含前置探查：sessions 层"已停"信号确认，探不到则降级文档化）；Iter-SUBA 全部收官（探索+实现+手测 T1-T7 关闭，git 14f0454）。**下一迭代：Iter-23（开工前按约定先出设计方案确认）**。今日到此。 |
+| 今日 | **Iter-23 前置探针完成：方向 A 停止信号摸清（一半可根治、一半原理性边界）** | ✅ 探针收官（stopa-6/pkg-6 用后已 undefine，代码存档 `code/probes/stopa-user-stop-signal-probe.js`，报告 `plan/development/iter23-probe-report.md`）。**①停止链路**：UI Stop=client session.cancel→`agent.cancel({kind:'user'},{keepInbox:true})`。**②Case R 停在活动回合=可根治**：持久日志留 `turn/end {reason:{kind:'aborted',reason:{kind:'user'}}}`+`assistant/message interrupted:true`，live `session.log` 与冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致、turn/reason 稳定）。**③Case I 停在空闲=零痕迹**（"复活"实测场景）：cancel 对 idle agent 纯 no-op 且 **RPC 假性返回 accepted:true**，无事件/状态/持久变化——不改 DSH 原理性不可检测。**④停后 prompt 接受且立即唤醒**（Iter-21"已停拒绝 prompt"线索证伪）。**⑤部署版日志事件形态 `{type,seq,time,data:{…}}`——payload 在 data 包装下**，与 master 源码顶层签名不同；`source.kind`（user/plugin/skill-catalog/agent-instructions）可区分真实输入与合成注入；`session/event` 全局实时事件=事件驱动 sync 现成挂点。**设计要点**：aborted 之后新回合会覆盖"末条 turn/end"判定窗口→事件驱动为主（ctx.on('session/event') 捕 aborted(user) 即时处置 user-stop）+轮询兜底；Case I 边界拟用面板 UX 引导（"后台执行中，停止请用面板 Stop"）。**下一步：Iter-23 设计方案交用户确认。** |
 
 ---
 
 ## 已完成工作
+
+### 18. Iter-23 前置探针 + 设计定稿 + 方向 A 开发（2026-09-02，🔄 代码完成待部署验证）
+
+- **前置探针**（stopa-6 动态插件，用后 undefine）：Case R（停在活动回合）✅ 持久留 `turn/end {data:{reason:{kind:'aborted',reason:{kind:'user'}}}}`，live `session.log`/冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致，turn/reason 稳定）；Case I（停在空闲）❌ 零痕迹（cancel 纯 no-op，RPC 假性 accepted:true）——Host 侧原理性不可检测。报告 `plan/development/iter23-probe-report.md`，探针存档 `code/probes/stopa-user-stop-signal-probe.js`。
+- **设计定稿**（2026-09-02 用户确认，效果级方案）：队列重排 **Iter-23=方向 A（手工停 DSH 会话=权威停止）→ Iter-24=生命周期闭环+归档（原 23 归档范围）→ Iter-25=编排可视化编辑（原 24）**；development-plan §2/§3 已同步重写。
+- **实现**（host v0.12.0 / client v0.6.0）：
+  - **A1** `workflow-host.mjs` apply 挂 `ctx.on('session/event')` tap（`isUserAbortTurnEnd` 判定）→ `registry.handleSessionUserStop(sid)` 即时权威停止；
+  - **A2** `syncInstanceState` idle 将停分支先查 `detectUserAbort`（live log 尾扫 `detectUserAbortFromLog`），命中走 `applyUserStop`（STOPPED+user-stop+级联 interrupt，权威性高于 P1 守卫），undefined 降级既有 session-idle 语义；
+  - **A3** `/wf/list` 新增 `stopHint`（绑定 RUNNING+主 idle+子会话在跑）+ 面板常驻提示条（client.js，状态触发非点击触发）；
+  - workflow_stop 注释对齐（面板 Stop 与 UI 停止按钮自此同级权威）；system-prompt 无需改（P2/P4 已覆盖停后语义）。
+- **验证**：单测 220 全绿（用例 17 新增 27 条：A1 判定矩阵 parent/hook/disposed/legacy/completed 排除、log 尾扫、A1 处置+幂等、A2 兜底+降级、P1/P2 回归）；`verify-client-bundle.js` 求值级通过；lib/index.js `node --check` 通过。
+- **待办**：部署（预设 mjs 副本 + dsh.service 重启）→ V1/V2/V3 手测（场景一权威停止 / 场景二提示条 / 三路径回归）。
 
 ### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
 

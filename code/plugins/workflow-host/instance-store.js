@@ -52,6 +52,40 @@ function archiveTimestamp() {
   return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '')
 }
 
+// ── Iter-23(方向A)：用户手工停判定（A1 事件 tap / A2 轮询兜底共用纯函数）──────
+// 探针实证（iter23-probe-report.md）：手工停活动回合在 session log 留
+// turn/end data={turn,reason:{kind:'aborted',reason:{kind:'user'|...}}}（部署版 payload 在
+// data 包装下）。非用户原因（parent=级联 interrupt / hook / disposed / legacy / completed /
+// 无 reason / 非 turn-end / 畸形事件）一律不判 user-stop。
+function isUserAbortTurnEnd(event) {
+  try {
+    if (!event || event.type !== 'turn/end') return false
+    const d = event.data && typeof event.data === 'object' ? event.data : {}
+    const reason = d.reason
+    if (!reason || typeof reason !== 'object' || reason.kind !== 'aborted') return false
+    return !!(reason.reason && typeof reason.reason === 'object' && reason.reason.kind === 'user')
+  } catch (e) {
+    return false
+  }
+}
+
+// 会话日志末条回合终局是否为"用户中止"（A2 轮询兜底判定）。只看末条 turn/end：
+// 末条被更新的回合（如结算通知唤醒后跑完）覆盖时返回 false——该窄窗口由 A1 事件驱动
+// 即时处置覆盖。日志不可读/为空返回 undefined（调用方降级为既有 session-idle 语义）。
+function detectUserAbortFromLog(log) {
+  try {
+    if (!log || typeof log.length !== 'number' || log.length === 0) return undefined
+    for (let i = log.length - 1; i >= 0; i--) {
+      const ev = log[i]
+      if (!ev || ev.type !== 'turn/end') continue
+      return isUserAbortTurnEnd(ev)
+    }
+    return false // 无任何回合终局（空会话）
+  } catch (e) {
+    return undefined
+  }
+}
+
 // ── metadata.json 组装（lossless JSON；sessionId 缺省 null 而非 undefined）──
 function composeMetadata(m) {
   return {
@@ -87,6 +121,9 @@ function createInstanceRegistry(ctx, deps) {
   // 缺省 no-op（无子会话信息 → 不守卫直接停，保持既有行为）。
   const listRunningChildren = typeof deps.listRunningChildren === 'function' ? deps.listRunningChildren : (async () => [])
   const interruptChild = typeof deps.interruptChild === 'function' ? deps.interruptChild : (async () => {})
+  // Iter-23(A2)：会话日志末条回合终局"用户中止"探针。生产由 apply 注入（agents.get(sid).session.log
+  // → detectUserAbortFromLog 纯函数）；缺省恒 undefined（无法判定 → 降级为 session-idle 既有语义）。
+  const detectUserAbort = typeof deps.detectUserAbort === 'function' ? deps.detectUserAbort : (async () => undefined)
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -659,6 +696,40 @@ function createInstanceRegistry(ctx, deps) {
     return dest
   }
 
+  // ── Iter-23(方向A)：权威 user-stop 处置（A1 事件驱动与 A2 轮询兜底共用）──────
+  // 语义与 workflow_stop 工具一致：STOPPED（保 DONE）+ 落盘 + stopReason='user-stop'
+  // + 级联 interrupt running 子会话（用户停止权威性高于 P1 子在跑守卫）。级联失败不阻断。
+  async function applyUserStop(entry, cwd) {
+    entry.engine.stop() // RUNNING→STOPPED，保 DONE 进度
+    await entry.storage.save()
+    entry.engine.setPersist('ok (user-stop)')
+    if (cwd) await patchMeta(cwd, entry.instanceId, { stopReason: 'user-stop' })
+    let stoppedChildren = 0
+    try {
+      const sid = entry.meta.sessionId
+      const childIds = sid ? await listRunningChildren(sid) : []
+      for (const cid of childIds) {
+        try { await interruptChild(sid, cid); stoppedChildren += 1 } catch (e) { /* 单子失败不阻断 */ }
+      }
+    } catch (e) { /* 探针故障：级联降级为不打断（不阻断权威停止本身） */ }
+    return { instanceId: entry.instanceId, stoppedChildren }
+  }
+
+  // Iter-23(A1)：事件驱动入口——mjs 的 session/event tap 检出绑定会话回合 aborted(user) 后调用。
+  // 仅处置"绑定且 RUNNING"实例（幂等：非 RUNNING/未绑定直接跳过）；引擎条目缺失（重启后未
+  // hydrate）时返回 null，由 A2 轮询兜底在首次 sync 时处置。
+  async function handleSessionUserStop(sessionId) {
+    const instanceId = sessionId ? activeBySession.get(sessionId) : undefined
+    if (!instanceId) return null
+    const entry = engines.get(instanceId)
+    if (!entry) return null
+    let stage = null
+    try { stage = entry.engine.snapshot().stage } catch (e) { stage = null }
+    if (stage !== 'RUNNING') return null
+    const cwd = entry.meta.sessionCwd || null
+    return applyUserStop(entry, cwd)
+  }
+
   // ── Iter-19：Session 启停同步（前后台状态配合）────────────────────────────
   // Iter-22(S1)：idle→stop + 排队输入守卫；running→resume 自动恢复移除（wf 只能显式 workflow_resume）。
   // Iter-SUBA(P1/P2) 修订——会话树聚合三态语义（用户拍板）：
@@ -666,6 +737,8 @@ function createInstanceRegistry(ctx, deps) {
   //   主 idle + 无 running 子会话 → stop + stopReason='session-idle'（自然编排间隙）
   //   主 running + STOPPED + stopReason='session-idle' → 定向自动 resume（主会话被唤醒即无缝续跑）
   //   stopReason='user-stop'（workflow_stop 权威急停）→ 永不自动恢复（Iter-22 权威停止语义保留）
+  // Iter-23(A2) 修订——兜底检出"用户手工停"：主 idle 且末条回合终局=aborted(user) → 权威
+  // user-stop（含级联打断子会话）。权威性高于 P1 守卫；undefined（探针故障）降级既有语义。
   // 闭环不变式：子会话在跑 ⇔ wf RUNNING → Start/派发必被拒 → 永无双 subAgent 同任务并发。
   // 仅在能判定 agent 状态时触发；CREATED/PENDING/COMPLETED/FAILED 不误改。
   async function syncInstanceState(cwd, instanceId) {
@@ -678,6 +751,14 @@ function createInstanceRegistry(ctx, deps) {
     const stage = entry.engine.snapshot().stage // 以引擎实际状态为准（hasState 仅缓存标记）
     if (running === false) {
       if (stage === 'RUNNING' && !isAgentPending(sid)) {
+        // Iter-23(A2)：轮询兜底——先检未处置的"用户手工停"（A1 事件 tap 漏过时的恢复路径，
+        // 如插件重启窗口）。命中 → 权威 user-stop（含级联打断子会话）。
+        let userAbort = false
+        try { userAbort = (await detectUserAbort(sid)) === true } catch (e) { userAbort = false }
+        if (userAbort) {
+          await applyUserStop(entry, cwd)
+          return entry
+        }
         // Iter-SUBA(P1)：会话树聚合守卫——有 running 子会话（如后台 task subagent）不得误停；
         // 探针失败降级为空（保持可停，不因探针故障卡死 RUNNING）。
         let childIds = []
@@ -719,6 +800,9 @@ function createInstanceRegistry(ctx, deps) {
     recoverOrphan,
     writeArchiveBackup,
     syncInstanceState,
+    handleSessionUserStop, // Iter-23(A1)：mjs session/event tap 调用
+    isAgentRunning,        // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
+    listRunningChildren,   // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
     get,
     activeIdFor,
     sessionIdOf,
@@ -729,5 +813,5 @@ function createInstanceRegistry(ctx, deps) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry }
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry, isUserAbortTurnEnd, detectUserAbortFromLog }
 }

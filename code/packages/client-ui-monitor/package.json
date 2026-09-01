@@ -1,6 +1,6 @@
 {
   "name": "@workflow-agent/client-ui-monitor",
-  "version": "0.5.12",
+  "version": "0.6.0",
   "description": "Workflow Agent DAG 监控面板 - Client UI 插件",
   "main": "lib/index.js",
   "exports": {
