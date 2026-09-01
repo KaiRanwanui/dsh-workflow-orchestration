@@ -27,7 +27,7 @@
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优) → Iter-20(前后台状态一致 + S5 预设门控/BROKEN 展示 + 内置默认模板可执行；v4 手测 14 通过/2 N/A/5 问题归 Iter-21)
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
-当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）✅ 完成关闭（2026-09-02，git 39ee656）**：A1 session/event tap aborted(user)→即时权威停（STOPPED+user-stop+级联 interrupt）/A2 syncInstanceState 轮询兜底（live log 尾扫，权威性高于 P1，探针故障降级 session-idle）/A3 /wf/list stopHint+面板常驻提示条（Case I 状态触发非点击触发）。host v0.12.0 / client v0.6.0，220 单测，手测 V1/V2/V3 全过（V1-⑤ 按面板状态机语义复核：STOPPED 无 Start 键仅 Resume=Iter-21 R5 设计行为），报告 iter23-verification-report.md。**下一步：Iter-24 生命周期闭环+归档（开工前按团队约定先设计确认）→ Iter-25 编辑器**
+当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）✅ 完成关闭（2026-09-02，git 39ee656→e077344→7fd8648）**：A1 session/event tap aborted(user)→即时权威停（STOPPED+user-stop+级联 interrupt）/A2 syncInstanceState 轮询兜底（live log 尾扫，权威性高于 P1，探针故障降级 session-idle）/A3 /wf/list stopHint+面板常驻提示条（Case I 状态触发非点击触发）。host v0.12.0 / client v0.6.0，221 单测，手测 V1/V2/V3 全过（V1-⑤ 按面板状态机语义复核：STOPPED 无 Start 键仅 Resume=Iter-21 R5 设计行为），报告 iter23-verification-report.md；**后续修复 7fd8648**：default-demo 集成依赖深度分析（编排定义缺依赖非状态 bug，用户重启实测确认）。迭代总结 iter23-report.md。**下一步：Iter-24 生命周期闭环+归档（开工前按团队约定先设计确认）→ Iter-25 编辑器**
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |

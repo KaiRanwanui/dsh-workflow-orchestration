@@ -1,9 +1,9 @@
 # Iter-23 验证报告 — 方向 A：手工停 DSH 会话=权威停止
 
-- **状态**：✅ **完成并关闭**（2026-09-02 手测通过；host v0.12.0 / client v0.6.0；单测 220 全绿）
-- **前置**：探针报告 `iter23-probe-report.md`；设计定稿见 `development-plan.md` §Iter-23
+- **状态**：✅ **完成并关闭**（2026-09-02 手测通过；host v0.12.0 / client v0.6.0；单测 221 全绿）
+- **前置**：探针报告 `iter23-probe-report.md`；设计定稿见 `development-plan.md` §Iter-23；迭代总结见 `iter23-report.md`
 - **手测环境**：web profile（3080），workflow-orchestrator 预设编排会话 + 任一多任务工作流（可用 default-demo 或带 loop 的模板）；子会话需有"跑得足够久"的任务（如长 processor 脚本）以便观察级联停止
-- **结论**：V1/V2/V3 全部符合预期；V1-⑤ 按面板状态机语义复核通过（原表述"Start 被拒"为引擎层措辞不当，非缺陷）
+- **结论**：V1/V2/V3 全部符合预期；V1-⑤ 按面板状态机语义复核通过（原表述"Start 被拒"为引擎层措辞不当，非缺陷）。**后续修复（7fd8648）：default-demo 集成依赖深度分析（编排定义缺依赖，非状态 bug），用户重启实测确认集成等满三前驱才执行。**
 
 ---
 
