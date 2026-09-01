@@ -81,6 +81,7 @@
 | 今日 | **Iter-SUBA 关闭 ✅（T1-T7 全过；"复活"现象立案方向 A）** | ✅ 收官（①T2 补测通过：用户构造 session-idle（启动后不派发即结束回合），"看下进展"触发引擎日志 00:05:04 无调用瞬态 RUNNING→回落 STOPPED，P2 实证；②手测判读全程以 sessions.sqlite 会话记录交叉取证（t_session_events 全 tool/call 可还原按钮动作），曾凭引擎日志误立案"P1 失效"已撤销——方法论教训入报告；③"手工停 DSH 会话后主会话复活"：用户确认真实出现，机制源码定位（cancel 无痕+结算通知唤醒 cancelled agent+P1 保持 wf RUNNING 全程未停），无需复现，**立案方向 A（sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话），建议并入 Iter-23，待用户拍板**）。报告结论已填、development-plan 状态行更新。**下一步：Iter-23 生命周期闭环+归档（含方向 A 决策）**。 |
 | 今日 | **方向 A 拍板并入 Iter-23；计划/进展刷新，今日收工** | ✅ 用户拍板：方向 A（手工停 DSH 会话=权威停止：sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话）**并入 Iter-23**，development-plan §Iter-23 已增补交付项与验证标准（含前置探查：sessions 层"已停"信号确认，探不到则降级文档化）；Iter-SUBA 全部收官（探索+实现+手测 T1-T7 关闭，git 14f0454）。**下一迭代：Iter-23（开工前按约定先出设计方案确认）**。今日到此。 |
 | 今日 | **Iter-23 前置探针完成：方向 A 停止信号摸清（一半可根治、一半原理性边界）** | ✅ 探针收官（stopa-6/pkg-6 用后已 undefine，代码存档 `code/probes/stopa-user-stop-signal-probe.js`，报告 `plan/development/iter23-probe-report.md`）。**①停止链路**：UI Stop=client session.cancel→`agent.cancel({kind:'user'},{keepInbox:true})`。**②Case R 停在活动回合=可根治**：持久日志留 `turn/end {reason:{kind:'aborted',reason:{kind:'user'}}}`+`assistant/message interrupted:true`，live `session.log` 与冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致、turn/reason 稳定）。**③Case I 停在空闲=零痕迹**（"复活"实测场景）：cancel 对 idle agent 纯 no-op 且 **RPC 假性返回 accepted:true**，无事件/状态/持久变化——不改 DSH 原理性不可检测。**④停后 prompt 接受且立即唤醒**（Iter-21"已停拒绝 prompt"线索证伪）。**⑤部署版日志事件形态 `{type,seq,time,data:{…}}`——payload 在 data 包装下**，与 master 源码顶层签名不同；`source.kind`（user/plugin/skill-catalog/agent-instructions）可区分真实输入与合成注入；`session/event` 全局实时事件=事件驱动 sync 现成挂点。**设计要点**：aborted 之后新回合会覆盖"末条 turn/end"判定窗口→事件驱动为主（ctx.on('session/event') 捕 aborted(user) 即时处置 user-stop）+轮询兜底；Case I 边界拟用面板 UX 引导（"后台执行中，停止请用面板 Stop"）。**下一步：Iter-23 设计方案交用户确认。** |
+| 今日 | **流程定义技术讨论 + 需求澄清闭环 + 迭代重排批准（2026-09-02）** | ✅ 三段：①**流程定义技术讨论**（问题/解答/全旅程/缺口固化=`plan/design/definition-pipeline-discussion.md`；核心实证：三工具返回从未携带 inputs/outputs——契约漂移、引擎数据流零感知、上轮 inputs.analysis 修复无传递通道）；②**需求澄清**（用户原始需求 25 条 → A-E 五组+2 开放点全部拍板；定稿 `plan/requirements/工作流数据管理需求.md`、过程记录 `工作流数据管理需求澄清.md`；原始文件保留为历史输入）；③**迭代重排**（草案 `iteration-replan-draft.md` → 用户批准 → development-plan §2 队列重写 **Iter-24~30**：24 预定义目录/25 数据流显性化/26 items 提取/27 语义校验/28 编辑前台/29 实例管理+归档下载删除（独立可提前）/30 DAG 美化）。**下一步：Iter-24 设计方案确认后开工。** |
 
 ---
 
@@ -99,6 +100,13 @@
 - **部署**：预设 mjs 副本已同步（=仓库版本）+ dsh.service 重启生效。
 - **手测**：V1/V2/V3 全过，无缺陷（`iter23-verification-report.md`）。V1-⑤ 记录：STOPPED 面板无 Start 键（仅 Resume）——按面板状态机语义复核通过（Iter-21 R5 设计行为，原表述"Start 被拒"为引擎层措辞不当）。
 - **后续修复（2026-09-02，用户报 default-demo 集成先于深度分析完成）**：根因=**编排定义**缺依赖——default-demo 内建模板 `integrate`（汇总集成）`depends-on` 只含 `[write-spec, prep-data]`，`deep-analysis` 是旁路长任务；引擎 `getRunnableTasks` 严格按 depends-on 阻塞（engine.js:176-177），非状态 bug。已修：integrate 加 `depends-on: [write-spec, prep-data, deep-analysis]` + `inputs.analysis`；test-host 模板断言加防回退项（221 单测全绿）；host 重建 lib/index.js。
+
+### 19. 流程定义技术讨论 + 需求澄清闭环 + 迭代重排（2026-09-02，✅ 完成）
+
+- **技术讨论**：围绕流程定义文件生命周期五问+两确认（目录/指令文档/硬编码/传递/item/state.json/技能读取时机），全旅程与八项缺口固化为 `plan/design/definition-pipeline-discussion.md`；最硬发现=工具返回（begin/start/status 恒为 engine.snapshot()）自首提交起从未携带 inputs/outputs，persona 契约与代码长期不符。
+- **需求澄清**：用户提交 `plan/requirements/工作流数据管理原始需求.md`（25 条四组）→ 五组逐条澄清+2 开放点拍板（技能目录折中方案/实例管理子页签）→ 定稿 `工作流数据管理需求.md`（R1-R25 权威基线+第六节延后 backlog），过程记录 `工作流数据管理需求澄清.md`。
+- **迭代重排**：`iteration-replan-draft.md` 七迭代方案经用户批准（2026-09-02），development-plan §2 队列与全景已重写：24 预定义目录与安装布局 → 25 数据流显性化 → 26 items 结构化提取 → 27 语义校验 → 28 实例编辑前台 → 29 实例管理子页签+归档/下载/删除（独立可提前）→ 30 DAG 美化交互。
+- **产出文件**：definition-pipeline-discussion.md / 工作流数据管理需求.md / 工作流数据管理需求澄清.md / iteration-replan-draft.md / development-plan.md / progress-record.md（本条）。
 
 ### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
 

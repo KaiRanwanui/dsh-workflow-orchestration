@@ -27,7 +27,8 @@
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优) → Iter-20(前后台状态一致 + S5 预设门控/BROKEN 展示 + 内置默认模板可执行；v4 手测 14 通过/2 N/A/5 问题归 Iter-21)
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
-当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）✅ 完成关闭（2026-09-02，git 39ee656→e077344→7fd8648）**：A1 session/event tap aborted(user)→即时权威停（STOPPED+user-stop+级联 interrupt）/A2 syncInstanceState 轮询兜底（live log 尾扫，权威性高于 P1，探针故障降级 session-idle）/A3 /wf/list stopHint+面板常驻提示条（Case I 状态触发非点击触发）。host v0.12.0 / client v0.6.0，221 单测，手测 V1/V2/V3 全过（V1-⑤ 按面板状态机语义复核：STOPPED 无 Start 键仅 Resume=Iter-21 R5 设计行为），报告 iter23-verification-report.md；**后续修复 7fd8648**：default-demo 集成依赖深度分析（编排定义缺依赖非状态 bug，用户重启实测确认）。迭代总结 iter23-report.md。**下一步：Iter-24 生命周期闭环+归档（开工前按团队约定先设计确认）→ Iter-25 编辑器**
+已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
+当前:   **需求澄清闭环 + 迭代重排（2026-09-02 用户批准）**：R1-R25 需求定稿（plan/requirements/工作流数据管理需求.md）+ 五组澄清决策（工作流数据管理需求澄清.md）→ 新队列 **Iter-24~30**（原 24 归档并入新 29、原 25 编辑器并入新 28/30）：24 预定义目录与安装布局 / 25 数据流显性化（参数传递地基） / 26 items 结构化提取 / 27 语义校验 / 28 实例编辑前台（DAG 下方双栏） / 29 实例管理子页签+归档下载删除（独立可提前） / 30 DAG 美化交互。详案=iteration-replan-draft.md（随批准转正）。**下一步：Iter-24 开工前按团队约定先设计确认**
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -56,8 +57,13 @@
 | **22** | 前后台状态一致·剩余修复轮（S1/S3/S4） | S1 去掉自动 idle→stop（状态由用户显式控制，避免提问等待误停）；S3 孤儿进采用池（recoverOrphan 解绑）+ 采用池只列 CREATED/标注；S4 reset 清理会话对话（或编排侧忽略旧对话） | 端到端：提问等待不停、孤儿可采用、reset 后重跑状态一致 | Iter-21 |
 | **SUBA** | **DSH 子会话可控性探索（研究迭代）** | 摸清 DSH 主/子会话会话级控制接口：确认 task subagent 模式（continuable/one-shot）、`subagent.interrupt` vs `subagent.prompt` 停止子会话、主会话 await 中断/级联停止的可行方案；产出可行方案设计 | 探索报告 + 方案选型；目标：workflow Stop 级联停止运行中的 subagent、Resume 不重复 | Iter-22 |
 | **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | ✅ **完成**（2026-09-02 手测 V1/V2/V3 通过；V1-⑤ 按 UI 状态机语义复核） | Iter-SUBA + 探针（iter23-probe-report.md） |
-| **24** | 实例生命周期闭环 + 归档（Host+Client）（原 Iter-23 归档范围，2026-09-02 拆分顺延） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-23 |
-| **25** | 编排可视化编辑（体量最大，拆子迭代）（原 Iter-24 范围，2026-09-02 顺延） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-24 |
+| **24** | **预定义目录与安装布局**（块1，R1-R4 地基） | 全局预定义目录（`~/.dsh/workflow-agent/`，templates/skills/samples/docs）+ 插件启动物化内建模板与内建技能（升级同名覆盖）+ 相对路径两级解析链（workspace 优先→预定义兜底）+ /wf/templates 源切预定义目录 | 空白工作区下拉建 default-demo 全程跑通（技能来自预定义目录）；既有工作区 workspace 同名优先不回归 | — |
+| **25** | **数据流显性化（参数传递地基）**（块1） | begin/start/status 返回展开后 inputs/outputs（修契约漂移，persona 对齐）+ 目录变量 `${workspace}/${wf_dir}/${skills}/${skill_dir}` 展开期注入 + 派发附技能目录来源行 + 门禁拿 inputs+outputs（R16）+ processor/gateChecker 可选（创建态可缺省，启动校验拦截） | 工具返回可见 inputs/outputs 绝对路径；integrate 子会话 prompt 真实出现 analysis 输入；缺 processor 可存实例但启动被拦 | 24 |
+| **26** | **items 结构化提取**（块1） | `items-format` 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 数组/并列对象提取器；`${item}` ID→名称→顺序编号默认语义 + `${item.字段}` 标量注入 | 三种格式各跑通 loop+concurrent；对象 item 路径注入正确；旧行文本零改动可跑 | 25 |
+| **27** | **语义校验**（块1，R8/R12） | workflow_validate：技能存在性（两级）/输入存在性（workspace 或上游 outputs）/上下游 outputs↔inputs 衔接/dependsOn 闭环无环/items 文件可解析；挂 create（警告）与 start（拦截）关口；结构化错误清单 | default-demo 破坏用例逐项报错可读；完好定义零误报 | 24、25 |
+| **28** | **实例编辑前台**（块2，R5-R6/R9/R11/R14） | DAG 页下方双栏（左任务列表/右属性表单；顶部实例级名称+总并发+params）+ 技能下拉（扫预定义 skills/，名称+版本）+ 保存写回 instance.yaml 并触发校验 + RUNNING 可见禁用 | 新建实例→补缺 processor 任务→校验过→启动跑通；编辑不污染预定义目录 | 24、27 |
+| **29** | **实例管理子页签 + 归档/下载/删除**（块4，R23-R25） | 实例管理子页签（活动/归档两段；名称/ID/状态/孤儿/进度/创建时间）+ 归档全链（archive 目录+manifest，沿用 lifecycle-design §5/§7）+ zip 多选打一个包下载 + 删除（RUNNING 禁删+自动解绑+丢失提醒） | 全生命周期：创建→运行→停止→归档→两段列表→下载 zip 完整→删除后解绑消失 | 独立（可提前/并行） |
+| **30** | **DAG 美化与交互**（块3） | 节点详情面板（状态/inputs/outputs/技能/门禁）+ 视觉布局优化 + 按需交互增强（开工前细化确认） | 节点详情数据完整（依赖 25）；视觉与交互验收开工前定 | 25 |
 
 ---
 
