@@ -98,6 +98,7 @@
 - **验证**：单测 220 全绿（用例 17 新增 27 条：A1 判定矩阵 parent/hook/disposed/legacy/completed 排除、log 尾扫、A1 处置+幂等、A2 兜底+降级、P1/P2 回归）；`verify-client-bundle.js` 求值级通过；lib/index.js `node --check` 通过。
 - **部署**：预设 mjs 副本已同步（=仓库版本）+ dsh.service 重启生效。
 - **手测**：V1/V2/V3 全过，无缺陷（`iter23-verification-report.md`）。V1-⑤ 记录：STOPPED 面板无 Start 键（仅 Resume）——按面板状态机语义复核通过（Iter-21 R5 设计行为，原表述"Start 被拒"为引擎层措辞不当）。
+- **后续修复（2026-09-02，用户报 default-demo 集成先于深度分析完成）**：根因=**编排定义**缺依赖——default-demo 内建模板 `integrate`（汇总集成）`depends-on` 只含 `[write-spec, prep-data]`，`deep-analysis` 是旁路长任务；引擎 `getRunnableTasks` 严格按 depends-on 阻塞（engine.js:176-177），非状态 bug。已修：integrate 加 `depends-on: [write-spec, prep-data, deep-analysis]` + `inputs.analysis`；test-host 模板断言加防回退项（221 单测全绿）；host 重建 lib/index.js。
 
 ### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
 

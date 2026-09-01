@@ -167,6 +167,7 @@ async function runCase10() {
   // templates：内置 2 个；workspace 扫描 <root>/templates/*.yaml
   let r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
   check('templates: 内置 2 个模板', r.code === 200 && Array.isArray(r.body.builtin) && r.body.builtin.length === 2 && r.body.builtin[0].yaml.includes('name: default-demo'))
+  check('templates: default-demo 集成依赖深度分析（防止深挖变旁路孤岛回归）', r.body.builtin[0].yaml.includes('depends-on: [write-spec, prep-data, deep-analysis]') && r.body.builtin[0].yaml.includes('analysis: "output/analysis.md"'))
   await mockFs.writeText({ path: '/ws/t13/templates/my-tpl.yaml' }, 'name: my-tpl\n')
   r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
   check('templates: 工作区模板被扫描', r.body.workspace.length === 1 && r.body.workspace[0].name === 'my-tpl', JSON.stringify(r.body.workspace))
