@@ -86,7 +86,7 @@
 
 ## 已完成工作
 
-### 18. Iter-23 前置探针 + 设计定稿 + 方向 A 开发（2026-09-02，🔄 代码完成待部署验证）
+### 18. Iter-23 前置探针 + 设计定稿 + 方向 A 开发（2026-09-02，✅ 完成关闭）
 
 - **前置探针**（stopa-6 动态插件，用后 undefine）：Case R（停在活动回合）✅ 持久留 `turn/end {data:{reason:{kind:'aborted',reason:{kind:'user'}}}}`，live `session.log`/冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致，turn/reason 稳定）；Case I（停在空闲）❌ 零痕迹（cancel 纯 no-op，RPC 假性 accepted:true）——Host 侧原理性不可检测。报告 `plan/development/iter23-probe-report.md`，探针存档 `code/probes/stopa-user-stop-signal-probe.js`。
 - **设计定稿**（2026-09-02 用户确认，效果级方案）：队列重排 **Iter-23=方向 A（手工停 DSH 会话=权威停止）→ Iter-24=生命周期闭环+归档（原 23 归档范围）→ Iter-25=编排可视化编辑（原 24）**；development-plan §2/§3 已同步重写。
@@ -96,7 +96,8 @@
   - **A3** `/wf/list` 新增 `stopHint`（绑定 RUNNING+主 idle+子会话在跑）+ 面板常驻提示条（client.js，状态触发非点击触发）；
   - workflow_stop 注释对齐（面板 Stop 与 UI 停止按钮自此同级权威）；system-prompt 无需改（P2/P4 已覆盖停后语义）。
 - **验证**：单测 220 全绿（用例 17 新增 27 条：A1 判定矩阵 parent/hook/disposed/legacy/completed 排除、log 尾扫、A1 处置+幂等、A2 兜底+降级、P1/P2 回归）；`verify-client-bundle.js` 求值级通过；lib/index.js `node --check` 通过。
-- **待办**：部署（预设 mjs 副本 + dsh.service 重启）→ V1/V2/V3 手测（场景一权威停止 / 场景二提示条 / 三路径回归）。
+- **部署**：预设 mjs 副本已同步（=仓库版本）+ dsh.service 重启生效。
+- **手测**：V1/V2/V3 全过，无缺陷（`iter23-verification-report.md`）。V1-⑤ 记录：STOPPED 面板无 Start 键（仅 Resume）——按面板状态机语义复核通过（Iter-21 R5 设计行为，原表述"Start 被拒"为引擎层措辞不当）。
 
 ### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
 

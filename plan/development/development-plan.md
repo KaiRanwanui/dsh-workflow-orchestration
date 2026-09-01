@@ -27,7 +27,7 @@
 ```
 已完成: Iter-1(引擎) → Iter-2(编排) → Iter-3(监控) → Iter-4(循环) → Iter-5(架构) → Iter-6(错误处理) → Iter-7(并发引擎) → Iter-8(并发语义完善) → Iter-9(多实例技术验证) → Iter-10(实例目录与存储) → Iter-11(实例操控工具) → Iter-12(前台实例界面) → Iter-13(面板创建按钮+模板库v1) → Iter-14(消息注入技术穿刺) → Iter-15(面板控制) → Iter-16(运行状态机) → Iter-17(绑定模型+完整性) → Iter-18(控制工具+路由+孤儿回收) → Iter-19(WebUI↔workflow 配合调优) → Iter-20(前后台状态一致 + S5 预设门控/BROKEN 展示 + 内置默认模板可执行；v4 手测 14 通过/2 N/A/5 问题归 Iter-21)
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
-当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）🔄 设计定稿（2026-09-02 用户确认），开发中**：前置探针完成（stopa-6 动态插件用后 undefine；报告 iter23-probe-report.md——Case R 停在活动回合=持久 aborted(user) 信号 live/冷双路可读；Case I 停在空闲=零痕迹不可检测，RPC 假性 accepted）。方案：A1 session/event 事件驱动即时权威停止（STOPPED(user-stop)+级联 interrupt+通知免疫）+ A2 syncInstanceState 轮询兜底（live log 尾扫 aborted(user)）+ A3 面板常驻提示条（Case I 引导用面板 Stop；纯插件 UI）。队列其后：**24 生命周期闭环+归档（原 23 归档范围）→ 25 编排可视化编辑（原 24）**
+当前:   **Iter-23（方向 A：手工停 DSH 会话=权威停止）✅ 完成关闭（2026-09-02，git 39ee656）**：A1 session/event tap aborted(user)→即时权威停（STOPPED+user-stop+级联 interrupt）/A2 syncInstanceState 轮询兜底（live log 尾扫，权威性高于 P1，探针故障降级 session-idle）/A3 /wf/list stopHint+面板常驻提示条（Case I 状态触发非点击触发）。host v0.12.0 / client v0.6.0，220 单测，手测 V1/V2/V3 全过（V1-⑤ 按面板状态机语义复核：STOPPED 无 Start 键仅 Resume=Iter-21 R5 设计行为），报告 iter23-verification-report.md。**下一步：Iter-24 生命周期闭环+归档（开工前按团队约定先设计确认）→ Iter-25 编辑器**
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -55,7 +55,7 @@
 | **21** | 前后台状态一致·v4 手测问题闭环 + Resume 提前 | R1 CREATED 态 DAG 补任务节点（A4：loadStateFromFile 从 instance.yaml 生成 PENDING tasks）；R2 子会话门控（A6：isWorkflowSession 加 `origin !== 'subagent'`）；R3 会话切换状态一致（其他#1/#2：切会话重置 wfSessionState/wfInstances/latest + 重拉列表，cwd 相同也刷新，采用池即时更新）；R4 BROKEN 加固（B2：BROKEN 每次从 /wf/list 重派生，展示态不中断轮询，防御性重置）；R5 Client Resume 按钮（D3/原 S2：STOPPED 显示 Resume → /wf/resume） | 端到端：A4 新建实例 DAG 显示任务节点；A6 子会话占位；#1 同工作区切会话状态即时正确且 /wf/status 非空；#2 采用池即时列出；B2 反复删 metadata→BROKEN 始终正确；D3 STOPPED 显示 Resume 并续跑 | ✅ **代码完成**（host v0.11.6 / client v0.5.5；157 单测；awaiting 部署验证） | Iter-20 |
 | **22** | 前后台状态一致·剩余修复轮（S1/S3/S4） | S1 去掉自动 idle→stop（状态由用户显式控制，避免提问等待误停）；S3 孤儿进采用池（recoverOrphan 解绑）+ 采用池只列 CREATED/标注；S4 reset 清理会话对话（或编排侧忽略旧对话） | 端到端：提问等待不停、孤儿可采用、reset 后重跑状态一致 | Iter-21 |
 | **SUBA** | **DSH 子会话可控性探索（研究迭代）** | 摸清 DSH 主/子会话会话级控制接口：确认 task subagent 模式（continuable/one-shot）、`subagent.interrupt` vs `subagent.prompt` 停止子会话、主会话 await 中断/级联停止的可行方案；产出可行方案设计 | 探索报告 + 方案选型；目标：workflow Stop 级联停止运行中的 subagent、Resume 不重复 | Iter-22 |
-| **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫+Start 被拒；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | Iter-SUBA + 探针（iter23-probe-report.md） |
+| **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | ✅ **完成**（2026-09-02 手测 V1/V2/V3 通过；V1-⑤ 按 UI 状态机语义复核） | Iter-SUBA + 探针（iter23-probe-report.md） |
 | **24** | 实例生命周期闭环 + 归档（Host+Client）（原 Iter-23 归档范围，2026-09-02 拆分顺延） | Host 归档（移出池/reset 备份/显式归档/list/download/delete）+ Client 状态机按钮(Start/Stop/Resume/Reset/Archive) + 归档 UI | 端到端：绑定→start→stop→resume→reset→archive 闭环；归档 list/download/delete | Iter-23 |
 | **25** | 编排可视化编辑（体量最大，拆子迭代）（原 Iter-24 范围，2026-09-02 顺延） | DAG 拖拽编辑 + YAML 生成，双模式（模板/实例，见 instance-creation-semantics.md §2） | 编辑器创建/编辑工作流→运行成功 | Iter-24 |
 
@@ -594,7 +594,7 @@ workflow_list → 列出所有实例 + 状态
 
 ### Iter-23: 方向 A — 手工停 DSH 会话 = 权威停止（Host+Client）
 
-**状态**：🔄 设计定稿（2026-09-02 用户确认效果级方案），开发中
+**状态**：✅ **完成关闭**（2026-09-02 手测通过，`iter23-verification-report.md`；host v0.12.0 / client v0.6.0）
 **前置**：探针报告 `iter23-probe-report.md`（stopa-6 动态插件用后 undefine；代码存档 `code/probes/stopa-user-stop-signal-probe.js`）
 
 **问题（现状执行效果）**：
