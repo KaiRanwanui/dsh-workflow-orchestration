@@ -30,7 +30,7 @@
 已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
-当前:   **Iter-26 items 结构化提取**：items-format 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 提取器；${item} ID→名称→顺序编号默认语义 + ${item.字段} 标量注入。详案=iteration-replan-draft.md。**下一步：开工前按团队约定先设计确认**。后续=27 语义校验（含 Iter-25 用户输入：缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+当前:   **Iter-26 items 结构化提取**：items-format 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 提取器；${item} ID→名称→顺序编号默认语义 + ${item.字段} 标量注入。详述=§3 Iter-26。**下一步：开工前按团队约定先设计确认**。后续=27 语义校验（含 Iter-25 用户输入：缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -628,41 +628,106 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-24: 实例生命周期闭环 + 归档（Host+Client）（原 Iter-23 归档范围，2026-09-02 拆分顺延）
+### Iter-24 ✅: 预定义目录与安装布局（块1，2026-09-02 关闭）
 
-**技术方案**：`plan/design/workflow-lifecycle-design.md` §5/§7
+> 详案来源：iteration-replan-draft.md Iter-24 节 + `iter24-design.md`。本节旧详述（实例生命周期闭环+归档，旧编号时代）已按需求定稿重排移除，归档范围顺延至 Iter-29。
 
 **交付**：
+1. 全局预定义目录 `~/.dsh/workflow-agent/`（`${DSH_HOME:-~/.dsh}` 定位），子目录 `templates/`、`skills/`、`samples/`、`docs/`；
+2. 插件安装/升级时物化内建模板与技能（同名覆盖幂等；samples/docs 骨架 README 仅缺失写；任一失败不阻断启动）；
+3. 相对路径两级解析链：workspace 优先 → 预定义目录兜底（processor/gate/items-from/inputs 统一；绝对/`~` 直通；双 miss 回退 workspace 相对保持报错语义）；
+4. `/wf/templates` 下拉源=预定义目录扫描+内嵌兜底合并（同名去重，磁盘版赢）；工作区 `templates/` 退出下拉。
 
-- **Host 归档**：归档实例内容**移出池**进 `archive/<instanceId>/<ts>_<kind>_<state>/`（kind=reset|archive，state=归档时运行态）+ `manifest.json`；`listArchive`/`downloadArchive`(zip)/`deleteArchive` 工具+路由；归档后会话 BOUND→DONE；重置写 `reset_<state>`、显式归档用 `archive_<state>` 区分；reset 的 `_reset_<state>` 文件备份升级为目录归档（kind=reset，2026-09-02 确认方向）；
-- **Client 状态机按钮**：按运行态渲染 start/stop/resume/reset/archive + 确认框（reset/归档确认）；
-- **归档管理 UI**：list / download / delete。
-
-**验证（端到端）**：绑定→start 执行 DAG→stop→resume→reset→archive 全闭环；归档 list/download/delete；resume 语义不回归。
+**验收要点**：空白工作区开箱即用 default-demo（技能全部读自预定义目录）；既有工作区 workspace 优先不回归。
+**决策记录**：A1 全局唯一 / A2 物化+同名覆盖 / A4 两级查找链。
+**总结**：`iter24-report.md`（host v0.13.0/client v0.6.1，250 单测，git 8c65d10）。
 
 ---
 
-### Iter-25: 编排可视化编辑（体量最大，拆子迭代顺序推进）（原 Iter-24 范围，2026-09-02 顺延）
+### Iter-25 ✅: 数据流显性化（块1，2026-09-02 关闭）
 
-**范围修订（v2，见 instance-creation-semantics.md §2）**：编辑器双模式——模板模式（读模板编辑 → 创建实例用）与实例模式（打开实例 `instance.yaml`；CREATED 可写回快照 + metadata.updatedAt，RUNNING 禁保存）。**实例 = 模板 + 配置，严格区分**。模板保持只读参照，已建实例不受模板后续编辑影响。
+> 详案：`iter25-design.md`（D1-D4 用户拍板）。本节旧详述（编排可视化编辑画布方案，旧编号时代）已被需求定稿的双栏编辑器形态取代 → Iter-28。
 
-**输入**：Iter-24 归档全链（编辑器"保存并启动"依赖控制通道）。
+**交付**：
+1. begin/start/status 返回展开后 `inputs`（命名字典，绝对路径）/`outputs`（绝对路径数组）/`skillDir`，同步落盘 state.json；
+2. 目录变量 `${workspace}`/`${wf_dir}`/`${skills}`/`${skill_dir}` 展开期注入（两阶段：expandDefinition + finalizeDataflow 纯函数，与 `${param}`/`${item}` 同一正则）；
+3. 门禁同时拿 inputs+outputs（R16）；派发 prompt 首行附"本技能全文来自 `<skillDir>`"（R21a）；
+4. processor/gateChecker 可选——**D4：校验挂创建关口，与执行事件解耦**（create 返回结构化 warnings 不拦截；begin/start 不拦截；persona 运行时护栏 processor null 不派发并报告用户）。
 
-**拆分预案**（前台开发反馈周期长，按子迭代顺序交付、每个可用）：
+**决议记录**：D1 inputs/outputs 相对路径以实例目录为基准绝对化（workspace 引用用 `${workspace}` 显式）/ D2 目录变量保留字优先于 params / D3 无 processor 任务 `${skill_dir}` 占位保留。
+**遗留**：warnings 面板展示→Iter-28；缺 processor 升错误级校验→Iter-27（用户表态）。
+**总结**：`iter25-report.md`（host v0.14.0/client v0.6.1，286 单测，git 53f022d）。
 
-| 子迭代 | 交付 | 验证 |
-|--------|------|------|
-| 25.1 | 画布骨架：节点拖拽 + 框选 + 只读渲染现有 YAML | 打开实例快照 → DAG 正确显示 |
-| 25.2 | 连线编辑：depend-on 增删 | 图形关系 ↔ YAML 同步一致 |
-| 25.3 | 节点配置面板：processor/inputs/outputs/gate/timeout | 配置项完整写回 YAML |
-| 25.4 | 模板↔实例闭环：模板模式编辑 + "创建实例"入口；实例模式写回（CREATED） | 面板建实例 → 编辑 → start 编排成功 |
+---
 
-**验证标准**：
+### Iter-26: items 结构化提取（块1）
+
+**交付**：
+1. `items-format` 显式声明（`lines|markdown|json|yaml`）+ 扩展名推断 + 行文本向后兼容；
+2. 提取器：markdown 列表项与**表格行**（列名=字段名）；JSON/YAML 数组与并列对象（含 JSON Lines）；
+3. 注入语义：`${item}` 默认 **ID/编号字段 → 名称字段 → 顺序编号**；`${item.字段名}` 取标量（路径注入如 `output/${item.slug}.md`）；
+4. items 文件可以是 workspace 文件或上游任务 output（配合 25 的返回可见性）。
+
+**验收要点**：三种格式各跑通一个 loop + 一个 concurrent 实例；对象 item 的路径注入正确展开；旧行文本定义零改动可跑。
+
+---
+
+### Iter-27: 语义校验（块1，R8/R12）
+
+> **Iter-25 验证输入（2026-09-02 用户表态，开工设计确认时优先处理）**：任务缺 processor 是**需要修改的问题，不能告警放过**——Iter-25 的 create warnings 属临时方案；本迭代须把"缺 processor / gate 缺 checker"升级为**错误级**（结构化错误清单，非警告），并设计实例级"定义不完整/需修改"显性标示（前台展示归 Iter-28）。与 D4（校验挂创建/编辑关口）及 R11（创建后编辑补全）的协调——创建是否拦截 vs 派生状态标示+启动闸门——开工前设计确认拍板。
+
+**交付**：
+1. 校验引擎（Host 端纯函数 + 工具暴露 `workflow_validate`）：技能存在性（预定义+workspace 两级）、输入文件存在性（workspace 或上游 outputs）、**上下游 outputs↔inputs 衔接**、dependsOn 闭环/无环、items 文件存在与格式可解析、缺 processor 给出必须指定的错误；
+2. 挂 create / start 关口（start 拦截，create 警告不拦截——结合上方用户表态，create 关口的拦截/标示语义需重新确认）；
+3. 校验结果**结构化返回**（错误清单：任务/字段/原因），供编辑界面与面板展示。
+
+**验收要点**：default-demo 破坏性用例（删技能/删上游输出/造环/缺 processor）逐项报出可读错误；完好定义零误报。
+
+---
+
+### Iter-28: 实例编辑前台（块2）
+
+**交付**：
+1. **DAG 页下方双栏编辑器**：左侧任务列表（类型/状态），右侧选中任务属性表单（inputs 路径、outputs 路径、process 技能下拉、gateChecker 下拉、门禁重试、任务并发）；顶部实例级（名称、总并发、params 键值表）；
+2. 技能下拉数据源：扫预定义 `skills/`，展示**名称+版本**（frontmatter）；
+3. 保存=写回 instance.yaml（只作用于本实例）；保存时触发 Iter-27 校验并展示结果；
+4. 状态门控：RUNNING **可见禁用**（提示运行中不可编辑）；COMPLETED/FAILED 同禁用（重跑走 reset）；
+5. 创建弹窗展示 create warnings（承接 Iter-25 遗留）；模板下拉源=预定义目录（与 24 联动收尾）。
+
+**验收要点**：新建实例→补全缺 processor 的任务→保存校验通过→启动跑通（R11 主链路）；编辑不污染预定义目录文件（R5）。
+
+---
+
+### Iter-29: 实例管理子页签 + 归档/下载/删除（块4，独立可提前/并行）
+
+**交付**：
+1. **实例管理子页签**：列表分**活动/归档**两段；列=名称、ID、状态、孤儿标记、任务进度、创建时间；
+2. 归档全链（沿用已定稿设计 `workflow-lifecycle-design.md`：`archive/<id>/<时间戳>_<类别>_<状态>/` + manifest；reset 备份升级为目录归档；绑定会话终态后 DONE）；
+3. **打包下载**：多选打**一个 zip**（包内按实例分目录），仅实例目录内容；
+4. **删除**：非 RUNNING 可删（含归档段）；删除前数据丢失提醒；删除时**自动解绑会话**。
+
+**验收要点**：全生命周期走查——创建→运行→停止→归档→列表两段可见→下载 zip 内容完整→删除后解绑且列表消失。
+
+---
+
+### Iter-30: DAG 美化与交互（块3）
+
+**交付**（范围待本迭代开工前细化确认）：
+1. 节点详情面板（点击节点展示：状态、inputs/outputs、技能、门禁结果——数据依赖 Iter-25 落盘）；
+2. 视觉与布局优化（配色/层次/进度表达/运行态动画/自动跟随）；
+3. 交互增强按需取舍（缩放平移等）。
+
+**依赖关系**：
 
 ```
-打开编辑器 → 拖入 2 个 Task 节 → 配 processor/inputs/outputs
-→ 连定义依赖 → 加 Gate → 保存 YAML
-→ 切换到监控式 → 启动 → 运行成功
+24 预定义目录 ──→ 25 数据流显性化 ──→ 26 items 提取
+      │                │
+      │                └──────────→ 27 语义校验 ──→ 28 编辑前台
+      │                                                  
+      └──────────────────────────────→ 28（技能下拉源）
+                                              
+29 归档/下载/删除（独立，可提前/并行）
+30 DAG 美化 ←─ 25（节点详情数据）
 ```
 
 ---
