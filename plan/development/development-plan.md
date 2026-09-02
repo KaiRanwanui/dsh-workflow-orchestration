@@ -29,7 +29,8 @@
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
 已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
-当前:   **Iter-25 数据流显性化（参数传递地基）— 代码完成，待重启+GUI 验证**：工具返回带 inputs/outputs+目录变量+门禁拿 inputs+processor 可选（D4：校验挂创建关口，create 返回 warnings 不拦截）。设计=iter25-design.md（D1-D4 已拍板），286 单测全绿，host v0.14.0。队列后续=26 items 结构化提取 / 27 语义校验 / 28 实例编辑前台 / 29 实例管理子页签+归档下载删除（独立可提前） / 30 DAG 美化。
+已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
+当前:   **Iter-26 items 结构化提取**：items-format 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 提取器；${item} ID→名称→顺序编号默认语义 + ${item.字段} 标量注入。详案=iteration-replan-draft.md。**下一步：开工前按团队约定先设计确认**。后续=27 语义校验（含 Iter-25 用户输入：缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |

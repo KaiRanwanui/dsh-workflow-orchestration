@@ -57,9 +57,11 @@
 
 ## Iter-27：语义校验（块1）
 
+> **Iter-25 验证输入（2026-09-02 用户表态，开工设计确认时优先处理）**：任务缺 processor 是**需要修改的问题，不能告警放过**——Iter-25 的 create warnings 属临时方案；Iter-27 须把"缺 processor / gate 缺 checker"升级为**错误级**（结构化错误清单，非警告），并设计实例级"定义不完整/需修改"的显性标示（前台展示归 Iter-28）。与 D4（校验挂创建/编辑关口、与执行事件解耦）及 R11（创建后编辑补全链路）的协调——创建是否拦截 vs 派生状态标示+启动闸门——**开工前设计确认拍板**。
+
 **交付**：
-1. 校验引擎（Host 端纯函数 + 工具暴露 `workflow_validate`）：技能存在性（预定义+workspace 两级）、输入文件存在性（workspace 或上游 outputs）、**上下游 outputs↔inputs 衔接**、dependsOn 闭环/无环、items 文件存在与格式可解析、（可选 processor 缺失时给出必须指定的错误）；
-2. 挂 create / start 关口（start 拦截，create 警告不拦截——创建允许半成品，R11 编辑后补全）；
+1. 校验引擎（Host 端纯函数 + 工具暴露 `workflow_validate`）：技能存在性（预定义+workspace 两级）、输入文件存在性（workspace 或上游 outputs）、**上下游 outputs↔inputs 衔接**、dependsOn 闭环/无环、items 文件存在与格式可解析、（缺 processor 给出必须指定的错误）；
+2. 挂 create / start 关口（start 拦截，create 警告不拦截——创建允许半成品，R11 编辑后补全；结合上方用户表态，create 关口的拦截/标示语义需重新确认）；
 3. 校验结果**结构化返回**（错误清单：任务/字段/原因），供编辑界面与面板展示。
 
 **验收要点**：default-demo 破坏性用例（删技能/删上游输出/造环/缺 processor）逐项报出可读错误；完好定义零误报。
