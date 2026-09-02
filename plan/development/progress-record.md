@@ -83,6 +83,7 @@
 | 今日 | **Iter-23 前置探针完成：方向 A 停止信号摸清（一半可根治、一半原理性边界）** | ✅ 探针收官（stopa-6/pkg-6 用后已 undefine，代码存档 `code/probes/stopa-user-stop-signal-probe.js`，报告 `plan/development/iter23-probe-report.md`）。**①停止链路**：UI Stop=client session.cancel→`agent.cancel({kind:'user'},{keepInbox:true})`。**②Case R 停在活动回合=可根治**：持久日志留 `turn/end {reason:{kind:'aborted',reason:{kind:'user'}}}`+`assistant/message interrupted:true`，live `session.log` 与冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致、turn/reason 稳定）。**③Case I 停在空闲=零痕迹**（"复活"实测场景）：cancel 对 idle agent 纯 no-op 且 **RPC 假性返回 accepted:true**，无事件/状态/持久变化——不改 DSH 原理性不可检测。**④停后 prompt 接受且立即唤醒**（Iter-21"已停拒绝 prompt"线索证伪）。**⑤部署版日志事件形态 `{type,seq,time,data:{…}}`——payload 在 data 包装下**，与 master 源码顶层签名不同；`source.kind`（user/plugin/skill-catalog/agent-instructions）可区分真实输入与合成注入；`session/event` 全局实时事件=事件驱动 sync 现成挂点。**设计要点**：aborted 之后新回合会覆盖"末条 turn/end"判定窗口→事件驱动为主（ctx.on('session/event') 捕 aborted(user) 即时处置 user-stop）+轮询兜底；Case I 边界拟用面板 UX 引导（"后台执行中，停止请用面板 Stop"）。**下一步：Iter-23 设计方案交用户确认。** |
 | 今日 | **流程定义技术讨论 + 需求澄清闭环 + 迭代重排批准（2026-09-02）** | ✅ 三段：①**流程定义技术讨论**（问题/解答/全旅程/缺口固化=`plan/design/definition-pipeline-discussion.md`；核心实证：三工具返回从未携带 inputs/outputs——契约漂移、引擎数据流零感知、上轮 inputs.analysis 修复无传递通道）；②**需求澄清**（用户原始需求 25 条 → A-E 五组+2 开放点全部拍板；定稿 `plan/requirements/工作流数据管理需求.md`、过程记录 `工作流数据管理需求澄清.md`；原始文件保留为历史输入）；③**迭代重排**（草案 `iteration-replan-draft.md` → 用户批准 → development-plan §2 队列重写 **Iter-24~30**：24 预定义目录/25 数据流显性化/26 items 提取/27 语义校验/28 编辑前台/29 实例管理+归档下载删除（独立可提前）/30 DAG 美化）。**下一步：Iter-24 设计方案确认后开工。** |
 | 今日 | **Iter-24 设计定稿（两决策点拍板）** | ✅ 用户确认：①预定义目录位置=`~/.dsh/workflow-agent/`；②工作区 templates/ 不再进下拉的迁移影响接受。设计全文固化=`plan/development/iter24-design.md`（含实施顺序：步骤 0 fs 写入探针 → 收编 5 技能 → 实现 host 0.13.0 → 单测+端到端验证）。**明日开工。** |
+| 今日 | **Iter-24 预定义目录与安装布局 — 开发+验证+关闭** | ✅ 完成（探针实证 fs 可写 ~/.dsh 且全盘读写无硬限制、sandboxPolicy 属 opt-in；物化模板2+技能5 幂等；两级解析链 workspace优先→预定义兜底；模板下拉切源+内建兜底合并；250 单测；空白工作区 GUI 全链路 COMPLETED、skills 读自预定义目录。host v0.13.0/client v0.6.1，git 7896bc3→8c65d10。总结=iter24-report.md，探针存档=iter24-probe-fs.md。**新纪律：重启 dsh 由用户执行**） |
 
 ---
 
@@ -108,6 +109,16 @@
 - **需求澄清**：用户提交 `plan/requirements/工作流数据管理原始需求.md`（25 条四组）→ 五组逐条澄清+2 开放点拍板（技能目录折中方案/实例管理子页签）→ 定稿 `工作流数据管理需求.md`（R1-R25 权威基线+第六节延后 backlog），过程记录 `工作流数据管理需求澄清.md`。
 - **迭代重排**：`iteration-replan-draft.md` 七迭代方案经用户批准（2026-09-02），development-plan §2 队列与全景已重写：24 预定义目录与安装布局 → 25 数据流显性化 → 26 items 结构化提取 → 27 语义校验 → 28 实例编辑前台 → 29 实例管理子页签+归档/下载/删除（独立可提前）→ 30 DAG 美化交互。
 - **产出文件**：definition-pipeline-discussion.md / 工作流数据管理需求.md / 工作流数据管理需求澄清.md / iteration-replan-draft.md / development-plan.md / progress-record.md（本条）。
+
+### 20. Iter-24: 预定义目录与安装布局（2026-09-02，✅ 完成关闭）
+
+- **设计定稿**（用户拍板两决策点）：目录=`~/.dsh/workflow-agent/`（DSH_HOME 优先定位）；工作区 templates/ 退出下拉（迁移影响接受）；物化同名覆盖幂等、失败不阻断；解析链 workspace 优先→预定义兜底；下拉=目录扫描+内建兜底合并。全文=`plan/development/iter24-design.md`。
+- **探针（动态插件 probe-1，用后 undefine）**：步骤 0 实证 Host fs 可写 `~/.dsh/`；追问探针实证**全盘读写无硬限制**（HOME/`.dsh`/`/tmp` 写通、`/etc` 读通），`sandboxPolicy(workspace-write, workspaceRoot=HOME)` 属 opt-in 非强制；勘误"/tmp 被拒"=bwrap tmpfs 观测假象；Client 无直接文件能力（经 Host 路由间接）。存档=`iter24-probe-fs.md`。
+- **交付**：builtin-skills.js（5 技能收编+frontmatter name+detectPredefinedRoot+materializeBuiltinAssets）；启动时物化（journal `[workflow-agent] materialize`）；resolveRel→resolveRefPath 两级解析链（processor/gate.checker/itemsFrom，绝对/~ 直通，双 miss 保报错语义）；`/wf/templates` 新契约 `{builtin, predefined}`+mergeTemplateLists 去重兜底；client 0.6.1 下拉单一 predefined 列表（`tpl:` 统一可编辑 workflowText 提交）。
+- **过程修复**：①sync 单 section 遗漏致调用点缺失（动态探针排除法定位；纪律=改源后全量 sync，测试走源/部署走副本存在结构性盲区）；②fs.stat 真实契约"缺失返回 undefined 不抛错"，原判定误跳过 README 写入（mock 对齐真实语义）。
+- **验证**：250 单测全绿（新增用例 18/19、case 10 改新契约）；三次重启物化幂等（覆盖生效、用户 README 不覆盖）；空白工作区 create 落盘 ✓；**用户 GUI 全链路**：/home/zhaokai/wf-blank-e2e 开 orchestrator 会话跑 default-demo 至 COMPLETED，Session 记录确认 skills 全部读自预定义目录（开箱即用达成）；workflow_test_ws 44 实例回归无损。
+- **新纪律（用户明确要求）**：Agent 不自行 systemctl restart dsh.service（会中断会话）；文件部署后提醒用户重启，等回复再验证。
+- **收尾**：host v0.13.0 / client v0.6.1；git 7896bc3→8c65d10；总结=`iter24-report.md`。**下一迭代=Iter-25 数据流显性化（先设计确认）。**
 
 ### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
 
