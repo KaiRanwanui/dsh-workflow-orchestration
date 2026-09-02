@@ -274,6 +274,23 @@ function sessionCwd(exec) {
 function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   const fs = ctx.get('fs')
 
+  // ── Iter-24：预定义目录物化（模板+技能+骨架；幂等覆盖；失败不阻断工具注册）──
+  // 兼任探针：journalctl 搜 "[workflow-agent] materialize" 即见 Host fs 对
+  // ~/.dsh/ 的写能力与物化结果。fire-and-forget，不等待。
+  if (fs) {
+    try {
+      const tpl = (typeof BUILTIN_TEMPLATES !== 'undefined') ? BUILTIN_TEMPLATES : []
+      materializeBuiltinAssets(fs, tpl)
+        .then((r) => {
+          if (r && r.ok) console.log('[workflow-agent] materialize ok root=' + r.root + ' written=' + r.written.length + (r.failed.length ? ' FAILED=' + r.failed.join('; ') : ''))
+          else console.log('[workflow-agent] materialize skip: ' + ((r && r.reason) || 'unknown') + (r && r.failed && r.failed.length ? ' failed=' + r.failed.join('; ') : ''))
+        })
+        .catch((e) => console.log('[workflow-agent] materialize ERROR: ' + (e && e.message ? e.message : String(e))))
+    } catch (e) {
+      console.log('[workflow-agent] materialize ERROR-sync: ' + (e && e.message ? e.message : String(e)))
+    }
+  }
+
   // ── 每次工具调用解析绑定的引擎/存储（避免跨会话闭包串扰，多会话并行安全）──
   async function bind(exec, args) {
     if (args && (args.statePath || args.workspaceRoot)) {

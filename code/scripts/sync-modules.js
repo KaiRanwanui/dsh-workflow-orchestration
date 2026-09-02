@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..') // code/
 const MJS = path.join(ROOT, 'agent-presets/workflow-orchestrator/workflow-host.mjs')
 const SOURCES = {
   'instance-store': path.join(ROOT, 'plugins/workflow-host/instance-store.js'),
+  'builtin-skills': path.join(ROOT, 'plugins/workflow-host/builtin-skills.js'),
   'tools-preset': path.join(ROOT, 'plugins/workflow-host-preset/tools-preset.js'),
 }
 

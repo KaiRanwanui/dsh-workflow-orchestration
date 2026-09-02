@@ -26,6 +26,12 @@ function makeMockFs() {
       if (v === undefined) throw new Error('not found: ' + t.path)
       return v
     },
+    async stat(t) {
+      // 对齐真实 DSH fs 契约：不存在返回 undefined（不抛错）
+      const v = files.get(t.path)
+      if (v === undefined) return undefined
+      return { path: t.path, size: String(v).length }
+    },
     async listDir(t) {
       const prefix = t.path.replace(/\/+$/, '') + '/'
       const seen = new Map()
@@ -732,6 +738,55 @@ async function runCase16() {
 }
 
 // ── 用例 17：方向 A 手工停权威停止（Iter-23 A1/A2）────────────────────────
+// ── 用例 18：预定义目录物化（Iter-24）──
+async function runCase18() {
+  console.log('［用例 18］预定义目录物化 — 技能/模板/骨架幂等覆盖 + 根定位')
+  const { BUILTIN_SKILLS, detectPredefinedRoot, materializeBuiltinAssets } = require('../plugins/workflow-host/builtin-skills.js')
+  const { files, fs: mockFs } = makeMockFs()
+
+  // 1) 根定位：DSH_HOME 优先，缺省 HOME/.dsh
+  const savedEnv = { DSH_HOME: process.env.DSH_HOME, HOME: process.env.HOME }
+  try {
+    process.env.DSH_HOME = '/dsh-custom'
+    check('c18 根: DSH_HOME 优先', detectPredefinedRoot() === '/dsh-custom/workflow-agent')
+    delete process.env.DSH_HOME
+    const r1 = detectPredefinedRoot()
+    check('c18 根: 缺省 HOME/.dsh/workflow-agent', typeof r1 === 'string' && r1.endsWith('/.dsh/workflow-agent') && r1.startsWith('/'))
+  } finally {
+    if (savedEnv.DSH_HOME === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = savedEnv.DSH_HOME
+    if (savedEnv.HOME !== undefined) process.env.HOME = savedEnv.HOME
+  }
+
+  // 2) 首次物化：模板+技能+骨架全部写出
+  const templates = [
+    { name: 'tpl-a', description: 'x', yaml: 'name: tpl-a\n' },
+    { name: 'tpl-b', description: 'x', yaml: 'name: tpl-b\n' },
+  ]
+  const r = await materializeBuiltinAssets(mockFs, templates)
+  check('c18 物化: ok', r.ok === true)
+  check('c18 物化: 根路径回传', r.root === detectPredefinedRoot())
+  check('c18 物化: 技能 5 个全写', BUILTIN_SKILLS.every((s) => r.written.indexOf('skills/' + s.id + '/SKILL.md') >= 0))
+  check('c18 物化: 模板写入', r.written.indexOf('templates/tpl-a.yaml') >= 0 && r.written.indexOf('templates/tpl-b.yaml') >= 0)
+  check('c18 物化: 骨架 README 写出', r.written.indexOf('samples/README.md') >= 0 && r.written.indexOf('docs/README.md') >= 0)
+  const skillPath = r.root + '/skills/deep-analysis/SKILL.md'
+  check('c18 技能: 内容含 frontmatter name', String(files.get(skillPath)).startsWith('---\nname: deep-analysis\n---'))
+  check('c18 技能: 正文原样保留', String(files.get(skillPath)).indexOf('## 任务目标') > 0)
+
+  // 3) 幂等覆盖：改写模板/技能后再物化 → 覆盖回规范内容；用户 README 不被覆盖
+  files.set(r.root + '/templates/tpl-a.yaml', 'name: user-edited\n')
+  files.set(r.root + '/skills/spec-writer/SKILL.md', 'user edited\n')
+  files.set(r.root + '/samples/README.md', 'user custom samples readme\n')
+  const r2 = await materializeBuiltinAssets(mockFs, templates)
+  check('c18 幂等: ok', r2.ok === true)
+  check('c18 幂等: 模板覆盖回规范内容', files.get(r.root + '/templates/tpl-a.yaml') === 'name: tpl-a\n')
+  check('c18 幂等: 技能覆盖回规范内容', String(files.get(r.root + '/skills/spec-writer/SKILL.md')).startsWith('---\nname: spec-writer\n---'))
+  check('c18 幂等: 用户 samples/README.md 不被覆盖', files.get(r.root + '/samples/README.md') === 'user custom samples readme\n')
+
+  // 4) fs 不可用 / 根不可定位降级
+  const rNoFs = await materializeBuiltinAssets(null, templates)
+  check('c18 降级: fs 缺失 → ok:false + reason', rNoFs.ok === false && !!rNoFs.reason)
+}
+
 async function runCase17() {
   console.log('［用例 17］方向 A — A1 aborted(user) 判定矩阵 / A2 轮询兜底 / 权威停止语义')
   const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
@@ -1218,6 +1273,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     // ── 用例 16：主从聚合控制（Iter-SUBA）──
     await runCase16()
     await runCase17()
+    // ── 用例 18：预定义目录物化（Iter-24）──
+    await runCase18()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
