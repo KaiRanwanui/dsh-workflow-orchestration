@@ -144,6 +144,11 @@ function parseYaml(text) {
 // ── 工作流结构化与校验 ──────────────────────────────────────────────────────
 // 输入：YAML 文本字符串；输出：结构化工作流对象（合法时）
 // 结构：{ name, version, description, params, tasks:[...], errors:[...] }
+
+// Iter-26：items-format 枚举（schema 常量宿主内联时同作用域可见；独立测试兜底）
+let E_ITEMS_FORMATS = typeof ITEMS_FORMAT_VALUES !== 'undefined'
+  ? ITEMS_FORMAT_VALUES
+  : ['lines', 'markdown', 'json', 'yaml']
 function parseWorkflow(text) {
   const raw = parseYaml(text)
   const errors = []
@@ -263,6 +268,8 @@ function normalizeTask(t, idx, errors, warnings) {
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    // Iter-26：items-format 显式声明（可选；缺省按扩展名推断，lines 兜底）
+    base.itemsFormat = validateItemsFormat(t, id, errors)
     // 循环错误处理策略
     const onError = t['on-error'] || 'break'
     if (['break', 'continue'].indexOf(onError) === -1) {
@@ -276,6 +283,7 @@ function normalizeTask(t, idx, errors, warnings) {
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
+    base.itemsFormat = validateItemsFormat(t, id, errors)
     base.maxConcurrency = t['max-concurrency'] != null ? Number(t['max-concurrency']) : null
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
@@ -294,6 +302,17 @@ function toArray(v) {
   if (v == null) return []
   if (Array.isArray(v)) return v.map((x) => String(x))
   return [String(v)]
+}
+
+// Iter-26：items-format 校验（可选字段；非法值 = 结构错误，create 关口拦截）
+function validateItemsFormat(t, id, errors) {
+  if (t['items-format'] == null) return null
+  const f = String(t['items-format']).trim()
+  if (E_ITEMS_FORMATS.indexOf(f) === -1) {
+    errors.push('Task "' + id + '" 的 items-format 必须是 ' + E_ITEMS_FORMATS.join('|') + '，实际: ' + f)
+    return null
+  }
+  return f
 }
 
 // v1.1：命名式 inputs。YAML 解出后为 {key: string | string[]}；

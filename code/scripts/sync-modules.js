@@ -13,6 +13,7 @@ const MJS = path.join(ROOT, 'agent-presets/workflow-orchestrator/workflow-host.m
 const SOURCES = {
   'workflow-schema': path.join(ROOT, 'shared/workflow-schema.js'),
   'workflow-parser': path.join(ROOT, 'shared/workflow-parser.js'),
+  'items-extract': path.join(ROOT, 'shared/items-extract.js'), // Iter-26：items 提取器（须位于 workflow-parser 之后：依赖同作用域 parseYaml）
   'engine': path.join(ROOT, 'plugins/workflow-host/engine.js'),
   'storage': path.join(ROOT, 'plugins/workflow-host/storage.js'),
   'instance-store': path.join(ROOT, 'plugins/workflow-host/instance-store.js'),

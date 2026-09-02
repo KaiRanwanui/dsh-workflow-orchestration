@@ -660,6 +660,24 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-18：写归档备份（reset 用 kind=reset；显式归档用 kind=archive，Iter-19）──
   // 复制实例内容到 archive/<instanceId>/<ts>_<kind>_<state>/ + manifest.json。
+  // 递归复制目录（fs 无 copy API，listDir+readText/writeText 实现；二进制/不可读文件跳过）。
+  // Iter-26(GUI 二轮反馈)：旧实现只复制顶层文件，items-demo 输出含子目录时备份残缺。
+  async function copyDirRecursive(fs, srcDir, destDir) {
+    let entries = []
+    try { entries = await fs.listDir(await fs.resolve(srcDir)) } catch (e) { return }
+    for (const en of entries) {
+      const sp = srcDir + '/' + en.name
+      if (en.type === 'directory') {
+        await copyDirRecursive(fs, sp, destDir + '/' + en.name)
+      } else if (en.type === 'file') {
+        try {
+          const text = await fs.readText(await fs.resolve(sp))
+          await fs.writeText(await fs.resolve(destDir + '/' + en.name), text)
+        } catch (e) { /* 不可读（如二进制）跳过 */ }
+      }
+    }
+  }
+
   async function writeArchiveBackup(cwd, instanceId, kind, state) {
     const fs = ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
@@ -672,17 +690,8 @@ function createInstanceRegistry(ctx, deps) {
         await fs.writeText(await fs.resolve(dest + '/' + f), text)
       } catch (e) { /* 实例可能无该文件（如 CREATED 无 state.json） */ }
     }
-    for (const sub of ['output', 'logs']) {
-      try {
-        const entries = await fs.listDir(await fs.resolve(src + '/' + sub))
-        for (const en of entries) {
-          if (en.type !== 'file') continue
-          try {
-            const text = await fs.readText(await fs.resolve(src + '/' + sub + '/' + en.name))
-            await fs.writeText(await fs.resolve(dest + '/' + sub + '/' + en.name), text)
-          } catch (e) { /* skip */ }
-        }
-      } catch (e) { /* skip */ }
+    for (const sub of ['output', 'logs', 'inputs']) {
+      await copyDirRecursive(fs, src + '/' + sub, dest + '/' + sub)
     }
     const meta = await tryReadMeta(cwd, instanceId)
     const manifest = {

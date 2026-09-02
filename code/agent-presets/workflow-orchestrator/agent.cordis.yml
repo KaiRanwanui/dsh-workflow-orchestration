@@ -131,6 +131,11 @@
 - id: tool-fs
   name: '@deepseek-ai/dsh-tool-fs'
 
+# Iter-26(GUI 二轮反馈)：编排 Agent 需要 bash 执行 reset 的 pendingCleanup.cmd
+# （fs 服务无删除 API，产物清空由本会话 bash 执行——system-prompt [清理契约]）。
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+
 - id: tool-fs-search
   name: '@deepseek-ai/dsh-tool-fs-search'
   config:

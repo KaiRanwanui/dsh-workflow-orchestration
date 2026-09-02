@@ -146,12 +146,63 @@ name: integrator-checker
 const SAMPLES_README = `# 样例工作流（samples）
 
 本目录存放样例工作流定义（YAML）。放入本目录的 .yaml 文件会与预定义模板一起出现在创建下拉列表中。
+
+items/ 子目录存放 items 结构化提取样例（Iter-26），被内建模板 items-demo 经两级解析链引用：
+- modules.md（markdown 列表，标量 item）
+- modules-table.md（markdown 表格，对象 item，列名=字段名）
+- components.json（JSON 数组，对象 item）
+- features.yaml（YAML 并列 map，键=id、标量值=名称）
 `
 
 const DOCS_README = `# 工作流文档（docs）
 
 本目录存放工作流与技能的使用说明文档。
 `
+
+// ── Iter-26：items 提取样例（samples/items/，同名覆盖物化；items-demo 模板引用）──
+// 四文件覆盖四种提取形态：markdown 列表（标量）/ markdown 表格（对象）/ JSON 数组（对象）/
+// YAML 并列 map（键=id、标量值=name）。
+const BUILTIN_SAMPLES = [
+  {
+    path: 'samples/items/modules.md',
+    content: [
+      '# 待评审模块清单（markdown 列表 → 标量 item）',
+      '',
+      '- login',
+      '- order',
+      '- payment',
+      '',
+    ].join('\n'),
+  },
+  {
+    path: 'samples/items/modules-table.md',
+    content: [
+      '# 模块登记表（markdown 表格 → 对象 item，列名=字段名）',
+      '',
+      '| name | slug | priority |',
+      '|------|------|----------|',
+      '| 登录模块 | login | 1 |',
+      '| 订单模块 | order | 2 |',
+      '',
+    ].join('\n'),
+  },
+  {
+    path: 'samples/items/components.json',
+    content: JSON.stringify([
+      { id: 'api', name: 'API 网关', slug: 'api-gateway' },
+      { id: 'auth', name: '认证中心', slug: 'auth-core' },
+    ], null, 2) + '\n',
+  },
+  {
+    path: 'samples/items/features.yaml',
+    content: [
+      '# 特性清单（YAML 并列 map：键=id 字段，标量值=name 字段）',
+      'search: 搜索服务',
+      'export: 导出服务',
+      '',
+    ].join('\n'),
+  },
+]
 
 // ── 预定义目录根：${DSH_HOME:-$HOME/.dsh}/workflow-agent ───────────────────
 function detectPredefinedRoot() {
@@ -216,10 +267,14 @@ async function materializeBuiltinAssets(fs, templates) {
   // samples/docs 骨架 README（仅缺失时写）
   await ensureFile('samples/README.md', SAMPLES_README, false)
   await ensureFile('docs/README.md', DOCS_README, false)
+  // Iter-26：items 提取样例（同名覆盖，升级可更新内容）
+  for (const s of BUILTIN_SAMPLES) {
+    await ensureFile(s.path, s.content, true)
+  }
 
   return { ok: failed.length === 0, root, written, failed }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BUILTIN_SKILLS, SAMPLES_README, DOCS_README, detectPredefinedRoot, materializeBuiltinAssets }
+  module.exports = { BUILTIN_SKILLS, BUILTIN_SAMPLES, SAMPLES_README, DOCS_README, detectPredefinedRoot, materializeBuiltinAssets }
 }

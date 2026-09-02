@@ -23,13 +23,19 @@ function parentDir(p) {
 function isAbsoluteishPath(p) {
   return /^([a-zA-Z]:[\\/]|\/|~\/|~$)/.test(p)
 }
+// Node 直测（require 本源文件）时 builtin-skills 不在同作用域——require 兜底；
+// mjs 内联作用域有 detectPredefinedRoot（builtin-skills section 在前），走 typeof 分支。
+function fallbackPredefinedRoot() {
+  try { return require('../workflow-host/builtin-skills').detectPredefinedRoot() } catch (e) { return null }
+}
+
 async function resolveRefPath(fs, workspaceRoot, rel, predefinedRoot) {
   const p = String(rel || '').replace(/\\/g, '/')
   if (isAbsoluteishPath(p)) return p
   const roots = []
   const ws = workspaceRoot ? String(workspaceRoot).replace(/\/+$/, '') : ''
   if (ws) roots.push(ws)
-  const pre = predefinedRoot || (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null)
+  const pre = predefinedRoot || (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : fallbackPredefinedRoot())
   if (pre && String(pre).replace(/\/+$/, '') !== ws) roots.push(String(pre).replace(/\/+$/, ''))
   for (const r of roots) {
     const cand = r + '/' + p
@@ -55,35 +61,71 @@ function mergeTemplateLists(predefined, builtinTemplates) {
 }
 
 // ── ${param} / 目录变量注入（同一 PARAM_PATTERN 正则，R20）─────────────────
-// PARAM_PATTERN 默认由同作用域 schema 模块提供；独立加载（Node 直测）时兜底
-let E_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN : /\$\{(\w+)\}/g
+// PARAM_PATTERN 默认由同作用域 schema 模块提供；独立加载（Node 直测）时从 shared
+// schema 加载（Iter-26 扩展含可选 .字段），再兜底旧单层正则
+let E_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN
+  : (typeof require !== 'undefined' && require('../../shared/workflow-schema').PARAM_PATTERN
+    ? require('../../shared/workflow-schema').PARAM_PATTERN
+    : /\$\{(\w+)\}/g)
 // parseWorkflow 兜底：mjs 内联作用域有同名函数；Node 单独 require 时从 shared 加载
 let E_parseWorkflow = typeof parseWorkflow !== 'undefined'
   ? parseWorkflow
   : (typeof require !== 'undefined' ? require('../../shared/workflow-parser').parseWorkflow : null)
+// Iter-26：items 提取与 item 默认链（items-extract 模块）。宿主内联时同作用域已由
+// 前置 items-extract section 提供；Node 独立测试时从 shared 显式加载（与 E_parseWorkflow 同模式）。
+let E_extractItems = typeof extractItems !== 'undefined' ? extractItems
+  : (typeof require !== 'undefined' ? require('../../shared/items-extract').extractItems : null)
+let E_itemDisplayValue = typeof itemDisplayValue !== 'undefined' ? itemDisplayValue
+  : (typeof require !== 'undefined' ? require('../../shared/items-extract').itemDisplayValue : null)
+let E_isScalarValue = typeof isScalarValue !== 'undefined' ? isScalarValue
+  : (typeof require !== 'undefined' ? require('../../shared/items-extract').isScalarValue : null)
 // Iter-25：vars = 目录变量保留字（${workspace}/${wf_dir}/${skills}/${skill_dir}）。
 // D2 决议：保留字优先于同名 params——${workspace} 永远是工作区路径，语义稳定。
 // vars 形参可选，缺省时行为与 Iter-24 完全一致（向后兼容）。
-function injectParams(value, params, vars) {
+// Iter-26：itemCtx = { varName, data, empty } 迭代上下文（可选）——
+//   ${<varName>}        对象 item 走默认链（ID→名称→1-based 序号），标量原样；
+//                       empty=true（占位迭代）注入空串；
+//   ${<varName>.字段}   单层标量字段直取；缺失/非标量占位保留；empty 注入空串；
+//   点号键在非迭代上下文（或 base≠itemVar）时占位保留，params 查找不受影响。
+// 替换优先级：目录变量保留字（D2）→ item → params → 占位保留。
+function injectParams(value, params, vars, itemCtx) {
   if (typeof value !== 'string') return value
   return value.replace(E_PARAM_PATTERN, (whole, key) => {
+    const dot = key.indexOf('.')
+    if (dot !== -1) {
+      if (itemCtx) {
+        const base = key.slice(0, dot)
+        if (base === itemCtx.varName) {
+          if (itemCtx.empty) return 'empty' // 占位迭代：字段注入 'empty'（路径可用，skill 自识别空 items）
+          if (itemCtx.data && typeof itemCtx.data === 'object') {
+            const v = itemCtx.data[key.slice(dot + 1)]
+            if (E_isScalarValue(v)) return String(v)
+          }
+        }
+      }
+      return whole // 点号形式仅迭代上下文可解析，其余占位保留
+    }
     if (vars && vars[key] !== undefined) return String(vars[key])
+    if (itemCtx && key === itemCtx.varName) {
+      if (itemCtx.empty) return 'empty' // 占位迭代：${itemVar} 注入 'empty'（output/empty/empty.md 可用路径）
+      return E_itemDisplayValue(itemCtx.data, itemCtx.index || 0)
+    }
     if (params && params[key] !== undefined) return String(params[key])
     return whole // 未提供则保留原样，由调用方提示
   })
 }
 
-function injectArray(list, params, vars) {
-  return (list || []).map((x) => injectParams(x, params, vars))
+function injectArray(list, params, vars, itemCtx) {
+  return (list || []).map((x) => injectParams(x, params, vars, itemCtx))
 }
 
 // v1.1：命名式 inputs 注入。值为 string → 注入后返回 string；
 // 值为 string[] → 逐项注入后返回 string[]。
-function injectInputsMap(map, params, vars) {
+function injectInputsMap(map, params, vars, itemCtx) {
   const out = {}
   for (const k of Object.keys(map || {})) {
     const v = map[k]
-    out[k] = Array.isArray(v) ? v.map((x) => injectParams(x, params, vars)) : injectParams(v, params, vars)
+    out[k] = Array.isArray(v) ? v.map((x) => injectParams(x, params, vars, itemCtx)) : injectParams(v, params, vars, itemCtx)
   }
   return out
 }
@@ -124,7 +166,12 @@ function definitionError(errors) {
 // 解析相对路径、展开 loop/concurrent）。定义不合法或 items-from 为空时 throw。
 // Iter-25 阶段1：目录变量 ${workspace}/${skills} 就此注入（展开期已知）；
 // ${wf_dir}/${skill_dir} 实例目录就绪后由 finalizeDataflow（阶段2）注入。
-async function expandDefinition(fs, src, params) {
+// Iter-26：dirCtx = { wfDir } 可选——实例目录已知时（start/reset 路径传 entry.dir）
+// 将 ${wf_dir} 并入阶段1保留字（D2 优先），使 items-from: ${wf_dir}/... 可解析；
+// begin 一步式路径不传（实例目录尚不存在，展开后 createBind）。items 读取改经
+// extractItems（items-format 声明/扩展名推断/四格式/空提取→[]，空提取由
+// expandLoop/ConcurrentTasks 产出占位迭代）。
+async function expandDefinition(fs, src, params, dirCtx) {
   const parsed = E_parseWorkflow(src.text)
   if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
   const p = params || {}
@@ -135,6 +182,7 @@ async function expandDefinition(fs, src, params) {
     workspace: src.workspaceRoot || undefined,
     skills: preRoot ? String(preRoot).replace(/\/+$/, '') + '/skills' : undefined,
   }
+  if (dirCtx && dirCtx.wfDir) dirVars['wf_dir'] = String(dirCtx.wfDir).replace(/\/+$/, '')
   const tasks = await Promise.all(parsed.tasks.map(async (t) => {
     const out = { ...t }
     out.inputs = injectInputsMap(t.inputsRaw, p, dirVars)
@@ -164,14 +212,13 @@ async function expandDefinition(fs, src, params) {
   for (const t of tasks) {
     if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
       const text = await fs.readText(await fs.resolve(t.itemsFrom))
-      const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-      if (items.length === 0) throw new Error('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+      // Iter-26：结构化提取（items-format 声明 > 扩展名推断 > lines）；空提取 → [] 占位迭代
+      const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
       const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p, dirVars)
       finalTasks.push(...iterations)
     } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
       const text = await fs.readText(await fs.resolve(t.itemsFrom))
-      const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-      if (items.length === 0) throw new Error('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
+      const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
       const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p, dirVars)
       finalTasks.push(...iterations)
     } else {
@@ -224,35 +271,111 @@ function finalizeDataflow(tasks, dirCtx) {
   })
 }
 
+// ── Iter-26(GUI 二轮反馈)：静态 input 文件物化进实例目录（inputs/<相对结构>）────
+// finalizeDataflow 把相对 inputs 拼为 <实例目录>/... 伪绝对路径，但两级链命中的文件
+// （workspace/预定义目录）并不在实例内——运行期 subagent 拿到不存在路径需自行猜测。
+// 此处识别"实例目录前缀但文件不存在"的值，剥前缀走两级链找真实文件，复制到
+// <dir>/inputs/<rel> 并改写 inputs 值（实例自包含）。实例内已存在的（上游 output）
+// 与复制失败的保留原值。items-from 是一次性读取，不物化。
+async function materializeInputsIntoInstance(fs, tasks, dir, wsRoot) {
+  if (!fs || !dir) return tasks
+  const d = String(dir).replace(/\/+$/, '')
+  const exists = async (p) => {
+    try { return !!(await fs.stat(await fs.resolve(p))) } catch (e) { return false }
+  }
+  const rewrite = async (v) => {
+    const s = String(v || '')
+    if (!s || s.indexOf('${') !== -1) return s
+    if (!s.startsWith(d + '/')) return s // 实例目录外（外部绝对路径）不动
+    if (await exists(s)) return s        // 实例内已存在：上游 output / 已物化，不动
+    const rel = s.slice(d.length + 1)
+    const real = await resolveRefPath(fs, wsRoot, rel) // 两级链：workspace → 预定义
+    if (!(await exists(real))) return s  // 两级链未命中：保留（上游 output 运行期生成）
+    const dest = d + '/inputs/' + rel
+    try {
+      const text = await fs.readText(await fs.resolve(real))
+      await fs.writeText(await fs.resolve(dest), text)
+      return dest
+    } catch (e) { return s }
+  }
+  for (const t of (tasks || [])) {
+    const map = t && t.inputs
+    if (!map) continue
+    for (const k of Object.keys(map)) {
+      map[k] = Array.isArray(map[k]) ? await Promise.all(map[k].map(rewrite)) : await rewrite(map[k])
+    }
+  }
+  return tasks
+}
+
 // ── 循环展开：将 loop Task 展开为 N 个串行迭代实例 ────────────────────────
-// items 参数：从 items-from 文件解析出的非空非注释行数组
-// itemVar：迭代变量名（如 "module"），在 inputs/outputs 中解决 ${itemVar}
+// items 参数：extractItems 产物（元素 string|object；空数组=空提取）。
+// itemVar：迭代变量名（如 "module"），在 inputs/outputs 中解决 ${itemVar} / ${itemVar.字段}
 // params：已注入的工作流级参数
 // loopTask：原始 loop Task 对象（含 inputsRaw/outputsRaw/processor/gate/dependsOn）
 // prevDeps：【内部使用】前一个迭代的 id，用于构建串行依赖链
+// Iter-26：对象 item 经 itemCtx 注入（${itemVar}=默认链 ID→名称→序号，${itemVar.字段}=
+// 标量直取）；空提取 → 1 个占位迭代（id=<组id>/empty，${itemVar} 注入空串，行为由
+// skill 处理——Q1-b 拍板：引擎不做特殊处理、不改依赖图、不写文件）。
+function normalizeItemEntries(items) {
+  return (items || []).map((it) => {
+    if (it === null || it === undefined) return ''
+    if (typeof it === 'object') return it
+    return String(it)
+  })
+}
+
+function buildItemContext(itemVar, item, index) {
+  return { varName: itemVar, data: item, empty: false, index }
+}
+
 async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
   const expanded = []
   const loopDeps = loopTask.dependsOn || []
   let prevId = null
+  const list = normalizeItemEntries(items)
 
-  for (let i = 0; i < items.length; i++) {
-    const item = String(items[i]).trim()
-    if (!item) continue
+  // 空提取 → 占位迭代（Q1-b）：组节点存在、依赖链完整、正常派发，skill 识别空 items
+  if (list.length === 0) {
+    const emptyCtx = { varName: itemVar, data: null, empty: true }
+    expanded.push({
+      id: loopTask.id + '/empty',
+      name: (loopTask.name || loopTask.id) + '（items 为空）',
+      type: 'llm-task',
+      dependsOn: loopDeps,
+      timeout: loopTask.timeout || 600,
+      processor: injectParams(loopTask.processor || '', params, null, emptyCtx),
+      inputs: injectInputsMap(loopTask.inputsRaw || {}, params, vars, emptyCtx),
+      outputs: injectArray(loopTask.outputsRaw || [], params, vars, emptyCtx),
+      gate: loopTask.gate ? {
+        checker: loopTask.gate.checker,
+        onFailure: loopTask.gate.onFailure,
+        maxRetries: loopTask.gate.maxRetries,
+      } : null,
+      _onError: loopTask.onError || 'break',
+      _loopGroup: loopTask.id,
+      _loopGroupName: loopTask.name || loopTask.id,
+      _loopItem: '（items 为空）',
+      _loopIndex: 0,
+    })
+    return expanded
+  }
 
-    // 构建迭代参数（工作流 params + 当前 item）
-    const iterParams = { ...params }
-    iterParams[itemVar] = item
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    const itemStr = E_itemDisplayValue(item, i) // 对象：默认链；标量：原样
+    const itemCtx = buildItemContext(itemVar, item, i)
 
-    // 安全 ID：loopTaskId/sanitized-item
-    const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+    // 安全 ID：loopTaskId/sanitized-item（取默认链解析串，与旧行为同构）
+    const sanitized = itemStr.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
     const iterId = loopTask.id + '/' + sanitized
 
-    // inputs/outputs 重新注入（含 item 变量；Iter-25：vars=阶段1目录变量同批注入）
-    const iterInputs = injectInputsMap(loopTask.inputsRaw || {}, iterParams, vars)
-    const iterOutputs = injectArray(loopTask.outputsRaw || [], iterParams, vars)
+    // inputs/outputs 注入（含 item 变量/字段；Iter-25：vars=阶段1目录变量同批注入）
+    const iterInputs = injectInputsMap(loopTask.inputsRaw || {}, params, vars, itemCtx)
+    const iterOutputs = injectArray(loopTask.outputsRaw || [], params, vars, itemCtx)
 
-    // processor 路径重新注入（含 item 变量——虽然通常不变；已是阶段1解析后的路径）
-    const iterProcessor = injectParams(loopTask.processor || '', iterParams)
+    // processor 路径重新注入（已是阶段1解析后的路径；含 item 变量时按迭代替换）
+    const iterProcessor = injectParams(loopTask.processor || '', params, null, itemCtx)
 
     // gate 复制（同一 checker，独立执行）
     const iterGate = loopTask.gate ? {
@@ -263,7 +386,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
 
     expanded.push({
       id: iterId,
-      name: (loopTask.name || loopTask.id) + ' - ' + item,
+      name: (loopTask.name || loopTask.id) + ' - ' + itemStr,
       type: 'llm-task',
       dependsOn: prevId ? [prevId] : loopDeps,
       timeout: loopTask.timeout || 600,
@@ -276,7 +399,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
       // 循环组元数据（供 Client DAG 分组渲染）
       _loopGroup: loopTask.id,
       _loopGroupName: loopTask.name || loopTask.id,
-      _loopItem: item,
+      _loopItem: itemStr,
       _loopIndex: i,
     })
     prevId = iterId
@@ -286,24 +409,50 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
 }
 
 // Iter-8：并发展开——对 items 的每个 item 生成一个独立迭代，迭代之间无依赖（可并发，受组级 max 约束）
+// Iter-26：对象 item/空提取占位迭代语义同 expandLoopTasks（无串行依赖链）。
 async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
   const expanded = []
   const loopDeps = task.dependsOn || []
-  const gMax = task.maxConcurrency || items.length // 组级并发（默认 items 数量，全部并发）
+  const list = normalizeItemEntries(items)
+  const gMax = task.maxConcurrency || Math.max(list.length, 1) // 组级并发（默认 items 数量，全部并发）
 
-  for (let i = 0; i < items.length; i++) {
-    const item = String(items[i]).trim()
-    if (!item) continue
+  // 空提取 → 占位迭代（Q1-b）
+  if (list.length === 0) {
+    const emptyCtx = { varName: itemVar, data: null, empty: true }
+    expanded.push({
+      id: task.id + '/empty',
+      name: (task.name || task.id) + '（items 为空）',
+      type: 'llm-task',
+      dependsOn: loopDeps,
+      timeout: task.timeout || 600,
+      processor: injectParams(task.processor || '', params, null, emptyCtx),
+      inputs: injectInputsMap(task.inputsRaw || {}, params, vars, emptyCtx),
+      outputs: injectArray(task.outputsRaw || [], params, vars, emptyCtx),
+      gate: task.gate ? {
+        checker: task.gate.checker,
+        onFailure: task.gate.onFailure,
+        maxRetries: task.gate.maxRetries,
+      } : null,
+      _concurrentGroup: task.id,
+      _concurrentGroupName: task.name || task.id,
+      _concurrentItem: '（items 为空）',
+      _concurrentIndex: 0,
+      _concurrentMax: gMax,
+    })
+    return expanded
+  }
 
-    const iterParams = { ...params }
-    iterParams[itemVar] = item
+  for (let i = 0; i < list.length; i++) {
+    const item = list[i]
+    const itemStr = E_itemDisplayValue(item, i)
+    const itemCtx = buildItemContext(itemVar, item, i)
 
-    const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
+    const sanitized = itemStr.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
     const iterId = task.id + '/' + sanitized
 
-    const iterInputs = injectInputsMap(task.inputsRaw || {}, iterParams, vars)
-    const iterOutputs = injectArray(task.outputsRaw || [], iterParams, vars)
-    const iterProcessor = injectParams(task.processor || '', iterParams)
+    const iterInputs = injectInputsMap(task.inputsRaw || {}, params, vars, itemCtx)
+    const iterOutputs = injectArray(task.outputsRaw || [], params, vars, itemCtx)
+    const iterProcessor = injectParams(task.processor || '', params, null, itemCtx)
 
     const iterGate = task.gate ? {
       checker: task.gate.checker,
@@ -313,7 +462,7 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
 
     expanded.push({
       id: iterId,
-      name: (task.name || task.id) + ' - ' + item,
+      name: (task.name || task.id) + ' - ' + itemStr,
       type: 'llm-task',
       dependsOn: loopDeps, // ← 关键：无串行依赖链，都依赖原始前驱 → 可并发
       timeout: task.timeout || 600,
@@ -324,7 +473,7 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
       // 并发组元数据（Client DAG 分组渲染 + engine 组级并发控制）
       _concurrentGroup: task.id,
       _concurrentGroupName: task.name || task.id,
-      _concurrentItem: item,
+      _concurrentItem: itemStr,
       _concurrentIndex: i,
       _concurrentMax: gMax,
     })
@@ -390,7 +539,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_begin ────────────────────────────────────────────────────────
   const beginTool = {
     name: 'workflow_begin',
-    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量；定义中可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}（展开期注入为绝对路径）。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（processor 技能绝对路径、inputs 命名字典与 outputs 列表均为绝对路径——inputs/outputs 相对路径以实例目录为基准解析、skillDir 技能目录、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。processor 未指定的任务照常返回（processor=null，由编排侧向用户报告，Iter-25 起 parser 降为创建警告）。',
+    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量；定义中可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}（展开期注入为绝对路径）。loop/concurrent 支持 items-format（lines|markdown|json|yaml，缺省按扩展名推断）与对象 item 注入（${item} 默认链 id→名称→序号、${item.字段} 标量；空 items 展开为 <组id>/empty 占位迭代，items 文件须启动时刻已存在）。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（processor 技能绝对路径、inputs 命名字典与 outputs 列表均为绝对路径——inputs/outputs 相对路径以实例目录为基准解析、skillDir 技能目录、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。processor 未指定的任务照常返回（processor=null，由编排侧向用户报告，Iter-25 起 parser 降为创建警告）。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -467,6 +616,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
 
         // Iter-25 阶段2：实例目录就绪后注入 ${wf_dir}/${skill_dir} 并绝对化 inputs/outputs
         parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir })
+        parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, wfDir, src.workspaceRoot)
         b.engine.begin(parsed)
         b.engine.start() // Iter-19：begin 后即视为执行中 → RUNNING（与状态机一致）
         b.engine.setError(null)
@@ -537,13 +687,16 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // 读取实例 instance.yaml 并展开为 parsed（start/reset 共用）
   // Iter-24：相对引用走两级解析链，基准=创建会话的工作区根（meta.sessionCwd）
   // Iter-25：阶段2数据流终态在展开内一次完成（entry.dir 实例目录已知）
+  // Iter-26：entry.dir 同时作为阶段1 ${wf_dir} 保留字传入（items-from: ${wf_dir}/...
+  // 在 start/reset 路径可解析；begin 一步式路径实例目录尚不存在，不传）
   async function expandInstanceDefinition(entry) {
     const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
     const text = stripInstanceHeader(raw)
     const params = (entry.meta && entry.meta.params) || {}
     const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
-    const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params)
+    const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params, { wfDir: entry.dir })
     parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
+    parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
     return parsed
   }
 
@@ -751,7 +904,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_reset ────────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_reset',
-    description: '重置一个 workflow 实例并可直接重跑：从实例 instance.yaml 重新解析展开 → 引擎全新 PENDING → 覆盖实例 state.json → metadata 记 lastResetAt → 返回新快照与 runnable（等效清空状态重跑；output/logs 产物文件保留，同名输出会被覆盖）。缺省 instanceId 时用当前会话活跃实例。',
+    description: '重置一个 workflow 实例并可直接重跑：先归档备份实例内容（<ts>_reset_<state>/）→ 从 instance.yaml 重新解析展开 → 引擎全新 PENDING → 覆盖 state.json → 返回快照含 pendingCleanup（rm 命令）——**编排 Agent 必须立即用 bash 执行 pendingCleanup.cmd 清空 output/logs**（fs 服务无删除 API，清空由会话执行；备份已在 archive/ 保留全部产物）。缺省 instanceId 时用当前会话活跃实例。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -787,8 +940,17 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         await registry.patchMeta(cwd, entry.instanceId, { lastResetAt: new Date().toISOString(), stopReason: null }) // Iter-SUBA(P2)：重置即全新运行，清除停止标记
         const snap = entry.engine.snapshot()
         snap.instanceId = entry.instanceId
-        snap.resetNote = '状态已重置（output/logs 产物保留，同名文件将被覆盖）'
         snap.resetBackup = backupDir
+        // Iter-26（用户拍板"重置重来应删 output"）：备份后清空 output/logs。fs 服务无删除/
+        // 移动 API（dsh-fs-local 仅 read/write/list/stat）→ 返回 pendingCleanup 命令，
+        // 由编排会话按 persona 契约立即用 bash 执行（rm -rf + mkdir -p 重建空目录）。
+        const q = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+        snap.pendingCleanup = {
+          outputDir: entry.dir + '/output',
+          logsDir: entry.dir + '/logs',
+          cmd: 'rm -rf ' + q(entry.dir + '/output') + ' ' + q(entry.dir + '/logs') + ' && mkdir -p ' + q(entry.dir + '/output') + ' ' + q(entry.dir + '/logs'),
+        }
+        snap.resetNote = '状态已重置；output/logs 已备份至 ' + backupDir + '，须立即执行 pendingCleanup.cmd 清空产物'
         return snap
       } catch (e) {
         return errPayload(e)

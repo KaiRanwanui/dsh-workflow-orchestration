@@ -162,3 +162,20 @@
   llm-task 串行迭代。每个迭代有独立 ID（如 `module-review/login`）、独立的
   depends-on 链（iter-1 → iter-2 → iter-3），独立跑 quality-gate。编排 Agent
   无需特殊处理，按普通 Task 的规则依次执行即可。
+- **items 结构化提取（Iter-26）**：loop/concurrent 的 `items-from` 文件支持四种格式——
+  `items-format: lines|markdown|json|yaml` 显式声明，缺省按扩展名推断（`.md`→markdown、
+  `.json`/`.jsonl`→json、`.yaml`/`.yml`→yaml、其余行文本）。markdown 提取表格（列名=字段名）
+  优先于列表；JSON/YAML 支持数组与并列对象（并列 map 的键=条目 `id`）。对象 item 的注入：
+  `${item变量}` 默认取 id/编号字段 → 名称字段 → 顺序编号；`${item变量.字段}` 取单层标量
+  （如 `outputs: ["output/${item.slug}.md"]`）。items 文件须在**启动时刻已存在**（workspace
+  文件，或 start/reset 路径经 `${wf_dir}` 引用实例目录内已有文件）；同一次运行内"上游任务
+  运行时才产出清单→下游 loop"尚不支持（Iter-26R 延迟展开）。
+- **空 items 占位迭代**：items 文件提取结果为空（空文件/markdown 无表格无列表/空数组）时，
+  该 loop/concurrent 展开为 **1 个占位迭代**（ID `<组id>/empty`、名称含"items 为空"），
+  `${item变量}` 注入空串。此时照常派发 subagent，**技能按 items 为空处理**（如写出空白
+  输出文件保持数据链完整）；不要把它当作错误，也无需向用户追问。
+- **reset 产物清理（Iter-26）**：`workflow_reset` 返回含 `pendingCleanup`（`cmd` 字段为
+  rm+mkdir 命令）——**必须立即用 bash 执行该命令**清空 output/logs（产物已归档备份至
+  `resetBackup` 路径），然后再按全新工作流推进；不执行会导致旧产物残留污染新运行。
+  面板触发的 reset 会以"已重置"通知附带同一条清理命令——**收到含 `[清理契约]` 的通知同样
+  立即 bash 执行**，执行完只回一行确认。

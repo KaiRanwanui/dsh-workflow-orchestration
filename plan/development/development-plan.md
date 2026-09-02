@@ -30,7 +30,7 @@
 已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
-当前:   **Iter-26 items 结构化提取**：items-format 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 提取器；${item} ID→名称→顺序编号默认语义 + ${item.字段} 标量注入。详述=§3 Iter-26。**下一步：开工前按团队约定先设计确认**。后续=27 语义校验（含 Iter-25 用户输入：缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+当前:   **Iter-26R 运行时 items 展开（待启动，动工前先确认设计）**。Iter-26 items 结构化提取已关闭（2026-09-02，报告 `iter26-report.md`：host v0.15.0，349 单测，GUI 三组验收通过；两轮 GUI 反馈落地=inputs 物化进实例/编排 agent 挂 bash/备份递归/占位注入 'empty'）。**边界（拍板）：本迭代 items=启动时刻已存在文件；同运行上游 output 作 items 需运行时延迟展开→拆分 Iter-26R**。后续=**26R 运行时 items 展开（排 27 前）**→27 语义校验（含缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -61,7 +61,8 @@
 | **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | ✅ **完成**（2026-09-02 手测 V1/V2/V3 通过；V1-⑤ 按 UI 状态机语义复核） | Iter-SUBA + 探针（iter23-probe-report.md） |
 | **24** | **预定义目录与安装布局**（块1，R1-R4 地基） | 全局预定义目录（`~/.dsh/workflow-agent/`，templates/skills/samples/docs）+ 插件启动物化内建模板与内建技能（升级同名覆盖）+ 相对路径两级解析链（workspace 优先→预定义兜底）+ /wf/templates 源切预定义目录 | 空白工作区下拉建 default-demo 全程跑通（技能来自预定义目录）；既有工作区 workspace 同名优先不回归 | — |
 | **25** | **数据流显性化（参数传递地基）**（块1） | begin/start/status 返回展开后 inputs/outputs（修契约漂移，persona 对齐）+ 目录变量 `${workspace}/${wf_dir}/${skills}/${skill_dir}` 展开期注入 + 派发附技能目录来源行 + 门禁拿 inputs+outputs（R16）+ processor/gateChecker 可选（**D4 修正：校验挂创建关口**，create 返回 warnings 不拦截；运行时 persona 护栏报告） | 工具返回可见 inputs/outputs 绝对路径；integrate 子会话 prompt 真实出现 analysis 输入；缺 processor 创建返回 warnings 且实例可存可启 | 24 |
-| **26** | **items 结构化提取**（块1） | `items-format` 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 数组/并列对象提取器；`${item}` ID→名称→顺序编号默认语义 + `${item.字段}` 标量注入 | 三种格式各跑通 loop+concurrent；对象 item 路径注入正确；旧行文本零改动可跑 | 25 |
+| **26** | **items 结构化提取**（块1） | `items-format` 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 数组/并列对象提取器；`${item}` ID→名称→顺序编号默认语义 + `${item.字段}` 标量注入；空提取→占位迭代；reset 备份后清空 output | 三种格式各跑通 loop+concurrent（items-demo 模板）；对象 item 路径注入正确；旧行文本零改动可跑；✅ **完成**（2026-09-02 GUI 三组验收，host v0.15.0 / 349 单测） | 25 |
+| **26R** | **运行时 items 展开**（块1，自 26 拆分） | 上游任务 output 作 items 的**延迟展开**：loop/concurrent 组占位节点（依赖就绪时读 items 展开 N 迭代，运行期动态插入任务表）+ 组完成语义 + 下游 `depends-on: [组id]` 引用修正（现架构迭代 id=`组id/item`，组 id 无对应任务节点，潜伏缺口一并修）+ DAG 晚现节点渲染 | 同运行 collect→output/module-list.md→loop 端到端；组依赖下游正确等待组完成 | 26 |
 | **27** | **语义校验**（块1，R8/R12） | workflow_validate：技能存在性（两级）/输入存在性（workspace 或上游 outputs）/上下游 outputs↔inputs 衔接/dependsOn 闭环无环/items 文件可解析；挂 create（警告）与 start（拦截）关口；结构化错误清单 | default-demo 破坏用例逐项报错可读；完好定义零误报 | 24、25 |
 | **28** | **实例编辑前台**（块2，R5-R6/R9/R11/R14） | DAG 页下方双栏（左任务列表/右属性表单；顶部实例级名称+总并发+params）+ 技能下拉（扫预定义 skills/，名称+版本）+ 保存写回 instance.yaml 并触发校验 + RUNNING 可见禁用 | 新建实例→补缺 processor 任务→校验过→启动跑通；编辑不污染预定义目录 | 24、27 |
 | **29** | **实例管理子页签 + 归档/下载/删除**（块4，R23-R25） | 实例管理子页签（活动/归档两段；名称/ID/状态/孤儿/进度/创建时间）+ 归档全链（archive 目录+manifest，沿用 lifecycle-design §5/§7）+ zip 多选打一个包下载 + 删除（RUNNING 禁删+自动解绑+丢失提醒） | 全生命周期：创建→运行→停止→归档→两段列表→下载 zip 完整→删除后解绑消失 | 独立（可提前/并行） |
@@ -662,13 +663,35 @@ workflow_list → 列出所有实例 + 状态
 
 ### Iter-26: items 结构化提取（块1）
 
-**交付**：
-1. `items-format` 显式声明（`lines|markdown|json|yaml`）+ 扩展名推断 + 行文本向后兼容；
-2. 提取器：markdown 列表项与**表格行**（列名=字段名）；JSON/YAML 数组与并列对象（含 JSON Lines）；
-3. 注入语义：`${item}` 默认 **ID/编号字段 → 名称字段 → 顺序编号**；`${item.字段名}` 取标量（路径注入如 `output/${item.slug}.md`）；
-4. items 文件可以是 workspace 文件或上游任务 output（配合 25 的返回可见性）。
+**状态**：✅ 已关闭（2026-09-02 GUI 三组验收通过，报告 `iter26-report.md`；host v0.15.0，349 单测）
 
-**验收要点**：三种格式各跑通一个 loop + 一个 concurrent 实例；对象 item 的路径注入正确展开；旧行文本定义零改动可跑。
+**交付**：
+1. `items-format` 显式声明（`lines|markdown|json|yaml`，非法值 error）+ 扩展名推断（`.md→markdown / .json/.jsonl→json / .yaml/.yml→yaml / 其余→lines`）+ 行文本向后兼容（`lines` 为逃生门）；
+2. 提取器（新共享模块 `items-extract.js`）：markdown **表格>列表**（列名=字段名）；JSON 数组/并列对象/JSON Lines；YAML 数组/并列 map（键恒为 `id`，标量值→`{id:键, name:值}`）；
+3. 注入语义：`${item}` 默认链 **ID/编号字段（id/no/num/number/编号/序号）→ 名称字段（name/title/名称/标题）→ 1-based 顺序编号**；`${item.字段}` 单层标量（`PARAM_PATTERN` 扩展 `/\$\{(\w+(?:\.\w+)?)\}/g` 单遍扫描，itemCtx 可选形参缺省行为不变）；
+4. **空提取→占位迭代**（Q1-b 拍板）：0 items（markdown 无表格无列表/空文件/空数组）→ 展开 1 个 `<组id>/empty` 占位迭代正常派发，`${itemVar}` 注入空串，行为由技能自行处理；文件不存在/坏 JSON/顶层标量仍报错（现状"空文件报错"取消）；
+5. items 文件=workspace 文件或**启动时刻已存在**的实例文件（start/reset 路径 `${wf_dir}` items-from 支持，`expandDefinition` 增 dirCtx 传 `entry.dir`；begin 不重排）；
+6. reset 语义修正：归档备份后清空 output/logs——**fs 服务无删除 API（实证 dsh-fs-local 仅 read/write/list/stat）→ 工具返回 `pendingCleanup`（rm 命令），由编排会话按 persona 契约用 bash 执行**；
+7. samples/items 三格式样例物化 + `items-demo` 内建模板（三格式×loop/concurrent=6 任务，items 经两级链引用预定义 samples，开箱即跑）。
+
+**验收要点**：三种格式各跑通 loop+concurrent（items-demo 模板建实例）；对象 item 路径注入（`output/${item.slug}.md`）正确展开；空 items 占位迭代可跑通；旧行文本定义零改动可跑（286 基线全绿）。
+
+**GUI 验收修复（两轮反馈，随本迭代关闭）**：①静态 input 物化——begin/start/reset 时两级链命中的 input 复制进实例 `inputs/<相对结构>/` 并改写绝对路径（实例自包含；上游 output 引用不复制；连带修 resolveRefPath 的 detectPredefinedRoot require 兜底）；②编排 agent preset 挂 `@deepseek-ai/dsh-tool-bash`（pendingCleanup 执行前提）；③writeArchiveBackup 递归复制（含子目录；备份范围 output/logs/inputs；教训：加形参须同步递归调用行）；④占位迭代 `${itemVar}` 注入 `'empty'`（原空串产生 `output/empty/.md`）；⑤items-demo 模板 v1.1（补 inputs、name 去字面占位符）；⑥面板 reset 注入通知携带 `[清理契约]` 命令。
+
+---
+
+### Iter-26R: 运行时 items 展开（块1，自 Iter-26 拆分）
+
+**背景（2026-09-02 拍板）**：loop/concurrent 迭代节点在启动/重置时刻一次展开定死——"同一次运行内上游任务 output 作 items"（如 collect 产出清单→下游 loop 按清单展开）需**运行期延迟展开**，属架构级变更，拆分独立迭代，排 Iter-27 之前。Iter-26 的提取器/注入语义/`${wf_dir}` 拼写为其复用地基。
+
+**交付**：
+1. **组占位节点**：items 文件在启动时刻不存在（或声明延迟）的 loop/concurrent，展开为 1 个组占位任务（`_pendingItems` 标记），不派发 subagent；
+2. **运行期展开**：组占位依赖全部 DONE 时，Host 读 items 文件（复用 `extractItems`）动态插入 N 个迭代任务到引擎任务表，占位节点转"已展开"终态；
+3. **组完成语义 + 下游组依赖修正**：下游 `depends-on: [组id]` 现架构无对应任务 id（潜伏缺口）——定义组完成判定（全部迭代 DONE/SKIPPED），依赖组 id 的任务等待组完成；
+4. **DAG 晚现节点渲染**（Client）：运行期插入的迭代节点/组框动态出现；
+5. system-prompt 契约同步（延迟派发时序）。
+
+**验收要点**：同运行 collect→`output/module-list.md`→loop 端到端；组依赖下游正确等待组完成；Iter-26 既有语义零回归。
 
 ---
 
@@ -700,6 +723,8 @@ workflow_list → 列出所有实例 + 状态
 
 ### Iter-29: 实例管理子页签 + 归档/下载/删除（块4，独立可提前/并行）
 
+> **平台边界（Iter-26 实证，2026-09-02）**：DSH fs 服务（dsh-fs-local）**无删除/移动 API**（公开方法面仅 resolve/readText/writeText/editText/listDir/stat/lstat/readBytes/withLock；node rm/rename 被 import 但服务面有意不暴露；bash 能力缝 `ctx.subprocess` 同样不对插件开放 inject）。本迭代"删除实例""打包下载"若 Host 侧无法直接实现，须复用 Iter-26 reset 的 **pendingCleanup 模式**（工具返回命令、编排会话 bash 执行）或届时评估扩展通道；备份/打包还需注意 writeArchiveBackup 只复制顶层文件不递归子目录的既有局限。
+
 **交付**：
 1. **实例管理子页签**：列表分**活动/归档**两段；列=名称、ID、状态、孤儿标记、任务进度、创建时间；
 2. 归档全链（沿用已定稿设计 `workflow-lifecycle-design.md`：`archive/<id>/<时间戳>_<类别>_<状态>/` + manifest；reset 备份升级为目录归档；绑定会话终态后 DONE）；
@@ -720,8 +745,8 @@ workflow_list → 列出所有实例 + 状态
 **依赖关系**：
 
 ```
-24 预定义目录 ──→ 25 数据流显性化 ──→ 26 items 提取
-      │                │
+24 预定义目录 ──→ 25 数据流显性化 ──→ 26 items 提取 ──→ 26R 运行时 items 展开
+      │                │                                  │
       │                └──────────→ 27 语义校验 ──→ 28 编辑前台
       │                                                  
       └──────────────────────────────→ 28（技能下拉源）

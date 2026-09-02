@@ -41,8 +41,16 @@ const ON_ERROR_VALUES = ['break', 'continue']
 // ─ 支持 uality-gate on-failure  的策略值 ──────────────────────────────────
 const ON_FAILURE_VALUES = ['retry', 'block', 'skip']
 
-// ── 参数模板正则（${param_name} / ${item}） ────────────────────────────────
-const PARAM_PATTERN = /\$\{(\w+)\}/g
+// ── 参数模板正则（${param_name} / ${item} / ${item.字段}）──────────────────
+// Iter-26：扩展可选单层字段（\w+(?:\.\w+)?)——${item.字段名} 标量注入（R18）。
+// 单遍扫描：非迭代上下文中点号键无法解析时占位保留（injectParams 处理），
+// 无副作用；旧 ${param}/${item} 行为逐字节不变。
+const PARAM_PATTERN = /\$\{(\w+(?:\.\w+)?)\}/g
+
+// ── Iter-26：items-from 提取格式（items-format 显式声明枚举）────────────────
+// lines=行文本（向后兼容）；markdown=表格/列表；json=数组/并列对象/JSON Lines；
+// yaml=数组/并列 map。缺省按扩展名推断（inferItemsFormat），声明恒优先。
+const ITEMS_FORMAT_VALUES = ['lines', 'markdown', 'json', 'yaml']
 
 // ── Task 运行时状态枚举 ─────────────────────────────────────────────────────
 const TASK_STATUS = {
@@ -71,6 +79,7 @@ if (typeof module !== 'undefined' && module.exports) {
     ON_FAILURE_VALUES,
     ON_ERROR_VALUES,
     PARAM_PATTERN,
+    ITEMS_FORMAT_VALUES,
     TASK_STATUS,
     STAGE,
   }
