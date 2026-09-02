@@ -632,8 +632,13 @@ function register(ctx) {
               .then(r => {
                 if (stop) return
                 const opts = [{ v: 'custom', label: '自定义路径…' }]
-                ;(r.builtin || []).forEach(t => opts.push({ v: 'builtin:' + t.name, label: '[内置] ' + (t.description || t.name), t }))
-                ;(r.workspace || []).forEach(w => opts.push({ v: 'ws:' + w.path, label: '[工作区] ' + w.name }))
+                // Iter-24：单一 predefined 列表（预定义目录扫描优先 + 内建兜底去重）；工作区 templates/ 不再列入
+                const descOf = (p) => {
+                  if (!p || !p.yaml) return p && p.name
+                  const m = p.yaml.match(/^description:\s*(.+)$/m)
+                  return m ? m[1].replace(/^["']|["']$/g, '').trim() : p.name
+                }
+                ;(r.predefined || []).forEach(p => opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + (descOf(p) || p.name) + (p.fallback ? '（内建兜底）' : ''), t: p }))
                 setTplOpts(opts)
                 if (opts.length > 1) { setTplSel(opts[1].v); setYamlText(opts[1].t ? opts[1].t.yaml : '') }
               })
@@ -656,9 +661,8 @@ function register(ctx) {
               if (tplSel === 'custom') {
                 if (!pathText.trim()) throw new Error('请填写 workflowPath')
                 payload.workflowPath = pathText.trim()
-              } else if (tplSel.startsWith('ws:')) {
-                payload.workflowPath = tplSel.slice(3)
-              } else if (tplSel.startsWith('builtin:')) {
+              } else if (tplSel.startsWith('tpl:')) {
+                // Iter-24：模板选择统一走可编辑 yaml → workflowText（预定义与内建兜底同构）
                 if (!yamlText.trim()) throw new Error('模板内容为空')
                 payload.workflowText = yamlText
               }
@@ -859,7 +863,7 @@ function register(ctx) {
               tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v }, o.label))
             ),
             tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
-            tplSel.indexOf('builtin:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
+            tplSel.indexOf('tpl:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
             React.createElement('label', { key: 'l2' }, 'params（JSON，可选）'),
             React.createElement('textarea', { key: 'pj', value: paramsText, onChange: e => setParamsText(e.target.value), rows: 3, style: monoStyle, spellCheck: false }),
             formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,

@@ -2052,18 +2052,41 @@ function parentDir(p) {
   return norm.slice(0, idx)
 }
 
-// 从 YAML 所在目录逐级向上探测，取第一个真实存在的拼接；兜底用 YAML 目录
-async function resolveRel(fs, base, rel) {
-  let d = base
-  while (d) {
-    const cand = d + '/' + rel.replace(/\\/g, '/')
+// Iter-24：两级解析链——workspace 根优先 → 预定义根兜底；绝对路径直通；
+// 双 miss 回退 workspace 相对路径（保持既有报错语义：下游 readText 按完整路径报缺失）。
+// 替换旧"定义文件目录逐级上探"（resolveRel）。predefinedRoot 参数供测试注入。
+function isAbsoluteishPath(p) {
+  return /^([a-zA-Z]:[\\/]|\/|~\/|~$)/.test(p)
+}
+async function resolveRefPath(fs, workspaceRoot, rel, predefinedRoot) {
+  const p = String(rel || '').replace(/\\/g, '/')
+  if (isAbsoluteishPath(p)) return p
+  const roots = []
+  const ws = workspaceRoot ? String(workspaceRoot).replace(/\/+$/, '') : ''
+  if (ws) roots.push(ws)
+  const pre = predefinedRoot || (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null)
+  if (pre && String(pre).replace(/\/+$/, '') !== ws) roots.push(String(pre).replace(/\/+$/, ''))
+  for (const r of roots) {
+    const cand = r + '/' + p
     try {
       const st = await fs.stat(await fs.resolve(cand))
       if (st) return cand
-    } catch (e) { /* keep climbing */ }
-    d = parentDir(d)
+    } catch (e) { /* 尝试下一级 */ }
   }
-  return base + '/' + rel.replace(/\\/g, '/')
+  return (ws ? ws + '/' : '') + p
+}
+
+// Iter-24：模板清单合并——预定义目录扫描优先，内嵌常量兜底补缺（按 name 去重，磁盘版赢）。
+// 预定义项形态 {name, path, yaml}；兜底项补 fallback:true（path=null，仅供展示提交 workflowText）。
+function mergeTemplateLists(predefined, builtinTemplates) {
+  const merged = (predefined || []).slice()
+  for (const b of (builtinTemplates || [])) {
+    if (!b || !b.name) continue
+    if (!merged.some((x) => x && x.name === b.name)) {
+      merged.push({ name: b.name, path: null, yaml: b.yaml, fallback: true })
+    }
+  }
+  return merged
 }
 
 // ── ${param} 注入 ───────────────────────────────────────────────────────────
@@ -2096,15 +2119,16 @@ function injectInputsMap(map, params) {
   return out
 }
 
-// 工作流文件加载：优先 workflowPath（读文件），兜底 workflowText（直接用）
-async function loadWorkflowSource(fs, args) {
+// 工作流文件加载：优先 workflowPath（读文件），兜底 workflowText（直接用）。
+// Iter-24：相对引用不再以定义文件目录为基准，统一两级链（workspace 根优先）。
+async function loadWorkflowSource(fs, args, wsRoot) {
   if (args.workflowPath) {
     const p = String(args.workflowPath)
     const text = await fs.readText(await fs.resolve(p))
-    return { text, base: p.replace(/[\\/][^\\/]*$/, '') }
+    return { text, workspaceRoot: wsRoot }
   }
   if (args.workflowText) {
-    return { text: String(args.workflowText), base: undefined }
+    return { text: String(args.workflowText), workspaceRoot: wsRoot }
   }
   return null
 }
@@ -2139,19 +2163,19 @@ async function expandDefinition(fs, src, params) {
     out.outputs = injectArray(t.outputsRaw, p)
     if (t.processorRaw) {
       const procRel = injectParams(t.processorRaw, p)
-      out.processor = src.base ? await resolveRel(fs, src.base, procRel) : procRel
+      out.processor = await resolveRefPath(fs, src.workspaceRoot, procRel, src.predefinedRoot)
     }
     if (t.gateRaw) {
       const gateRel = injectParams(t.gateRaw, p)
       out.gate = {
-        checker: src.base ? await resolveRel(fs, src.base, gateRel) : gateRel,
+        checker: await resolveRefPath(fs, src.workspaceRoot, gateRel, src.predefinedRoot),
         onFailure: t.gateOnFailure,
         maxRetries: t.gateMaxRetries,
       }
     }
     if (t.itemsFromRaw) {
       const itemsRel = injectParams(t.itemsFromRaw, p)
-      out.itemsFrom = src.base ? await resolveRel(fs, src.base, itemsRel) : itemsRel
+      out.itemsFrom = await resolveRefPath(fs, src.workspaceRoot, itemsRel, src.predefinedRoot)
       out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
       out.itemVar = t.itemVar
     }
@@ -2380,7 +2404,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
           const cwd = sessionCwd(exec)
           if (cwd) b.storage.setWorkspaceRoot(cwd)
         }
-        const src = await loadWorkflowSource(fs, args)
+        const src = await loadWorkflowSource(fs, args, (args && args.workspaceRoot) || sessionCwd(exec) || undefined)
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const params = (args && args.params) || {}
         let parsed
@@ -2482,18 +2506,14 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // （设计文档 §5.4）。
 
   // 实例定义的相对路径解析基目录（优先原始源定义所在目录）
-  function instanceSourceBase(meta) {
-    const sp = meta && meta.sourcePath
-    if (sp && sp !== '(inline workflowText)') return sp.replace(/[\\/][^\\/]*$/, '')
-    return undefined
-  }
-
   // 读取实例 instance.yaml 并展开为 parsed（start/reset 共用）
+  // Iter-24：相对引用走两级解析链，基准=创建会话的工作区根（meta.sessionCwd）
   async function expandInstanceDefinition(entry) {
     const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
     const text = stripInstanceHeader(raw)
     const params = (entry.meta && entry.meta.params) || {}
-    return expandDefinition(fs, { text, base: instanceSourceBase(entry.meta) }, params)
+    const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
+    return expandDefinition(fs, { text, workspaceRoot: wsRoot }, params)
   }
 
   // 条目是否有已落盘运行状态（一律以磁盘 state.json 为准，避免内存标记过期）
@@ -2818,9 +2838,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   })
 }
 
-// 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd }
+// 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRefPath, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRel, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError }
+  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError }
 }
 // ---- module: webserver-routes ----
 // ============================================================================
@@ -3129,18 +3149,26 @@ function registerWebRoutes(ctx, registry) {
 
       // Iter-13：模板列表（内置 + <workspaceRoot>/templates/*.yaml，只读）
       if (pathname === '/wf/templates') {
-        const root = (query.get('workspaceRoot') || '').replace(/\\/g, '/')
-        let workspace = []
-        if (root && fs) {
+        // Iter-24：模板下拉切源——扫描预定义目录为主；工作区 templates/ 不再列入（迁移：手工移入预定义目录）。
+        // 合并内嵌常量兜底（物化失败不至无模板可用；同名去重，磁盘版优先）。
+        const predefined = []
+        if (fs) {
           try {
-            const entries = await fs.listDir(await fs.resolve(root + '/templates'))
-            for (const en of entries) {
-              if (en.type !== 'file' || !/\.ya?ml$/i.test(en.name)) continue
-              workspace.push({ name: en.name.replace(/\.ya?ml$/i, ''), path: root + '/templates/' + en.name })
+            const preRoot = typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null
+            if (preRoot) {
+              const entries = await fs.listDir(await fs.resolve(preRoot + '/templates'))
+              for (const en of entries) {
+                if (en.type !== 'file' || !/\.ya?ml$/i.test(en.name)) continue
+                const p = preRoot + '/templates/' + en.name
+                let yaml = ''
+                try { yaml = await fs.readText(await fs.resolve(p)) } catch (e) { yaml = '' }
+                predefined.push({ name: en.name.replace(/\.ya?ml$/i, ''), path: p, yaml })
+              }
             }
-          } catch (e) { /* 无 templates 目录 → 仅内置模板 */ }
+          } catch (e) { /* 预定义目录不可用 → 内嵌兜底 */ }
         }
-        writeJson(res, 200, { builtin: BUILTIN_TEMPLATES, workspace })
+        const merged = typeof mergeTemplateLists === 'function' ? mergeTemplateLists(predefined, BUILTIN_TEMPLATES) : predefined
+        writeJson(res, 200, { builtin: BUILTIN_TEMPLATES, predefined: merged })
         return
       }
 

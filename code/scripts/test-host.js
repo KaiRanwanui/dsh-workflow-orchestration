@@ -170,13 +170,16 @@ async function runCase10() {
     Promise.resolve(routeHandler(req, res)).catch(reject)
   })
 
-  // templates：内置 2 个；workspace 扫描 <root>/templates/*.yaml
+  // templates：预定义目录扫描优先 + 内建兜底合并（Iter-24：工作区 templates/ 不再列入）
+  const savedDsh = process.env.DSH_HOME
+  process.env.DSH_HOME = '/ws/t13-pre'
+  await mockFs.writeText({ path: '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml' }, 'name: disk-tpl\n')
   let r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
-  check('templates: 内置 2 个模板', r.code === 200 && Array.isArray(r.body.builtin) && r.body.builtin.length === 2 && r.body.builtin[0].yaml.includes('name: default-demo'))
+  check('templates: 预定义磁盘版扫描到（无 fallback 标记）', r.code === 200 && r.body.predefined[0].name === 'disk-tpl' && r.body.predefined[0].fallback === undefined && r.body.predefined[0].path === '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml', JSON.stringify(r.body.predefined))
+  check('templates: 内建兜底补缺（同名去重，磁盘版赢）', r.body.predefined.length === 3 && r.body.predefined.filter(x => x.fallback).map(x => x.name).join(',') === 'default-demo,serial-demo', JSON.stringify(r.body.predefined.map(x => x.name)))
+  check('templates: builtin 字段保留（兼容）', Array.isArray(r.body.builtin) && r.body.builtin.length === 2 && r.body.builtin[0].yaml.includes('name: default-demo'))
   check('templates: default-demo 集成依赖深度分析（防止深挖变旁路孤岛回归）', r.body.builtin[0].yaml.includes('depends-on: [write-spec, prep-data, deep-analysis]') && r.body.builtin[0].yaml.includes('analysis: "output/analysis.md"'))
-  await mockFs.writeText({ path: '/ws/t13/templates/my-tpl.yaml' }, 'name: my-tpl\n')
-  r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
-  check('templates: 工作区模板被扫描', r.body.workspace.length === 1 && r.body.workspace[0].name === 'my-tpl', JSON.stringify(r.body.workspace))
+  process.env.DSH_HOME = savedDsh
 
   // create：workflowText 成功路径
   const WF13 = 'name: t13demo\nversion: "1.0"\ndescription: d\nmax-concurrency: 2\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/t13/output/a.md"]\n    depends-on: []\n'
@@ -787,6 +790,56 @@ async function runCase18() {
   check('c18 降级: fs 缺失 → ok:false + reason', rNoFs.ok === false && !!rNoFs.reason)
 }
 
+// ── 用例 19：两级解析链（Iter-24）──
+async function runCase19() {
+  console.log('［用例 19］两级解析链 — workspace 优先 / 预定义兜底 / 绝对直通 / 双 miss 回退')
+  const { resolveRefPath, expandDefinition } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { fs: mockFs } = makeMockFs()
+  // 夹具：workspace 与 predefined 各有一个技能
+  mockFs.writeText({ path: '/ws1/skills/wskill/SKILL.md' }, 'ws')
+  mockFs.writeText({ path: '/pre/skills/pskill/SKILL.md' }, 'pre')
+
+  // 1) workspace 优先
+  check('c19 链: workspace 命中优先', await resolveRefPath(mockFs, '/ws1', 'skills/wskill/SKILL.md', '/pre') === '/ws1/skills/wskill/SKILL.md')
+  // 2) 预定义兜底（workspace 未命中）
+  check('c19 链: 预定义兜底', await resolveRefPath(mockFs, '/ws1', 'skills/pskill/SKILL.md', '/pre') === '/pre/skills/pskill/SKILL.md')
+  // 3) 绝对路径直通（存在与否都不拼根）
+  check('c19 链: 绝对路径直通（存在）', await resolveRefPath(mockFs, '/ws1', '/ws1/skills/wskill/SKILL.md', '/pre') === '/ws1/skills/wskill/SKILL.md')
+  check('c19 链: 绝对路径直通（不存在也直通）', await resolveRefPath(mockFs, '/ws1', '/other/x.md', '/pre') === '/other/x.md')
+  check('c19 链: ~ 路径直通', await resolveRefPath(mockFs, '/ws1', '~/x.md', '/pre') === '~/x.md')
+  // 4) 双 miss → 回退 workspace 相对（保持下游报错语义）
+  check('c19 链: 双 miss 回退 workspace 相对', await resolveRefPath(mockFs, '/ws1', 'nope/missing.yaml', '/pre') === '/ws1/nope/missing.yaml')
+  // 5) 无 workspaceRoot：预定义兜底仍生效；双 miss 回退相对原文
+  check('c19 链: 无 ws 预定义兜底', await resolveRefPath(mockFs, undefined, 'skills/pskill/SKILL.md', '/pre') === '/pre/skills/pskill/SKILL.md')
+  check('c19 链: 无 ws 双 miss 回退原文', await resolveRefPath(mockFs, undefined, 'nope/x.yaml', '/pre') === 'nope/x.yaml')
+  // 6) ws 与 pre 同根去重（不重复探测）
+  check('c19 链: 同根去重', await resolveRefPath(mockFs, '/pre', 'skills/pskill/SKILL.md', '/pre') === '/pre/skills/pskill/SKILL.md')
+
+  // 7) expandDefinition 集成：processor 走两级链
+  const wfText = [
+    'name: t19',
+    'version: "1"',
+    'tasks:',
+    '  - id: a',
+    '    name: A',
+    '    processor: skills/wskill/SKILL.md',
+    '    outputs: ["output/a.md"]',
+  ].join('\n')
+  const parsed = await expandDefinition(mockFs, { text: wfText, workspaceRoot: '/ws1', predefinedRoot: '/pre' }, {})
+  check('c19 集成: processor 解析到 workspace', parsed.tasks[0].processor === '/ws1/skills/wskill/SKILL.md')
+  const parsed2 = await expandDefinition(mockFs, { text: wfText.replace('skills/wskill/SKILL.md', 'skills/pskill/SKILL.md'), workspaceRoot: '/ws1', predefinedRoot: '/pre' }, {})
+  check('c19 集成: processor 兜底到预定义', parsed2.tasks[0].processor === '/pre/skills/pskill/SKILL.md')
+
+  // 8) 模板清单合并：磁盘版优先，内嵌兜底补缺
+  const { mergeTemplateLists } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const disk = [{ name: 'default-demo', path: '/pre/templates/default-demo.yaml', yaml: 'a: 1' }]
+  const builtin = [{ name: 'default-demo', description: 'd1', yaml: 'builtin: 1' }, { name: 'serial-demo', description: 'd2', yaml: 'builtin: 2' }]
+  const merged = mergeTemplateLists(disk, builtin)
+  check('c19 合并: 去重后 2 项', merged.length === 2)
+  check('c19 合并: 磁盘版赢（不覆盖为内建）', merged[0].yaml === 'a: 1' && !merged[0].fallback)
+  check('c19 合并: 内建兜底补缺并标记 fallback', merged[1].name === 'serial-demo' && merged[1].fallback === true && merged[1].path === null)
+}
+
 async function runCase17() {
   console.log('［用例 17］方向 A — A1 aborted(user) 判定矩阵 / A2 轮询兜底 / 权威停止语义')
   const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
@@ -1275,6 +1328,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase17()
     // ── 用例 18：预定义目录物化（Iter-24）──
     await runCase18()
+    // ── 用例 19：两级解析链（Iter-24）──
+    await runCase19()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
