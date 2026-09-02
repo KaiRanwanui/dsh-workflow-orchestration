@@ -208,7 +208,9 @@ function parseWorkflow(text) {
   return { name, version, description: raw.description || null, params, tasks, errors, warnings, maxConcurrency }
 }
 
-function normalizeTask(t, idx, errors) {
+// Iter-25：warnings 通道启用（processor 缺省 / gate 无 checker → 警告非错误，D4 决议：
+// 校验挂创建关口，创建态允许半成品，实例照常保存；运行时由 persona 护栏报告）。
+function normalizeTask(t, idx, errors, warnings) {
   const id = t.id != null ? String(t.id).trim() : ''
   if (!id) {
     errors.push('tasks[' + idx + '] 缺少必填字段: id')
@@ -245,16 +247,18 @@ function normalizeTask(t, idx, errors) {
         errors.push('Task "' + id + '" 的 quality-gate.on-failure 必须是 retry|block|skip，实际: ' + onFailure)
       }
       base.gateRaw = g.checker != null ? String(g.checker) : null
+      if (base.gateRaw == null && warnings) warnings.push('Task "' + id + '" 的 quality-gate 未指定 checker——该门禁将被跳过')
       base.gateOnFailure = onFailure
       base.gateMaxRetries = g['max-retries'] != null ? Number(g['max-retries']) : 0
     }
   }
 
   // 类型专属校验
+  // Iter-25（D4）：processor 缺省降为警告——创建态允许半成品（R11 编辑后补全）
   if (type === 'llm-task' || !type) {
-    if (!base.processorRaw) errors.push('Task "' + id + '" 缺少必填字段: processor')
+    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
   } else if (type === 'loop') {
-    if (!base.processorRaw) errors.push('Task "' + id + '" 缺少必填字段: processor')
+    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
     if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
@@ -267,7 +271,7 @@ function normalizeTask(t, idx, errors) {
     base.onError = onError
   } else if (type === 'concurrent') {
     // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
-    if (!base.processorRaw) errors.push('Task "' + id + '" 缺少必填字段: processor')
+    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
     if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null

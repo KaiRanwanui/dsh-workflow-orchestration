@@ -7,7 +7,14 @@ const path = require('path')
 
 const ROOT = path.resolve(__dirname, '..') // code/
 const MJS = path.join(ROOT, 'agent-presets/workflow-orchestrator/workflow-host.mjs')
+// Iter-25：登记补全——此前只有 3 个 section，schema/parser/engine/storage 的内联副本
+// 是手工维护盲区（源改了 mjs 没同步，Iter-24 曾因同步遗漏翻车）。webserver-routes
+// 无外部源文件，本就在 mjs 直接编辑，故不登记。
 const SOURCES = {
+  'workflow-schema': path.join(ROOT, 'shared/workflow-schema.js'),
+  'workflow-parser': path.join(ROOT, 'shared/workflow-parser.js'),
+  'engine': path.join(ROOT, 'plugins/workflow-host/engine.js'),
+  'storage': path.join(ROOT, 'plugins/workflow-host/storage.js'),
   'instance-store': path.join(ROOT, 'plugins/workflow-host/instance-store.js'),
   'builtin-skills': path.join(ROOT, 'plugins/workflow-host/builtin-skills.js'),
   'tools-preset': path.join(ROOT, 'plugins/workflow-host-preset/tools-preset.js'),

@@ -20,9 +20,16 @@
      `<cwd>/.workflow-agent/instances/<workflowName-uuid8>/`
      （instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录，
      DSH 重启后按会话自动恢复。
-   - 返回：`tasks[]`（每个含 id/name/type/status=PENDING/processor（绝对路径）/
-     inputs（命名字典，key→路径 或 路径列表）/outputs/gate）+ `stage=RUNNING`（Iter-19：begin 后即视为执行中，不再是 PENDING）
-     + `instanceId`（本次实例 id）。
+   - 返回：`tasks[]`（每个含 id/name/type/status=PENDING/processor（技能文件
+     绝对路径，未指定时为 null）/**skillDir（技能所在目录绝对路径）**/
+     **inputs（命名字典，key→绝对路径或绝对路径列表）**/**outputs（绝对路径
+     列表）**/gate）+ `stage=RUNNING`（Iter-19：begin 后即视为执行中，不再是
+     PENDING）+ `instanceId`（本次实例 id）。
+   - **Iter-25 数据流契约**：inputs/outputs 已由引擎展开为**绝对路径**——
+     定义中的相对路径以实例目录为基准解析；因此派发/门禁时**直接使用返回值，
+     不要自行拼路径或推断基准**。定义 YAML 中可用目录变量
+     `${workspace}`（工作区）、`${wf_dir}`（实例目录）、`${skills}`（预定义
+     技能根）、`${skill_dir}`（当前任务技能目录），展开期由引擎注入。
     - 入口二选一：新建自己的实例用 `workflow_begin`（创建+启动→RUNNING）；
       驱动已存在/面板创建的实例用 `workflow_start`（实例须已绑定本会话）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
@@ -53,21 +60,30 @@
 
 3. **执行一个 Task**：
    a. `workflow_status({task: <id>, taskStatus: "RUNNING"})`
-   b. 读取该 Task 的 `processor` 技能文件全文（用 read 工具）。
-   c. 构造 subagent prompt：
+   b. **（Iter-25 护栏）若该 Task 的 `processor` 为 null**（创建时未指定技能）：
+      **不得派发 subagent**——保持任务 PENDING，向用户报告
+      "任务 <id> 未指定技能（processor），请补全后继续"，等待用户指示。
+   c. 读取该 Task 的 `processor` 技能文件全文（用 read 工具）。
+   d. 构造 subagent prompt：
+      - **首行附技能来源行（Iter-25，R21a）**：`本技能全文来自 <skillDir>`
+        （用任务返回的 skillDir 字段，让子会话明示技能位置、便于读取同目录
+        脚本/样例资源）；
       - 粘贴 processor 技能全文作为执行指令；
       - 列出 `inputs` 命名字典（每个 key 一项：`<key> = <绝对路径>`，并说明该文件是
         主文档还是参考）；subagent 用 read 读取它们；
       - 指定 `outputs` 绝对路径列表，subagent 完成后必须把结果写到这些路径。
-   d. 调 `subagent` 执行（前台等待结果）。
-   e. 校验输出：用 read 确认每个 outputs 文件已生成。
+   e. 调 `subagent` 执行（前台等待结果）。
+   f. 校验输出：用 read 确认每个 outputs 文件已生成。
 
 4. **质量门禁**（若配置了 quality-gate）：
    a. `workflow_status({task: <id>, taskStatus: "RUNNING", gateResult: undefined})` 保持任务状态。
-   b. 读取 `gate.checker` 技能文件全文。
-   c. 构造独立 subagent prompt（**不共享 Task 会话**）：
+   b. **（Iter-25 护栏）若 `gate.checker` 为 null**（配置了门禁但未指定检查技能，
+      创建警告已提示）：按未配置门禁处理——输出校验通过后直接标 DONE，不虚构门禁。
+   c. 读取 `gate.checker` 技能文件全文。
+   d. 构造独立 subagent prompt（**不共享 Task 会话**）：
       - 粘贴 checker 技能全文；
-      - 让它读取该 Task 的输出文件；
+      - **（Iter-25，R16）让它读取该 Task 的 inputs 命名字典中全部文件与
+        outputs 列表中全部文件**（输入+输出一并交给门禁检查，判定才完整）；
       - 要求它只输出 `PASS` 或 `FAIL`，FAIL 时给出理由。
    d. 读 gate 结果判定：
       - **PASS** → `workflow_status({task: <id>, taskStatus: "DONE", gateResult: "PASS"})`，
@@ -95,7 +111,9 @@
       `READY` 已有状态，含 stage 与任务计数；附 `sessionState` 派生状态
       `UNBOUND/BOUND/DONE/BROKEN` 与 `orphans` 孤儿实例 id）。
    - `workflow_create`：从定义（`workflowPath`/`workflowText` + `params`）预建
-     实例目录，**不启动**；返回 `instanceId`。
+     实例目录，**不启动**；返回 `instanceId` 与 `warnings`（创建关口校验警告，
+     如任务缺 processor / gate 缺 checker——Iter-25 起允许半成品实例存在，
+     把警告转告用户，补全后再启动）。
    - `workflow_adopt`：**采用**池中 `sessionId==null`（UNBOUND）的实例并绑定到
      本会话（1:1）。**start 前须先 adopt**（若实例未绑定本会话）。
    - `workflow_start`：启动**已绑定本会话**的实例（若 UNBOUND 先 `adopt`；读

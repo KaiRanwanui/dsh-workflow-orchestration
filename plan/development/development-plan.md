@@ -29,7 +29,7 @@
 已完成: …（同上）… → Iter-22 ✅ → **Iter-SUBA ✅ 完成（2026-09-02 关闭）**
 已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
-当前:   **Iter-25 数据流显性化（参数传递地基）**：工具返回带 inputs/outputs + 目录变量（${workspace}/${wf_dir}/${skills}/${skill_dir}）+ 门禁拿 inputs + processor 可选。队列后续=26 items 结构化提取 / 27 语义校验 / 28 实例编辑前台 / 29 实例管理子页签+归档下载删除（独立可提前） / 30 DAG 美化。详案=iteration-replan-draft.md + 需求定稿。**下一步：开工前按团队约定先设计确认**
+当前:   **Iter-25 数据流显性化（参数传递地基）— 代码完成，待重启+GUI 验证**：工具返回带 inputs/outputs+目录变量+门禁拿 inputs+processor 可选（D4：校验挂创建关口，create 返回 warnings 不拦截）。设计=iter25-design.md（D1-D4 已拍板），286 单测全绿，host v0.14.0。队列后续=26 items 结构化提取 / 27 语义校验 / 28 实例编辑前台 / 29 实例管理子页签+归档下载删除（独立可提前） / 30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -59,7 +59,7 @@
 | **SUBA** | **DSH 子会话可控性探索（研究迭代）** | 摸清 DSH 主/子会话会话级控制接口：确认 task subagent 模式（continuable/one-shot）、`subagent.interrupt` vs `subagent.prompt` 停止子会话、主会话 await 中断/级联停止的可行方案；产出可行方案设计 | 探索报告 + 方案选型；目标：workflow Stop 级联停止运行中的 subagent、Resume 不重复 | Iter-22 |
 | **23** | **方向 A：手工停 DSH 会话=权威停止（Host+Client）** | A1 session/event 事件驱动：绑定会话回合 aborted(user) → 即时 STOPPED(user-stop)+级联 interrupt 子会话；A2 syncInstanceState 轮询兜底（live log 尾扫）；A3 面板常驻提示条（RUNNING+主 idle+子在跑 → "会话内停止无效，请用面板 Stop"） | 端到端：场景一停会话→面板 3 秒内 STOPPED(用户停止)+子会话消失+通知免疫；场景二提示条出现+面板 Stop 秒停；三条既有停止路径回归 | ✅ **完成**（2026-09-02 手测 V1/V2/V3 通过；V1-⑤ 按 UI 状态机语义复核） | Iter-SUBA + 探针（iter23-probe-report.md） |
 | **24** | **预定义目录与安装布局**（块1，R1-R4 地基） | 全局预定义目录（`~/.dsh/workflow-agent/`，templates/skills/samples/docs）+ 插件启动物化内建模板与内建技能（升级同名覆盖）+ 相对路径两级解析链（workspace 优先→预定义兜底）+ /wf/templates 源切预定义目录 | 空白工作区下拉建 default-demo 全程跑通（技能来自预定义目录）；既有工作区 workspace 同名优先不回归 | — |
-| **25** | **数据流显性化（参数传递地基）**（块1） | begin/start/status 返回展开后 inputs/outputs（修契约漂移，persona 对齐）+ 目录变量 `${workspace}/${wf_dir}/${skills}/${skill_dir}` 展开期注入 + 派发附技能目录来源行 + 门禁拿 inputs+outputs（R16）+ processor/gateChecker 可选（创建态可缺省，启动校验拦截） | 工具返回可见 inputs/outputs 绝对路径；integrate 子会话 prompt 真实出现 analysis 输入；缺 processor 可存实例但启动被拦 | 24 |
+| **25** | **数据流显性化（参数传递地基）**（块1） | begin/start/status 返回展开后 inputs/outputs（修契约漂移，persona 对齐）+ 目录变量 `${workspace}/${wf_dir}/${skills}/${skill_dir}` 展开期注入 + 派发附技能目录来源行 + 门禁拿 inputs+outputs（R16）+ processor/gateChecker 可选（**D4 修正：校验挂创建关口**，create 返回 warnings 不拦截；运行时 persona 护栏报告） | 工具返回可见 inputs/outputs 绝对路径；integrate 子会话 prompt 真实出现 analysis 输入；缺 processor 创建返回 warnings 且实例可存可启 | 24 |
 | **26** | **items 结构化提取**（块1） | `items-format` 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 数组/并列对象提取器；`${item}` ID→名称→顺序编号默认语义 + `${item.字段}` 标量注入 | 三种格式各跑通 loop+concurrent；对象 item 路径注入正确；旧行文本零改动可跑 | 25 |
 | **27** | **语义校验**（块1，R8/R12） | workflow_validate：技能存在性（两级）/输入存在性（workspace 或上游 outputs）/上下游 outputs↔inputs 衔接/dependsOn 闭环无环/items 文件可解析；挂 create（警告）与 start（拦截）关口；结构化错误清单 | default-demo 破坏用例逐项报错可读；完好定义零误报 | 24、25 |
 | **28** | **实例编辑前台**（块2，R5-R6/R9/R11/R14） | DAG 页下方双栏（左任务列表/右属性表单；顶部实例级名称+总并发+params）+ 技能下拉（扫预定义 skills/，名称+版本）+ 保存写回 instance.yaml 并触发校验 + RUNNING 可见禁用 | 新建实例→补缺 processor 任务→校验过→启动跑通；编辑不污染预定义目录 | 24、27 |

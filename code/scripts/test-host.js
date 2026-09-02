@@ -188,6 +188,11 @@ async function runCase10() {
   check('create: 200 + CREATED + id 形态', r.code === 200 && r.body.phase === 'CREATED' && /^t13demo-[0-9a-f]{8}$/.test(iid), JSON.stringify(r.body).slice(0, 140))
   check('create: 快照目录五件套落盘', files.has('/ws/t13/.workflow-agent/instances/' + iid + '/instance.yaml') && files.has('/ws/t13/.workflow-agent/instances/' + iid + '/output/.gitkeep'))
   check('create: params 记入 metadata', JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).params.output_dir === 'out')
+  check('create: warnings 数组在（完好定义为空，Iter-25 D4）', Array.isArray(r.body.warnings) && r.body.warnings.length === 0, JSON.stringify(r.body.warnings))
+
+  // create：缺 processor 定义 → CREATED + warnings（创建关口校验警告，不拦截）
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: 'name: wp\nversion: "1"\ntasks:\n  - id: a\n    outputs: ["output/a.md"]\n' })
+  check('create: 缺 processor → CREATED + warnings', r.code === 200 && r.body.phase === 'CREATED' && r.body.warnings.some(w => w.includes('processor')), JSON.stringify(r.body.warnings))
 
   // create：非法定义 → 400 + workflowBeginErrors
   r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: 'tasks: []\n' })
@@ -1000,6 +1005,136 @@ function check(name, cond, extra) {
   }
 }
 
+// ── 用例 20：数据流显性化（Iter-25：目录变量 + inputs/outputs 绝对化 + 落盘 + 创建警告）──
+async function runCase20() {
+  console.log('［用例 20］数据流显性化 — 目录变量注入 + inputs/outputs 绝对化 + 落盘 + create 警告')
+  const { expandDefinition, finalizeDataflow, injectParams, registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { parseWorkflow } = require('../shared/workflow-parser')
+
+  // 1) parser（D4）：processor 缺省 error→warning；gate 无 checker → warning
+  const missWf = 'name: m\nversion: "1"\ntasks:\n  - id: a\n    name: A\n    outputs: ["output/a.md"]\n  - id: g\n    name: G\n    processor: /x/SKILL.md\n    quality-gate:\n      on-failure: retry\n      max-retries: 1\n'
+  const missParsed = parseWorkflow(missWf)
+  check('c20 parser: 缺 processor 无 error（创建态可存）', missParsed.errors.length === 0, missParsed.errors)
+  check('c20 parser: 任务 a 缺 processor 产生 warning', missParsed.warnings.some(w => w.includes('a') && w.includes('processor')), missParsed.warnings)
+  check('c20 parser: 任务 g gate 缺 checker 产生 warning', missParsed.warnings.some(w => w.includes('g') && w.includes('checker')), missParsed.warnings)
+  const okParsed = parseWorkflow('name: o\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/SKILL.md\n')
+  check('c20 parser: 完好定义零警告', okParsed.warnings.length === 0, okParsed.warnings)
+
+  // 2) D2：目录变量保留字优先于同名 params
+  check('c20 D2: 保留字优先', injectParams('${workspace}', { workspace: 'FROM_PARAM' }, { workspace: '/realws' }) === '/realws')
+  check('c20 D2: 非保留字仍走 params', injectParams('${myvar}', { myvar: 'P' }, {}) === 'P')
+
+  // 3) 阶段1：${workspace}/${skills} 注入；${wf_dir} 占位幸存
+  const { fs: mockFs } = makeMockFs()
+  mockFs.writeText({ path: '/pre/skills/pskill/SKILL.md' }, 'pre')
+  const wfVars = [
+    'name: v', 'version: "1"', 'tasks:',
+    '  - id: a', '    processor: ${skills}/pskill/SKILL.md',
+    '    inputs:', '      doc: ${workspace}/docs/input.md',
+    '    outputs: ["${workspace}/out/a.md"]',
+  ].join('\n')
+  const pv = await expandDefinition(mockFs, { text: wfVars, workspaceRoot: '/wsv', predefinedRoot: '/pre' }, {})
+  check('c20 阶段1: processor ${skills} 注入+绝对直通', pv.tasks[0].processor === '/pre/skills/pskill/SKILL.md', pv.tasks[0].processor)
+  check('c20 阶段1: inputs ${workspace} 注入', pv.tasks[0].inputs.doc === '/wsv/docs/input.md', pv.tasks[0].inputs.doc)
+  check('c20 阶段1: outputs ${workspace} 注入', pv.tasks[0].outputs[0] === '/wsv/out/a.md', pv.tasks[0].outputs[0])
+  const pp = await expandDefinition(mockFs, { text: 'name: p\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/SKILL.md\n    outputs: ["${wf_dir}/out/a.md"]\n', workspaceRoot: '/wsp' }, {})
+  check('c20 阶段1: ${wf_dir} 占位幸存（留给阶段2）', pp.tasks[0].outputs[0] === '${wf_dir}/out/a.md', pp.tasks[0].outputs[0])
+
+  // 4) 阶段2 finalizeDataflow：注入 + 绝对化四情形 + skillDir + D3 占位
+  const fin = finalizeDataflow([
+    { id: 'a', processor: '/wsp/skills/a/SKILL.md', inputs: { spec: 'output/spec.md', abs: '/abs/x.md', exp: '${wf_dir}/out/v.md' }, outputs: ['output/a.md', '${skill_dir}/tpl.md'] },
+    { id: 'noproc', inputs: {}, outputs: ['${skill_dir}/x.md'] },
+  ], { wfDir: '/wsp/.workflow-agent/instances/i1' })
+  const f0 = fin[0]
+  check('c20 阶段2: 相对 inputs 绝对化（D1 实例目录基准）', f0.inputs.spec === '/wsp/.workflow-agent/instances/i1/output/spec.md', f0.inputs.spec)
+  check('c20 阶段2: 绝对 inputs 直通', f0.inputs.abs === '/abs/x.md')
+  check('c20 阶段2: 显式 ${wf_dir} 注入不二次拼接', f0.inputs.exp === '/wsp/.workflow-agent/instances/i1/out/v.md', f0.inputs.exp)
+  check('c20 阶段2: outputs 相对绝对化', f0.outputs[0] === '/wsp/.workflow-agent/instances/i1/output/a.md', f0.outputs[0])
+  check('c20 阶段2: outputs ${skill_dir} 注入', f0.outputs[1] === '/wsp/skills/a/tpl.md', f0.outputs[1])
+  check('c20 阶段2: skillDir=dirname(processor)', f0.skillDir === '/wsp/skills/a', f0.skillDir)
+  check('c20 阶段2(D3): 无 processor ${skill_dir} 占位保留', fin[1].outputs[0] === '${skill_dir}/x.md' && fin[1].skillDir === null, JSON.stringify(fin[1]))
+
+  // 5) begin 端到端：integrate.inputs.analysis 绝对路径 + skillDir + state.json 落盘
+  const { files, fs: mockFs20 } = makeMockFs()
+  const registered20 = {}
+  const mkCtx20 = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) {
+      if (n === 'fs') return mockFs20
+      if (n === 'tools') return { register(t) { bag[t.name] = t } }
+      return undefined
+    },
+  })
+  const registry20 = createInstanceRegistry(mkCtx20(registered20), { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(mkCtx20(registered20), null, null, registry20)
+  const exec20 = { agent: { session: { header: { id: 'sess-c20', cwd: '/ws/c20' } } } }
+  mockFs20.writeText({ path: '/ws/c20/skills/integrator/SKILL.md' }, 'skill')
+  const WF20 = [
+    'name: c20demo', 'version: "1.0"', 'description: iter25', 'max-concurrency: 2', 'tasks:',
+    '  - id: deep-analysis', '    name: 深度分析', '    processor: skills/integrator/SKILL.md', '    outputs: ["output/analysis.md"]',
+    '  - id: write-spec', '    name: 写规格', '    processor: skills/integrator/SKILL.md', '    outputs: ["output/spec.md"]',
+    '  - id: integrate', '    name: 汇总', '    processor: skills/integrator/SKILL.md',
+    '    inputs:', '      spec: "output/spec.md"', '      analysis: "output/analysis.md"',
+    '    outputs: ["output/summary.md"]', '    depends-on: [write-spec, deep-analysis]',
+  ].join('\n')
+  let r = await registered20.workflow_begin.execute({ workflowText: WF20 }, exec20)
+  const iid20 = r.instanceId
+  const wfDir20 = '/ws/c20/.workflow-agent/instances/' + iid20
+  const integ = r.tasks.find(t => t.id === 'integrate')
+  check('c20 begin: integrate.inputs.analysis 绝对路径（缺口#4 修复）', integ && integ.inputs.analysis === wfDir20 + '/output/analysis.md', integ && integ.inputs.analysis)
+  check('c20 begin: integrate.inputs.spec 绝对路径', integ.inputs.spec === wfDir20 + '/output/spec.md')
+  check('c20 begin: outputs 绝对路径', integ.outputs[0] === wfDir20 + '/output/summary.md', integ.outputs[0])
+  check('c20 begin: skillDir 指向 workspace 技能目录', integ.skillDir === '/ws/c20/skills/integrator', integ.skillDir)
+  check('c20 begin: 无 inputs 任务返回空字典', (r.tasks.find(t => t.id === 'deep-analysis')).inputs.deep === undefined && Object.keys(r.tasks.find(t => t.id === 'deep-analysis').inputs).length === 0)
+  const stateRaw20 = files.get(wfDir20 + '/state.json')
+  check('c20 begin: state.json 落盘含 inputs/outputs/skillDir', !!stateRaw20 && stateRaw20.includes('"inputs"') && stateRaw20.includes('"outputs"') && stateRaw20.includes('"skillDir"'))
+
+  // 6) 重启恢复：hydrate 从 state.json 恢复 inputs；旧格式兼容
+  const reg2b = {}
+  const registry2b = createInstanceRegistry(mkCtx20(reg2b), { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(mkCtx20(reg2b), null, null, registry2b)
+  r = await reg2b.workflow_status.execute({}, exec20)
+  const integ2 = (r.tasks || []).find(t => t.id === 'integrate')
+  check('c20 重启: 恢复的任务 inputs 仍为绝对路径', !!integ2 && integ2.inputs.analysis === wfDir20 + '/output/analysis.md', integ2 && integ2.inputs)
+  const eOld = createWorkflowEngine()
+  eOld.hydrate({ workflow: 'x', stage: 'PENDING', tasks: [{ id: 'a', status: 'PENDING' }] })
+  const oldT = eOld.snapshot().tasks[0]
+  check('c20 hydrate: 旧格式无 inputs → {} / skillDir → null', oldT.inputs && Object.keys(oldT.inputs).length === 0 && oldT.skillDir === null && Array.isArray(oldT.outputs))
+
+  // 7) start/reset 路径（expandInstanceDefinition 阶段2）：inputs 保持绝对
+  r = await registered20.workflow_stop.execute({}, exec20)
+  check('c20 stop: STOPPED', r.stage === 'STOPPED')
+  r = await registered20.workflow_reset.execute({}, exec20)
+  const integ3 = r.tasks.find(t => t.id === 'integrate')
+  check('c20 reset: 重新展开后 inputs 仍绝对路径', integ3.inputs.analysis === wfDir20 + '/output/analysis.md', integ3.inputs)
+
+  // 8) workflow_create 返回 warnings + 缺 processor 实例可 start（D4 不拦）
+  // （1:1 守卫：sess-c20 已绑 c20demo，改用第二会话创建自己的实例）
+  const exec20b = { agent: { session: { header: { id: 'sess-c20-2', cwd: '/ws/c20' } } } }
+  r = await registered20.workflow_create.execute({ workflowText: missWf }, exec20b)
+  check('c20 create: CREATED + warnings 携带', r.phase === 'CREATED' && Array.isArray(r.warnings) && r.warnings.length >= 2, JSON.stringify(r.warnings || r.error))
+  r = await registered20.workflow_start.execute({}, exec20b) // start 该会话活跃实例
+  check('c20 D4: 缺 processor 实例 start 不拦（RUNNING）', r.stage === 'RUNNING', r.stage + '/' + (r.error || ''))
+  check('c20 D4: 缺 processor 任务 processor=null 且 inputs/outputs 字段在', r.tasks[0].processor === null && Array.isArray(r.tasks[0].outputs))
+
+  // 9) loop 迭代：${item} 注入 + 阶段2 绝对化
+  mockFs.writeText({ path: '/ws/loop/config/mods.txt' }, 'login\norder\n')
+  const wfLoop = [
+    'name: lp', 'version: "1"', 'tasks:',
+    '  - id: batch', '    type: loop', '    processor: /x/SKILL.md',
+    '    items-from: config/mods.txt', '    item-var: mod',
+    '    inputs:', '      req: "output/${mod}/req.md"',
+    '    outputs: ["output/${mod}/done.md"]',
+  ].join('\n')
+  const pl = await expandDefinition(mockFs, { text: wfLoop, workspaceRoot: '/ws/loop' }, {})
+  check('c20 loop: 展开 2 个迭代', pl.tasks.length === 2 && pl.tasks[0].id === 'batch/login', pl.tasks.map(t => t.id).join(','))
+  check('c20 loop: 迭代 inputs ${item} 注入', pl.tasks[0].inputs.req === 'output/login/req.md', pl.tasks[0].inputs.req)
+  const fl = finalizeDataflow(pl.tasks, { wfDir: '/ws/loop/.workflow-agent/instances/lp-x' })
+  check('c20 loop: 迭代 inputs 阶段2 绝对化', fl[0].inputs.req === '/ws/loop/.workflow-agent/instances/lp-x/output/login/req.md', fl[0].inputs.req)
+  check('c20 loop: 迭代 outputs 绝对化 + skillDir', fl[1].outputs[0] === '/ws/loop/.workflow-agent/instances/lp-x/output/order/done.md' && fl[1].skillDir === '/x')
+}
+
+
 // ── 用例 1：合法串行工作流（llm-task + loop + quality-gate） ───────────────
 const WF_OK = `
 name: ir-to-ar-workflow
@@ -1330,6 +1465,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase18()
     // ── 用例 19：两级解析链（Iter-24）──
     await runCase19()
+    // ── 用例 20：数据流显性化（Iter-25）──
+    await runCase20()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

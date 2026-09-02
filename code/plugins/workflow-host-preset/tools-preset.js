@@ -54,32 +54,36 @@ function mergeTemplateLists(predefined, builtinTemplates) {
   return merged
 }
 
-// ── ${param} 注入 ───────────────────────────────────────────────────────────
+// ── ${param} / 目录变量注入（同一 PARAM_PATTERN 正则，R20）─────────────────
 // PARAM_PATTERN 默认由同作用域 schema 模块提供；独立加载（Node 直测）时兜底
 let E_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN : /\$\{(\w+)\}/g
 // parseWorkflow 兜底：mjs 内联作用域有同名函数；Node 单独 require 时从 shared 加载
 let E_parseWorkflow = typeof parseWorkflow !== 'undefined'
   ? parseWorkflow
   : (typeof require !== 'undefined' ? require('../../shared/workflow-parser').parseWorkflow : null)
-function injectParams(value, params) {
+// Iter-25：vars = 目录变量保留字（${workspace}/${wf_dir}/${skills}/${skill_dir}）。
+// D2 决议：保留字优先于同名 params——${workspace} 永远是工作区路径，语义稳定。
+// vars 形参可选，缺省时行为与 Iter-24 完全一致（向后兼容）。
+function injectParams(value, params, vars) {
   if (typeof value !== 'string') return value
   return value.replace(E_PARAM_PATTERN, (whole, key) => {
+    if (vars && vars[key] !== undefined) return String(vars[key])
     if (params && params[key] !== undefined) return String(params[key])
     return whole // 未提供则保留原样，由调用方提示
   })
 }
 
-function injectArray(list, params) {
-  return (list || []).map((x) => injectParams(x, params))
+function injectArray(list, params, vars) {
+  return (list || []).map((x) => injectParams(x, params, vars))
 }
 
 // v1.1：命名式 inputs 注入。值为 string → 注入后返回 string；
 // 值为 string[] → 逐项注入后返回 string[]。
-function injectInputsMap(map, params) {
+function injectInputsMap(map, params, vars) {
   const out = {}
   for (const k of Object.keys(map || {})) {
     const v = map[k]
-    out[k] = Array.isArray(v) ? v.map((x) => injectParams(x, params)) : injectParams(v, params)
+    out[k] = Array.isArray(v) ? v.map((x) => injectParams(x, params, vars)) : injectParams(v, params, vars)
   }
   return out
 }
@@ -118,20 +122,29 @@ function definitionError(errors) {
 // ── 定义展开（Iter-11：begin/start/reset 共用）────────────────────────────
 // src: { text, base }；params: 工作流级参数。返回 parsed（tasks 已注入参数、
 // 解析相对路径、展开 loop/concurrent）。定义不合法或 items-from 为空时 throw。
+// Iter-25 阶段1：目录变量 ${workspace}/${skills} 就此注入（展开期已知）；
+// ${wf_dir}/${skill_dir} 实例目录就绪后由 finalizeDataflow（阶段2）注入。
 async function expandDefinition(fs, src, params) {
   const parsed = E_parseWorkflow(src.text)
   if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
   const p = params || {}
+  // Iter-25：阶段1目录变量——skills=预定义技能根目录（R20）；无预定义根（单测隔离环境）
+  // 时值为 undefined，占位符保留原样。
+  const preRoot = src.predefinedRoot || (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null)
+  const dirVars = {
+    workspace: src.workspaceRoot || undefined,
+    skills: preRoot ? String(preRoot).replace(/\/+$/, '') + '/skills' : undefined,
+  }
   const tasks = await Promise.all(parsed.tasks.map(async (t) => {
     const out = { ...t }
-    out.inputs = injectInputsMap(t.inputsRaw, p)
-    out.outputs = injectArray(t.outputsRaw, p)
+    out.inputs = injectInputsMap(t.inputsRaw, p, dirVars)
+    out.outputs = injectArray(t.outputsRaw, p, dirVars)
     if (t.processorRaw) {
-      const procRel = injectParams(t.processorRaw, p)
+      const procRel = injectParams(t.processorRaw, p, dirVars)
       out.processor = await resolveRefPath(fs, src.workspaceRoot, procRel, src.predefinedRoot)
     }
     if (t.gateRaw) {
-      const gateRel = injectParams(t.gateRaw, p)
+      const gateRel = injectParams(t.gateRaw, p, dirVars)
       out.gate = {
         checker: await resolveRefPath(fs, src.workspaceRoot, gateRel, src.predefinedRoot),
         onFailure: t.gateOnFailure,
@@ -139,7 +152,7 @@ async function expandDefinition(fs, src, params) {
       }
     }
     if (t.itemsFromRaw) {
-      const itemsRel = injectParams(t.itemsFromRaw, p)
+      const itemsRel = injectParams(t.itemsFromRaw, p, dirVars)
       out.itemsFrom = await resolveRefPath(fs, src.workspaceRoot, itemsRel, src.predefinedRoot)
       out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
       out.itemVar = t.itemVar
@@ -153,13 +166,13 @@ async function expandDefinition(fs, src, params) {
       const text = await fs.readText(await fs.resolve(t.itemsFrom))
       const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
       if (items.length === 0) throw new Error('循环 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-      const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p)
+      const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p, dirVars)
       finalTasks.push(...iterations)
     } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
       const text = await fs.readText(await fs.resolve(t.itemsFrom))
       const items = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'))
       if (items.length === 0) throw new Error('并发 Task "' + t.id + '" 的 items-from 文件为空: ' + t.itemsFrom)
-      const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p)
+      const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p, dirVars)
       finalTasks.push(...iterations)
     } else {
       finalTasks.push(t)
@@ -169,13 +182,55 @@ async function expandDefinition(fs, src, params) {
   return parsed
 }
 
+// ── Iter-25 阶段2：数据流终态（R20 目录变量补全 + R15 显性化 + R21a skillDir）──
+// 输入 tasks：阶段1展开后的最终任务数组（含 loop/concurrent 迭代）。
+// dirCtx：{ wfDir } 实例目录绝对路径；legacy 单实例布局传 statePath 目录 / workspaceRoot。
+// 语义（决策 D1/D2/D3）：
+//   1) 注入 ${wf_dir} 与 ${skill_dir}（=dirname(processor)；无 processor 保留占位）；
+//   2) inputs/outputs 绝对化：先注入再判相对——仍相对的值以实例目录为基准拼接；
+//      仍含未解析 `${` 占位符的值跳过（防 `${skills}` 缺根等场景被错误拼接）；
+//   3) 产 skillDir 字段。
+// 纯函数：返回新数组，不修改入参。
+function absolutizeDataflowPath(p, base) {
+  const s = String(p || '')
+  if (!s || isAbsoluteishPath(s) || s.indexOf('${') !== -1) return s
+  return base ? String(base).replace(/\/+$/, '') + '/' + s : s
+}
+
+function absolutizeInputsMap(map, base) {
+  const out = {}
+  for (const k of Object.keys(map || {})) {
+    const v = map[k]
+    out[k] = Array.isArray(v) ? v.map((x) => absolutizeDataflowPath(x, base)) : absolutizeDataflowPath(v, base)
+  }
+  return out
+}
+
+function finalizeDataflow(tasks, dirCtx) {
+  const wfDir = dirCtx && dirCtx.wfDir ? String(dirCtx.wfDir).replace(/\/+$/, '') : ''
+  const baseVars = wfDir ? { wf_dir: wfDir } : {}
+  return (tasks || []).map((t) => {
+    const out = { ...t }
+    const tvars = { ...baseVars }
+    if (out.processor) tvars['skill_dir'] = parentDir(out.processor) || undefined
+    out.inputs = injectInputsMap(out.inputs, {}, tvars)   // 先注入 ${wf_dir}/${skill_dir}
+    out.outputs = injectArray(out.outputs, {}, tvars)
+    if (wfDir) {                                          // 再对仍相对的值以实例目录为基准绝对化
+      out.inputs = absolutizeInputsMap(out.inputs, wfDir)
+      out.outputs = (out.outputs || []).map((x) => absolutizeDataflowPath(x, wfDir))
+    }
+    out.skillDir = tvars['skill_dir'] || null
+    return out
+  })
+}
+
 // ── 循环展开：将 loop Task 展开为 N 个串行迭代实例 ────────────────────────
 // items 参数：从 items-from 文件解析出的非空非注释行数组
 // itemVar：迭代变量名（如 "module"），在 inputs/outputs 中解决 ${itemVar}
 // params：已注入的工作流级参数
 // loopTask：原始 loop Task 对象（含 inputsRaw/outputsRaw/processor/gate/dependsOn）
 // prevDeps：【内部使用】前一个迭代的 id，用于构建串行依赖链
-async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
+async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
   const expanded = []
   const loopDeps = loopTask.dependsOn || []
   let prevId = null
@@ -192,11 +247,11 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
     const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
     const iterId = loopTask.id + '/' + sanitized
 
-    // inputs/outputs 重新注入（含 item 变量）
-    const iterInputs = injectInputsMap(loopTask.inputsRaw || {}, iterParams)
-    const iterOutputs = injectArray(loopTask.outputsRaw || [], iterParams)
+    // inputs/outputs 重新注入（含 item 变量；Iter-25：vars=阶段1目录变量同批注入）
+    const iterInputs = injectInputsMap(loopTask.inputsRaw || {}, iterParams, vars)
+    const iterOutputs = injectArray(loopTask.outputsRaw || [], iterParams, vars)
 
-    // processor 路径重新注入（含 item 变量——虽然通常不变）
+    // processor 路径重新注入（含 item 变量——虽然通常不变；已是阶段1解析后的路径）
     const iterProcessor = injectParams(loopTask.processor || '', iterParams)
 
     // gate 复制（同一 checker，独立执行）
@@ -231,7 +286,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params) {
 }
 
 // Iter-8：并发展开——对 items 的每个 item 生成一个独立迭代，迭代之间无依赖（可并发，受组级 max 约束）
-async function expandConcurrentTasks(fs, task, items, itemVar, params) {
+async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
   const expanded = []
   const loopDeps = task.dependsOn || []
   const gMax = task.maxConcurrency || items.length // 组级并发（默认 items 数量，全部并发）
@@ -246,8 +301,8 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params) {
     const sanitized = item.replace(/[^a-zA-Z0-9_\-]/g, '-').replace(/^-+|-+$/g, '') || ('iter-' + i)
     const iterId = task.id + '/' + sanitized
 
-    const iterInputs = injectInputsMap(task.inputsRaw || {}, iterParams)
-    const iterOutputs = injectArray(task.outputsRaw || [], iterParams)
+    const iterInputs = injectInputsMap(task.inputsRaw || {}, iterParams, vars)
+    const iterOutputs = injectArray(task.outputsRaw || [], iterParams, vars)
     const iterProcessor = injectParams(task.processor || '', iterParams)
 
     const iterGate = task.gate ? {
@@ -335,7 +390,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_begin ────────────────────────────────────────────────────────
   const beginTool = {
     name: 'workflow_begin',
-    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（含处理技能绝对路径、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。',
+    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量；定义中可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}（展开期注入为绝对路径）。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（processor 技能绝对路径、inputs 命名字典与 outputs 列表均为绝对路径——inputs/outputs 相对路径以实例目录为基准解析、skillDir 技能目录、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。processor 未指定的任务照常返回（processor=null，由编排侧向用户报告，Iter-25 起 parser 降为创建警告）。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -389,6 +444,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
 
         // ── Iter-10：多实例布局——成功路径创建实例目录并切换绑定 ──
         // （解析/展开失败不建实例目录；显式 statePath/workspaceRoot 参数走旧布局）
+        let wfDir = null // Iter-25：阶段2基准目录（实例目录；legacy 回退见下）
         if (registry && !args.statePath && !args.workspaceRoot) {
           const cwd = sessionCwd(exec)
           if (cwd) {
@@ -401,9 +457,16 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
               })
               : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params }))
             b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId, recoveredConflict: entry._recoveredConflict || [] }
+            wfDir = entry.dir
+            // Iter-25 修复（潜伏 bug）：begin 路径此前从未置 hasState，begin→stop→reset
+            // 会被 reset 工具按 stage=CREATED 误拒（workflow_start 路径一直有置）。
+            entry.hasState = true
           }
         }
+        if (!wfDir) wfDir = args.statePath ? parentDir(String(args.statePath)) : (src.workspaceRoot || null) // legacy 单实例布局（默认④）
 
+        // Iter-25 阶段2：实例目录就绪后注入 ${wf_dir}/${skill_dir} 并绝对化 inputs/outputs
+        parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir })
         b.engine.begin(parsed)
         b.engine.start() // Iter-19：begin 后即视为执行中 → RUNNING（与状态机一致）
         b.engine.setError(null)
@@ -473,12 +536,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // 实例定义的相对路径解析基目录（优先原始源定义所在目录）
   // 读取实例 instance.yaml 并展开为 parsed（start/reset 共用）
   // Iter-24：相对引用走两级解析链，基准=创建会话的工作区根（meta.sessionCwd）
+  // Iter-25：阶段2数据流终态在展开内一次完成（entry.dir 实例目录已知）
   async function expandInstanceDefinition(entry) {
     const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
     const text = stripInstanceHeader(raw)
     const params = (entry.meta && entry.meta.params) || {}
     const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
-    return expandDefinition(fs, { text, workspaceRoot: wsRoot }, params)
+    const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params)
+    parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
+    return parsed
   }
 
   // 条目是否有已落盘运行状态（一律以磁盘 state.json 为准，避免内存标记过期）
@@ -530,7 +596,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_create ───────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_create',
-    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED"}。启动用 workflow_start。',
+    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED", warnings[]}——warnings 为创建关口校验警告（任务缺 processor / quality-gate 缺 checker；Iter-25 起允许此类半成品实例存在，启动前应补全）。启动用 workflow_start。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -562,7 +628,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             params: args.params || {},
           })
           : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: args.params || {} }))
-        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [] }
+        // Iter-25（D4）：创建关口校验警告（缺 processor / gate 无 checker）——实例照常创建，
+        // 校验与执行事件解耦；补全后重创建或（Iter-28 起）编辑实例。
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: parsed.warnings || [] }
       } catch (e) {
         return errPayload(e)
       }
@@ -805,5 +873,5 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRefPath, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError }
+  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError, finalizeDataflow, absolutizeDataflowPath }
 }

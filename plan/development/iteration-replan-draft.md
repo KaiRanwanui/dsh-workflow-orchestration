@@ -41,9 +41,9 @@
 1. **修复契约漂移**：workflow_begin/start/status 返回展开后的 **inputs/outputs**（数据在解析结果现成，现被 taskSnapshot 剥掉）；persona 协议文档同步对齐；
 2. 目录变量：解析展开期注入 `${workspace}` / `${wf_dir}` / `${skills}` / `${skill_dir}`（与 `${param}`/`${item}` 同一正则）；
 3. 派发协议升级：子会话 prompt 附"本技能全文来自 `<技能目录绝对路径>`"来源行（兼容层）；**门禁同时拿 inputs+outputs**（R16）；
-4. schema：processor / gateChecker **改为可选**（创建态允许缺省，启动前由 Iter-27 校验拦截）——为编辑界面铺路（R11/R14）。
+4. schema：processor / gateChecker **改为可选**——**D4 修正（2026-09-02 用户拍板）：校验挂创建实例、编辑实例关口，与执行事件解耦**（create 返回结构化 warnings，实例照常创建；begin/start 不拦截；运行时 persona 护栏：processor null 不派发并报告用户）——为编辑界面铺路（R11/R14）。
 
-**验收要点**：工具返回可见 inputs/outputs 路径（绝对化）；default-demo 的 integrate 子会话 prompt 中真实出现 analysis 输入路径（上轮实证的"无传递通道"修复）；缺 processor 的定义可保存为实例但启动被拦截。
+**验收要点**（D4 修正版）：工具返回可见 inputs/outputs 路径（绝对化）；default-demo 的 integrate 子会话 prompt 中真实出现 analysis 输入路径（上轮实证的"无传递通道"修复）；缺 processor 的定义创建成功且响应携带 warnings（~~启动被拦截~~ 原验收作废）。详案=iter25-design.md。
 
 ## Iter-26：items 结构化提取（块1）
 

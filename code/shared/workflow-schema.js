@@ -25,10 +25,12 @@ const DEFAULTS = {
 }
 
 // ── 必填字段校验规则 ────────────────────────────────────────────────────────
+// Iter-25（D4 决议）：processor 移出必填——创建态允许缺省（解析为 warning 非错误），
+// 校验挂创建/编辑关口，与执行事件解耦；缺技能任务由 persona 护栏在运行时报告。
 const REQUIRED = {
-  llmTask: ['id', 'processor'],
-  loop: ['id', 'processor', 'items-from', 'item-var'],
-  concurrent: ['id', 'processor', 'items-from', 'item-var'], // Iter-8
+  llmTask: ['id'],
+  loop: ['id', 'items-from', 'item-var'],
+  concurrent: ['id', 'items-from', 'item-var'], // Iter-8
   humanDecision: ['id', 'prompt'],
   externalAgent: ['id', 'agent'],
 }

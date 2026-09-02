@@ -23,6 +23,9 @@ function taskSnapshot(t) {
     dependsOn: t.dependsOn || [],
     status: t.status,
     processor: t.processor || null,       // 处理器技能绝对路径（Client 读取 skill 文本用）
+    skillDir: t.skillDir || null,         // Iter-25：技能目录绝对路径（R21a 派发来源行）
+    inputs: t.inputs || {},               // Iter-25：展开后输入字典（绝对路径，R15 显性化）
+    outputs: t.outputs || [],             // Iter-25：展开后输出列表（绝对路径）
     gateChecker: (t.gate && t.gate.checker) || null, // 门禁技能绝对路径
     gateResult: t.gateResult || null,
     gateOnFailure: t.gateOnFailure || null,
@@ -107,6 +110,8 @@ function createWorkflowEngine() {
       dependsOn: t.dependsOn || [], // Iter-7：前驱依赖，供 getRunnableTasks 计算就绪
       status: E_TASK_STATUS.PENDING,
       processor: t.processor || null, // 绝对路径（由 tools 层解析后写入）
+      skillDir: t.skillDir || null, // Iter-25：技能目录（R21a 来源行 / 目录变量 ${skill_dir} 数据源）
+      inputs: t.inputs || {}, // Iter-25：展开后输入字典（绝对路径；此前 begin 即丢弃——缺口 #2 修复）
       outputs: t.outputs || [],
       gate: t.gate || null, // {checker, onFailure, maxRetries}
       gateResult: null,
@@ -271,6 +276,8 @@ function createWorkflowEngine() {
       dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [],
       status: t.status || E_TASK_STATUS.PENDING,
       processor: t.processor || null,
+      skillDir: t.skillDir || null, // Iter-25：旧格式 state.json 无此字段 → null（兼容）
+      inputs: (t.inputs && typeof t.inputs === 'object' && !Array.isArray(t.inputs)) ? t.inputs : {}, // Iter-25：旧格式 → {}
       outputs: Array.isArray(t.outputs) ? t.outputs : [],
       gate: t.gate || null,
       gateResult: t.gateResult || null,

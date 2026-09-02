@@ -30,8 +30,11 @@
       <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/
       state.json/metadata.json/output/logs），状态写入实例目录，DSH 重启后按
       会话自动恢复。返回 tasks[]（含 id/name/type/dependsOn/status=PENDING/
-      processor 绝对路径/inputs 命名字典/outputs/gate）+ runnable[] +
+      processor 技能绝对路径（未指定为 null）/skillDir 技能目录/inputs 命名字典
+      与 outputs 列表（均为绝对路径，相对定义以实例目录为基准——直接使用返回值
+      勿自行拼路径）/gate）+ runnable[] +
       maxConcurrency + stage=RUNNING（Iter-19：begin 后即视为执行中）+ instanceId（本次实例 id）。
+      定义 YAML 可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}，展开期注入为绝对路径。
       若返回 workflowBeginErrors，向用户报告具体错误并停止。
 
       2) 就绪推导：以引擎返回的 runnable 字段为准（它已按 dependsOn 全部完成 +
@@ -40,16 +43,21 @@
 
       3) 执行 Task（可并发）：对 runnable 里的每个 Task 并行启动：(a) 对每个
       就绪 Task 调 workflow_status({task: <id>, taskStatus: "RUNNING"})；
-      (b) 用 read 读取各 processor 技能全文；(c) 为每个 Task 构造独立 subagent
-      prompt：粘贴技能全文、列出 inputs 命名字典（<key> = <绝对路径>，说明主文档/
-      参考）、指定 outputs 绝对路径；(d) 并行调多个 subagent 执行（各自独立会话）；
-      (e) 全部完成后用 read 确认每个 outputs 已生成。
+      (b) 若 processor 为 null（未指定技能）：不派发，保持 PENDING，向用户报告
+      "任务 <id> 未指定技能，请补全后继续"，等待指示；(c) 用 read 读取各 processor
+      技能全文；(d) 为每个 Task 构造独立 subagent prompt：首行附"本技能全文来自
+      <skillDir>"（用返回的 skillDir 字段）、粘贴技能全文、列出 inputs 命名字典
+      （<key> = <绝对路径>，说明主文档/参考）、指定 outputs 绝对路径；(e) 并行调
+      多个 subagent 执行（各自独立会话）；(f) 全部完成后用 read 确认每个 outputs
+      已生成。
       并发规则：始终保持 RUNNING 数 <= maxConcurrency；每完成一个 Task（DONE/
       SKIPPED/FAILED）就重新读 snapshot.runnable，立即启动下一个就绪 Task。
 
-      4) 质量门禁（若配置）：(a) 用 read 读取 gate.checker 技能文件全文；
-      (b) 构造独立 subagent prompt（不共享 Task 会话）：粘贴 checker 技能全文，
-      让它读取 Task 输出文件，只输出 PASS 或 FAIL，FAIL 时给出理由；(c) 判定：
+      4) 质量门禁（若配置）：(a) 若 gate.checker 为 null：按未配置门禁处理，输出
+      校验通过直接 DONE；(b) 用 read 读取 gate.checker 技能文件全文；
+      (c) 构造独立 subagent prompt（不共享 Task 会话）：粘贴 checker 技能全文，
+      让它读取该 Task 的 inputs 命名字典全部文件与 outputs 列表全部文件（输入
+      +输出一并交门禁检查，R16），只输出 PASS 或 FAIL，FAIL 时给出理由；(d) 判定：
       PASS → workflow_status({task: <id>, taskStatus: "DONE", gateResult: "PASS"})
       并继续下一个就绪 Task；FAIL → 按 on-failure 处理。
 
@@ -66,7 +74,9 @@
       7) 实例管理（用户要求时）：workflow_list 列出本会话工作区全部实例
       （phase=CREATED 未启动 / READY 已有状态；附 sessionState 派生状态
       UNBOUND/BOUND/DONE/BROKEN 与 orphans 孤儿 id）；workflow_create 从定义
-      预建实例目录（不启动）；workflow_adopt 采用池中 UNBOUND（sessionId==null）
+      预建实例目录（不启动），返回 warnings 创建校验警告（任务缺 processor/
+      gate 缺 checker——半成品实例允许存在，转告用户补全后再启动）；
+      workflow_adopt 采用池中 UNBOUND（sessionId==null）
       实例并绑定本会话（start 前须先 adopt 若实例未绑定）；workflow_start 启动
       已绑定实例并返回 runnable（RUNNING 拒、STOPPED 拒用 resume、COMPLETED/FAILED
       拒用 reset）；workflow_stop 置 STOPPED（保进度）；workflow_resume 仅 STOPPED
