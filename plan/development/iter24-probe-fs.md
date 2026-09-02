@@ -8,6 +8,23 @@
   - 插件 `console.log` 可进 journalctl（`[cordis:probe-1]` 前缀）
 - **注意**：动态插件随 DSH 重启消失，结论取证靠"结果落工作区 JSON + journal"双通道。
 
+## 探针 2（同日追加）：fs 作用域边界实证
+
+结论修正并扩大：**Host fs 服务（不显式传 sandboxPolicy 参数时）对整个文件系统读写无硬限制**：
+
+| 目标 | 写 | 读 |
+|---|---|---|
+| `/home/zhaokai/` 根级 | ✅ | ✅ |
+| `~/.dsh/` 深层子目录 | ✅ | ✅ |
+| HOME 子目录（如 wf-blank-e2e） | ✅ | ✅ |
+| `/tmp/` | ✅ | — |
+| `/etc/hostname` | — | ✅ |
+
+- `sandboxPolicy` 服务虽报 `workspaceRoot=HOME / workspace-write`，但**并不拦截**未传 policy 参数的裸 `fs.writeText/readText`——该策略是按调用显式生效（opt-in），不是 fs 服务内置强制。
+- **勘误**：早前"/tmp 写入被拒"的判断是错的——实例文件实际写进了真实 `/tmp`，只是 agent bash 沙箱（bwrap `--tmpfs /tmp`）私有挂载看不见，属观测假象。
+- **对后续迭代的意义**：归档下载（Iter-29）、实例导出等直接可行，无需扩权配置；但工程纪律上仍约定插件写盘只落在 `~/.dsh/workflow-agent/`、工作区 `.workflow-agent/` 与用户明示目录。
+- **Client 侧无文件能力**：浏览器端从不直接触盘，一切经 Host 路由/RPC（`/wf/*`、`harness.handle`）间接访问。
+
 ## 复现步骤
 
 1. `cordis_define`（idPrefix 3-6 个小写字母，如 `probe`），code.host 用下文；
