@@ -212,13 +212,17 @@ export function register(ctx) {
         const g = { key: t._loopGroup, name: t._loopGroupName || t._loopGroup, items: [] }
         while (gi < flat.length && flat[gi]._loopGroup === g.key) { g.items.push(flat[gi]); gi++ }
         loopGroups.push(g)
-        flowNodes.push({ type: 'loop', group: g })
+        // Iter-26R：检测占位组框（单元素 + _pendingItems 非空 + !_expanded）
+        const isPlaceholder = g.items.length === 1 && g.items[0]._pendingItems && !g.items[0]._expanded
+        flowNodes.push({ type: 'loop', group: g, isPlaceholder })
       } else if (t._concurrentGroup) {
         // Iter-8：concurrent 折叠框（⚡ 并发）
         const g = { key: t._concurrentGroup, name: t._concurrentGroupName || t._concurrentGroup, items: [] }
         while (gi < flat.length && flat[gi]._concurrentGroup === g.key) { g.items.push(flat[gi]); gi++ }
         concGroups.push(g)
-        flowNodes.push({ type: 'concgroup', group: g })
+        // Iter-26R：检测占位组框
+        const isPlaceholder = g.items.length === 1 && g.items[0]._pendingItems && !g.items[0]._expanded
+        flowNodes.push({ type: 'concgroup', group: g, isPlaceholder })
       } else {
         // 垂直组：连续多个 dependsOn 相同的 task（无线框，垂直排列，可并发）
         const depKey = depKeyOf(t)
@@ -303,20 +307,58 @@ export function register(ctx) {
       } else if (fn.type === 'loop') {
         // Loop 组节点
         const g = fn.group
-        const lgEls = LoopGroupNode({
-          x: svgX, y: cy, gW, gH: gHLoop, group: g,
-          selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
-        })
-        svgChildren.push(...lgEls)
+        if (fn.isPlaceholder) {
+          // Iter-26R：占位组框（虚线琥珀色 + "⏳ 等待 items..."）
+          svgChildren.push(
+            React.createElement('rect', {
+              key: 'ph-r-' + g.key, x: svgX, y: cy, width: gW, height: gHLoop, rx: 8,
+              fill: 'rgba(245, 158, 11, 0.15)', opacity: 0.92,
+              stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3',
+            }),
+            React.createElement('text', {
+              key: 'ph-t-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 - 2,
+              textAnchor: 'middle', fill: '#f59e0b', fontSize: 12, fontWeight: 600
+            }, '↻ ' + (g.name || g.key)),
+            React.createElement('text', {
+              key: 'ph-u-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 + 14,
+              textAnchor: 'middle', fill: '#f59e0b', fontSize: 10, opacity: 0.8
+            }, '⏳ 等待 items...'),
+          )
+        } else {
+          const lgEls = LoopGroupNode({
+            x: svgX, y: cy, gW, gH: gHLoop, group: g,
+            selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
+          })
+          svgChildren.push(...lgEls)
+        }
       } else if (fn.type === 'concgroup') {
         // Iter-8：concurrent 节点——复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开），标注 ⚡ 并发
         const g = fn.group
-        const cgEls = LoopGroupNode({
-          x: svgX, y: cy, gW, gH: gHLoop, group: g,
-          selectedId, onSelect, isExpanded: !!expanded['cc-' + g.key], onToggle: () => toggleGroup('cc-' + g.key),
-          label: '\u26A1 并发 '
-        })
-        svgChildren.push(...cgEls)
+        if (fn.isPlaceholder) {
+          // Iter-26R：占位组框（虚线琥珀色 + "⏳ 等待 items..."）
+          svgChildren.push(
+            React.createElement('rect', {
+              key: 'ph-r-' + g.key, x: svgX, y: cy, width: gW, height: gHLoop, rx: 8,
+              fill: 'rgba(245, 158, 11, 0.15)', opacity: 0.92,
+              stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3',
+            }),
+            React.createElement('text', {
+              key: 'ph-t-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 - 2,
+              textAnchor: 'middle', fill: '#f59e0b', fontSize: 12, fontWeight: 600
+            }, '⚡ ' + (g.name || g.key)),
+            React.createElement('text', {
+              key: 'ph-u-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 + 14,
+              textAnchor: 'middle', fill: '#f59e0b', fontSize: 10, opacity: 0.8
+            }, '⏳ 等待 items...'),
+          )
+        } else {
+          const cgEls = LoopGroupNode({
+            x: svgX, y: cy, gW, gH: gHLoop, group: g,
+            selectedId, onSelect, isExpanded: !!expanded['cc-' + g.key], onToggle: () => toggleGroup('cc-' + g.key),
+            label: '\u26A1 并发 '
+          })
+          svgChildren.push(...cgEls)
+        }
       } else {
         // Iter-8：依赖同一前驱的节点——垂直并列，无线框（各自独立，可并发）
         fn.tasks.forEach((t, i) => {

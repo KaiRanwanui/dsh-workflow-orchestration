@@ -176,8 +176,8 @@ async function runCase10() {
   await mockFs.writeText({ path: '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml' }, 'name: disk-tpl\n')
   let r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
   check('templates: 预定义磁盘版扫描到（无 fallback 标记）', r.code === 200 && r.body.predefined[0].name === 'disk-tpl' && r.body.predefined[0].fallback === undefined && r.body.predefined[0].path === '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml', JSON.stringify(r.body.predefined))
-  check('templates: 内建兜底补缺（同名去重，磁盘版赢）', r.body.predefined.length === 4 && r.body.predefined.filter(x => x.fallback).map(x => x.name).join(',') === 'default-demo,serial-demo,items-demo', JSON.stringify(r.body.predefined.map(x => x.name)))
-  check('templates: builtin 字段保留（兼容）', Array.isArray(r.body.builtin) && r.body.builtin.length === 3 && r.body.builtin[0].yaml.includes('name: default-demo') && r.body.builtin[2].yaml.includes('name: items-demo'))
+  check('templates: 内建兜底补缺（同名去重，磁盘版赢）', r.body.predefined.length === 5 && r.body.predefined.filter(x => x.fallback).map(x => x.name).join(',') === 'default-demo,serial-demo,items-demo,runtime-items-demo', JSON.stringify(r.body.predefined.map(x => x.name)))
+  check('templates: builtin 字段保留（兼容）', Array.isArray(r.body.builtin) && r.body.builtin.length === 4 && r.body.builtin[0].yaml.includes('name: default-demo') && r.body.builtin[2].yaml.includes('name: items-demo') && r.body.builtin[3].yaml.includes('name: runtime-items-demo'))
   check('templates: default-demo 集成依赖深度分析（防止深挖变旁路孤岛回归）', r.body.builtin[0].yaml.includes('depends-on: [write-spec, prep-data, deep-analysis]') && r.body.builtin[0].yaml.includes('analysis: "output/analysis.md"'))
   process.env.DSH_HOME = savedDsh
 
@@ -1320,6 +1320,351 @@ async function runCase21() {
   }
 }
 
+// ============================================================================
+// 用例 22：运行时 items 展开（Iter-26R）
+// ============================================================================
+async function runCase22() {
+  console.log('')
+  console.log('用例 22：运行时 items 展开（Iter-26R）')
+
+  // 1) 延迟展开判定：items 文件不存在 + 上游产出 → 占位
+  {
+    const yaml = `
+name: deferred-test
+version: '1'
+description: test deferred expansion
+tasks:
+  - id: collect
+    type: llm-task
+    processor: /skills/collect.md
+    outputs:
+      - output/modules.md
+  - id: analyze
+    type: loop
+    items-from: output/modules.md
+    item-var: mod
+    processor: /skills/analyze.md
+    depends-on:
+      - collect
+`
+    const mf = makeMockFs()
+    const parsed = parseWorkflow(yaml)
+    // expandDefinition 时 items 文件不存在，但上游 outputs 包含该路径 → 应产出占位
+    const { expandDefinition } = require('../plugins/workflow-host-preset/tools-preset.js')
+    const expanded = await expandDefinition(mf.fs, { text: yaml, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst' })
+    const placeholder = expanded.tasks.find(t => t.id === 'analyze')
+    check('c22 延迟判定: items 不存在+上游产出→占位', placeholder && placeholder._pendingItems, placeholder && placeholder._pendingItems ? 'yes' : 'no')
+    check('c22 延迟判定: 占位 id=组id', placeholder && placeholder.id === 'analyze', placeholder && placeholder.id)
+    check('c22 延迟判定: _expanded=false', placeholder && placeholder._expanded === false)
+    check('c22 延迟判定: _pendingItems 含 itemsFrom', placeholder && placeholder._pendingItems && placeholder._pendingItems.itemsFrom.endsWith('output/modules.md'))
+    check('c22 延迟判定: _pendingItems 含 itemVar', placeholder && placeholder._pendingItems && placeholder._pendingItems.itemVar === 'mod')
+    check('c22 延迟判定: _loopGroup 保留', placeholder && placeholder._loopGroup === 'analyze')
+  }
+
+  // 2) 延迟展开判定：items 不存在 + 无上游产出 → 报错
+  {
+    const yaml = `
+name: no-upstream
+version: '1'
+tasks:
+  - id: analyze
+    type: loop
+    items-from: output/nonexistent.md
+    item-var: mod
+    processor: /skills/analyze.md
+`
+    const mf = makeMockFs()
+    const { expandDefinition } = require('../plugins/workflow-host-preset/tools-preset.js')
+    let threw = false
+    try {
+      await expandDefinition(mf.fs, { text: yaml, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst' })
+    } catch (e) {
+      threw = true
+    }
+    check('c22 延迟判定: items 不存在+无上游→报错', threw)
+  }
+
+  // 3) deferred: true 显式声明 → 延迟（无论上游）
+  {
+    const yaml = `
+name: explicit-deferred
+version: '1'
+tasks:
+  - id: analyze
+    type: loop
+    items-from: output/external.md
+    item-var: mod
+    processor: /skills/analyze.md
+    deferred: true
+`
+    const mf = makeMockFs()
+    const { expandDefinition } = require('../plugins/workflow-host-preset/tools-preset.js')
+    const expanded = await expandDefinition(mf.fs, { text: yaml, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst' })
+    const placeholder = expanded.tasks.find(t => t.id === 'analyze')
+    check('c22 显式 deferred: 占位产出', placeholder && placeholder._pendingItems)
+  }
+
+  // 4) items 存在 → 正常展开（零回归）
+  {
+    const yaml = `
+name: immediate
+version: '1'
+tasks:
+  - id: analyze
+    type: loop
+    items-from: output/modules.txt
+    item-var: mod
+    processor: /skills/analyze.md
+`
+    const mf = makeMockFs()
+    mf.files.set('/ws/output/modules.txt', 'login\norder\n')
+    const { expandDefinition } = require('../plugins/workflow-host-preset/tools-preset.js')
+    const expanded = await expandDefinition(mf.fs, { text: yaml, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst' })
+    check('c22 即时展开: items 存在→展开 N 迭代', expanded.tasks.length === 2 && expanded.tasks[0].id === 'analyze/login')
+    check('c22 即时展开: 无占位', !expanded.tasks.some(t => t._pendingItems))
+  }
+
+  // 5) engine.expandDeferredGroups: 前驱就绪→展开
+  {
+    const engine = createWorkflowEngine()
+    const placeholder = {
+      id: 'analyze', name: '分析', type: 'llm-task', dependsOn: ['collect'], status: 'PENDING',
+      processor: null, inputs: {}, outputs: [], gate: null,
+      _pendingItems: { itemsFrom: 'output/modules.md', itemVar: 'mod', taskType: 'loop', inputsRaw: {}, outputsRaw: [], onError: 'break' },
+      _expanded: false, _loopGroup: 'analyze', _loopGroupName: '分析',
+    }
+    const collect = { id: 'collect', name: '收集', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: '/skills/collect.md', inputs: {}, outputs: ['output/modules.md'], gate: null }
+    engine.begin({ name: 'test', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [collect, placeholder] })
+    engine.start()
+    // Set collect to DONE after begin (begin resets all tasks to PENDING)
+    engine.updateTask('collect', { status: 'DONE' })
+
+    // 模拟 expandFn
+    const expandFn = async (ph, pending) => {
+      return [
+        { id: 'analyze/login', name: '分析 - login', type: 'llm-task', dependsOn: [], processor: '/skills/analyze.md', inputs: {}, outputs: [], gate: null, _loopGroup: 'analyze', _loopItem: 'login', _loopIndex: 0 },
+        { id: 'analyze/order', name: '分析 - order', type: 'llm-task', dependsOn: ['analyze/login'], processor: '/skills/analyze.md', inputs: {}, outputs: [], gate: null, _loopGroup: 'analyze', _loopItem: 'order', _loopIndex: 1 },
+      ]
+    }
+    await engine.expandDeferredGroups(expandFn)
+    const snap = engine.snapshot()
+    const expandedTask = snap.tasks.find(t => t.id === 'analyze')
+    check('c22 引擎展开: 占位 _expanded=true', expandedTask && expandedTask._expanded === true)
+    check('c22 引擎展开: 迭代插入', snap.tasks.length === 4 && snap.tasks.some(t => t.id === 'analyze/login'))
+    check('c22 引擎展开: 迭代在 runnable', snap.runnable.some(t => t.id === 'analyze/login'))
+  }
+
+  // 6) engine.expandDeferredGroups: 前驱未就绪→不展开
+  {
+    const engine = createWorkflowEngine()
+    const placeholder = {
+      id: 'analyze', name: '分析', type: 'llm-task', dependsOn: ['collect'], status: 'PENDING',
+      processor: null, inputs: {}, outputs: [], gate: null,
+      _pendingItems: { itemsFrom: 'output/modules.md', itemVar: 'mod', taskType: 'loop' },
+      _expanded: false, _loopGroup: 'analyze',
+    }
+    const collect = { id: 'collect', name: '收集', type: 'llm-task', dependsOn: [], status: 'RUNNING', processor: '/skills/collect.md', inputs: {}, outputs: [], gate: null }
+    engine.begin({ name: 'test', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [collect, placeholder] })
+    engine.start()
+
+    let expandCalled = false
+    const expandFn = async () => { expandCalled = true; return [] }
+    await engine.expandDeferredGroups(expandFn)
+    check('c22 引擎展开: 前驱未就绪→不展开', !expandCalled)
+    check('c22 引擎展开: 占位仍 _expanded=false', engine.snapshot().tasks.find(t => t.id === 'analyze')._expanded === false)
+  }
+
+  // 7) 组完成检测: 全部迭代终态→占位 DONE
+  {
+    const engine = createWorkflowEngine()
+    const placeholder = { id: 'analyze', name: '分析', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: null, inputs: {}, outputs: [], gate: null, _pendingItems: {}, _expanded: true, _loopGroup: 'analyze' }
+    const iter1 = { id: 'analyze/login', name: 'login', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: '/skills/analyze.md', inputs: {}, outputs: [], gate: null, _loopGroup: 'analyze' }
+    const iter2 = { id: 'analyze/order', name: 'order', type: 'llm-task', dependsOn: ['analyze/login'], status: 'PENDING', processor: '/skills/analyze.md', inputs: {}, outputs: [], gate: null, _loopGroup: 'analyze' }
+    engine.begin({ name: 'test', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [placeholder, iter1, iter2] })
+    engine.start()
+    // Set iterations to DONE after begin
+    engine.updateTask('analyze/login', { status: 'DONE' })
+    engine.updateTask('analyze/order', { status: 'DONE' })
+    const ph = engine.snapshot().tasks.find(t => t.id === 'analyze')
+    check('c22 组完成: 全部迭代终态→占位 DONE', ph.status === 'DONE', ph.status)
+  }
+
+  // 8) 下游 depends-on:[组id] → 占位 DONE 后放行
+  {
+    const engine = createWorkflowEngine()
+    const placeholder = { id: 'analyze', name: '分析', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: null, inputs: {}, outputs: [], gate: null, _pendingItems: {}, _expanded: true, _loopGroup: 'analyze' }
+    const iter1 = { id: 'analyze/login', name: 'login', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: '/skills/analyze.md', inputs: {}, outputs: [], gate: null, _loopGroup: 'analyze' }
+    const report = { id: 'report', name: '报告', type: 'llm-task', dependsOn: ['analyze'], status: 'PENDING', processor: '/skills/report.md', inputs: {}, outputs: [], gate: null }
+    engine.begin({ name: 'test', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [placeholder, iter1, report] })
+    engine.start()
+    // Set placeholder and iteration to DONE
+    engine.updateTask('analyze', { status: 'DONE' })
+    engine.updateTask('analyze/login', { status: 'DONE' })
+    const runnable = engine.snapshot().runnable
+    check('c22 下游放行: depends-on:[组id] 占位 DONE 后放行', runnable.some(t => t.id === 'report'))
+  }
+
+  // 9) hydrate 兼容: 旧 state.json 无 _pendingItems/_expanded → null/false
+  {
+    const engine = createWorkflowEngine()
+    engine.hydrate({
+      workflow: 'old', version: '1', description: null, params: {}, maxConcurrency: 1, active: true, stage: 'RUNNING',
+      tasks: [{ id: 't1', name: 't1', type: 'llm-task', dependsOn: [], status: 'DONE', processor: null, inputs: {}, outputs: [], gate: null }],
+      gateResult: null, retries: 0, error: null, logs: [],
+    })
+    const t = engine.snapshot().tasks[0]
+    check('c22 hydrate 兼容: _pendingItems=null', t._pendingItems === null)
+    check('c22 hydrate 兼容: _expanded=false', t._expanded === false)
+  }
+
+  // 10) GUI 验收修复回归：相对 items-from 路径语义（实例目录基准）+ 占位不进 runnable
+  {
+    const { expandDefinition, finalizeDataflow } = require('../plugins/workflow-host-preset/tools-preset.js')
+    // 10a) 相对 items-from → 占位保留相对形态 + itemsDeferred=true
+    const yamlRel = `
+name: rel-deferred
+version: '1'
+tasks:
+  - id: collect
+    type: llm-task
+    processor: /skills/collect.md
+    outputs:
+      - output/modules.txt
+  - id: analyze
+    type: loop
+    items-from: output/modules.txt
+    item-var: mod
+    processor: /skills/analyze.md
+    depends-on:
+      - collect
+`
+    const mf = makeMockFs()
+    const expanded = await expandDefinition(mf.fs, { text: yamlRel, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst-x' })
+    const ph = expanded.tasks.find(t => t.id === 'analyze')
+    check('c22 路径语义: 占位 itemsFrom 保留相对形态', ph && ph._pendingItems && ph._pendingItems.itemsFrom === 'output/modules.txt', ph && ph._pendingItems && ph._pendingItems.itemsFrom)
+    check('c22 路径语义: itemsDeferred=true', ph && ph._pendingItems && ph._pendingItems.itemsDeferred === true)
+
+    // 10b) finalizeDataflow → 实例目录绝对化（与上游 output 同基准）
+    const fin = finalizeDataflow(expanded.tasks, { wfDir: '/ws/inst-x' })
+    const phFin = fin.find(t => t.id === 'analyze')
+    const colFin = fin.find(t => t.id === 'collect')
+    check('c22 路径语义: finalize 后 itemsFrom=实例目录绝对路径', phFin._pendingItems.itemsFrom === '/ws/inst-x/output/modules.txt', phFin._pendingItems.itemsFrom)
+    check('c22 路径语义: itemsDeferred 清标记', phFin._pendingItems.itemsDeferred === false)
+    check('c22 路径语义: 与上游 output 落点一致', colFin.outputs[0] === '/ws/inst-x/output/modules.txt', colFin.outputs[0])
+
+    // 10c) 绝对 items-from → 直通保留、不标 deferred
+    const yamlAbs = `
+name: abs-deferred
+version: '1'
+tasks:
+  - id: analyze
+    type: loop
+    items-from: /abs/path/modules.txt
+    item-var: mod
+    processor: /skills/analyze.md
+    deferred: true
+`
+    const mf2 = makeMockFs()
+    const exp2 = await expandDefinition(mf2.fs, { text: yamlAbs, workspaceRoot: '/ws' }, {}, { wfDir: '/ws/inst-y' })
+    const ph2 = exp2.tasks.find(t => t.id === 'analyze')
+    check('c22 路径语义: 绝对 itemsFrom 直通保留', ph2 && ph2._pendingItems && ph2._pendingItems.itemsFrom === '/abs/path/modules.txt', ph2 && ph2._pendingItems && ph2._pendingItems.itemsFrom)
+    check('c22 路径语义: 绝对路径不标 deferred', ph2 && ph2._pendingItems && ph2._pendingItems.itemsDeferred === false)
+  }
+
+  // 11) 占位不进 runnable（前驱就绪前后均排除）
+  {
+    const engine = createWorkflowEngine()
+    const placeholder = { id: 'analyze', name: '分析', type: 'llm-task', dependsOn: ['collect'], status: 'PENDING', processor: null, inputs: {}, outputs: [], gate: null, _pendingItems: { itemsFrom: 'output/m.txt', taskType: 'loop' }, _expanded: false, _loopGroup: 'analyze' }
+    const collect = { id: 'collect', name: '收集', type: 'llm-task', dependsOn: [], status: 'PENDING', processor: '/skills/c.md', inputs: {}, outputs: ['output/m.txt'], gate: null }
+    engine.begin({ name: 'test', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [collect, placeholder] })
+    engine.start()
+    check('c22 runnable: 前驱未就绪占位不进', !engine.snapshot().runnable.some(t => t.id === 'analyze'))
+    engine.updateTask('collect', { status: 'DONE' })
+    const r = engine.snapshot().runnable
+    check('c22 runnable: 前驱就绪占位仍不进（processor=null 假任务泄漏修复）', !r.some(t => t.id === 'analyze'), JSON.stringify(r.map(t => t.id)))
+  }
+
+  // 12) 工具级端到端：create→start→collect DONE→status 触发展开→3 迭代就绪（GUI 验收主链路）
+  {
+    const { createInstanceRegistry } = require('../plugins/workflow-host/instance-store.js')
+    const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
+    let rp
+    try { rp = require('../plugins/workflow-host-preset/tools-preset.js'); } catch (e) { rp = null }
+    const registerFn = (rp && rp.registerWorkflowToolsPreset) || (typeof registerWorkflowToolsPreset !== 'undefined' ? registerWorkflowToolsPreset : null)
+    if (registerFn) {
+      // 复用用例 9 的 ctx 构造方式
+      const bagT = {}
+      const toolsMock = { register(t) { bagT[t.name] = t } }
+      const mfE2e = makeMockFs()
+      const ctxE2e = {
+        tools: toolsMock,
+        get(name) {
+          if (name === 'fs') return mfE2e.fs
+          if (name === 'tools') return toolsMock
+          return undefined
+        },
+      }
+      const registryE2e = createInstanceRegistry(ctxE2e, { createWorkflowEngine, createWorkflowStorage })
+      registerFn(ctxE2e, null, null, registryE2e)
+      const execE2e = { agent: { session: { header: { id: 'sess-t22', cwd: '/ws/t22' } } } }
+      const WF22 = `
+name: t22-runtime
+version: "1.0"
+description: "runtime items e2e"
+tasks:
+  - id: collect
+    name: "收集"
+    processor: /skills/collect/SKILL.md
+    outputs:
+      - output/modules.txt
+  - id: analyze
+    name: "分析"
+    type: loop
+    processor: /skills/analyze/SKILL.md
+    items-from: output/modules.txt
+    item-var: mod
+    outputs:
+      - "output/analyze/\${mod}.md"
+    depends-on:
+      - collect
+`
+      let cr = await bagT.workflow_create.execute({ workflowText: WF22 }, execE2e)
+      check('c22 e2e: create 成功', cr.instanceId && /^t22-runtime-[0-9a-f]{8}$/.test(cr.instanceId), JSON.stringify(cr).slice(0, 100))
+      const iid22 = cr.instanceId
+      const dir22 = '/ws/t22/.workflow-agent/instances/' + iid22
+
+      let sr = await bagT.workflow_start.execute({}, execE2e)
+      const phStart = sr.tasks.find(t => t.id === 'analyze')
+      check('c22 e2e: start 后占位在 tasks（_pendingItems 非空）', phStart && !!phStart._pendingItems)
+      check('c22 e2e: start 后占位 itemsFrom 已实例目录绝对化', phStart && phStart._pendingItems.itemsFrom === dir22 + '/output/modules.txt', phStart && phStart._pendingItems.itemsFrom)
+      check('c22 e2e: start 后 runnable=[collect]（占位排除）', sr.runnable.length === 1 && sr.runnable[0].id === 'collect', JSON.stringify(sr.runnable.map(t => t.id)))
+
+      // 模拟 collect subagent 写出 items 文件到实例目录
+      mfE2e.files.set(dir22 + '/output/modules.txt', 'login\norder\npayment\n')
+
+      // workflow_status 标记 collect DONE → 前置展开触发
+      let st = await bagT.workflow_status.execute({ task: 'collect', taskStatus: 'DONE' }, execE2e)
+      const phAfter = st.tasks.find(t => t.id === 'analyze')
+      check('c22 e2e: collect DONE 后占位 _expanded=true', phAfter && phAfter._expanded === true)
+      const iters = st.tasks.filter(t => t._loopGroup === 'analyze' && t.id !== 'analyze')
+      check('c22 e2e: 展开 3 迭代', iters.length === 3, iters.length)
+      check('c22 e2e: 迭代 id 形态 analyze/login 等', iters.some(t => t.id === 'analyze/login') && iters.some(t => t.id === 'analyze/payment'))
+      check('c22 e2e: 迭代 outputs 注入 ${mod}', iters.every(t => t.outputs[0] && t.outputs[0].startsWith(dir22 + '/output/analyze/')), JSON.stringify(iters.map(t => t.outputs[0])))
+      check('c22 e2e: runnable=首迭代（loop 串行链头，占位不在）', st.runnable.length === 1 && st.runnable[0].id === 'analyze/login', JSON.stringify(st.runnable.map(t => t.id)))
+
+      // 迭代全部完成 → 占位 DONE
+      await bagT.workflow_status.execute({ task: 'analyze/login', taskStatus: 'DONE' }, execE2e)
+      await bagT.workflow_status.execute({ task: 'analyze/order', taskStatus: 'DONE' }, execE2e)
+      const stFin = await bagT.workflow_status.execute({ task: 'analyze/payment', taskStatus: 'DONE' }, execE2e)
+      const phFin = stFin.tasks.find(t => t.id === 'analyze')
+      check('c22 e2e: 全部迭代终态→占位 DONE', phFin && phFin.status === 'DONE', phFin && phFin.status)
+    } else {
+      check('c22 e2e: registerWorkflowToolsPreset 不可导入（跳过工具级）', true)
+    }
+  }
+}
+
+
 
 // ── 用例 1：合法串行工作流（llm-task + loop + quality-gate） ───────────────
 const WF_OK = `
@@ -1655,6 +2000,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase20()
     // ── 用例 21：items 结构化提取（Iter-26）──
     await runCase21()
+    // ── 用例 22：运行时 items 展开（Iter-26R）──
+    await runCase22()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

@@ -30,7 +30,8 @@
 已完成: …（同上）… → Iter-22 ✅ → Iter-SUBA ✅ → **Iter-23 ✅（2026-09-02 关闭：方向 A 手工停会话=权威停止，host v0.12.0/client v0.6.0，git 39ee656→15108af 已推送，总结 iter23-report.md）**
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
-当前:   **Iter-26R 运行时 items 展开（待启动，动工前先确认设计）**。Iter-26 items 结构化提取已关闭（2026-09-02，报告 `iter26-report.md`：host v0.15.0，349 单测，GUI 三组验收通过；两轮 GUI 反馈落地=inputs 物化进实例/编排 agent 挂 bash/备份递归/占位注入 'empty'）。**边界（拍板）：本迭代 items=启动时刻已存在文件；同运行上游 output 作 items 需运行时延迟展开→拆分 Iter-26R**。后续=**26R 运行时 items 展开（排 27 前）**→27 语义校验（含缺 processor 升错误级）/28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+已完成: …（同上）… → Iter-26 ✅ → **Iter-26R ✅（2026-09-03 关闭：运行时 items 展开，host v0.16.0，387 单测，GUI 验收通过；报告 iter26r-report.md，设计 iter26r-design.md）**
+ 当前:   **Iter-27 语义校验（待启动，动工前先确认设计）**。后续=28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -62,7 +63,7 @@
 | **24** | **预定义目录与安装布局**（块1，R1-R4 地基） | 全局预定义目录（`~/.dsh/workflow-agent/`，templates/skills/samples/docs）+ 插件启动物化内建模板与内建技能（升级同名覆盖）+ 相对路径两级解析链（workspace 优先→预定义兜底）+ /wf/templates 源切预定义目录 | 空白工作区下拉建 default-demo 全程跑通（技能来自预定义目录）；既有工作区 workspace 同名优先不回归 | — |
 | **25** | **数据流显性化（参数传递地基）**（块1） | begin/start/status 返回展开后 inputs/outputs（修契约漂移，persona 对齐）+ 目录变量 `${workspace}/${wf_dir}/${skills}/${skill_dir}` 展开期注入 + 派发附技能目录来源行 + 门禁拿 inputs+outputs（R16）+ processor/gateChecker 可选（**D4 修正：校验挂创建关口**，create 返回 warnings 不拦截；运行时 persona 护栏报告） | 工具返回可见 inputs/outputs 绝对路径；integrate 子会话 prompt 真实出现 analysis 输入；缺 processor 创建返回 warnings 且实例可存可启 | 24 |
 | **26** | **items 结构化提取**（块1） | `items-format` 显式声明+扩展名推断+行文本兼容；markdown 列表/表格行、JSON/YAML 数组/并列对象提取器；`${item}` ID→名称→顺序编号默认语义 + `${item.字段}` 标量注入；空提取→占位迭代；reset 备份后清空 output | 三种格式各跑通 loop+concurrent（items-demo 模板）；对象 item 路径注入正确；旧行文本零改动可跑；✅ **完成**（2026-09-02 GUI 三组验收，host v0.15.0 / 349 单测） | 25 |
-| **26R** | **运行时 items 展开**（块1，自 26 拆分） | 上游任务 output 作 items 的**延迟展开**：loop/concurrent 组占位节点（依赖就绪时读 items 展开 N 迭代，运行期动态插入任务表）+ 组完成语义 + 下游 `depends-on: [组id]` 引用修正（现架构迭代 id=`组id/item`，组 id 无对应任务节点，潜伏缺口一并修）+ DAG 晚现节点渲染 | 同运行 collect→output/module-list.md→loop 端到端；组依赖下游正确等待组完成 | 26 |
+| **26R** | **运行时 items 展开**（块1，自 26 拆分） | 上游任务 output 作 items 的**延迟展开**：loop/concurrent 组占位节点（依赖就绪时读 items 展开 N 迭代，运行期动态插入任务表）+ 组完成语义 + 下游 `depends-on: [组id]` 引用修正（现架构迭代 id=`组id/item`，组 id 无对应任务节点，潜伏缺口一并修）+ DAG 晚现节点渲染 | 同运行 collect→output/module-list.md→loop 端到端；组依赖下游正确等待组完成 | ✅ **完成**（2026-09-03 GUI 验收，host v0.16.0 / 387 单测） | 26 |
 | **27** | **语义校验**（块1，R8/R12） | workflow_validate：技能存在性（两级）/输入存在性（workspace 或上游 outputs）/上下游 outputs↔inputs 衔接/dependsOn 闭环无环/items 文件可解析；挂 create（警告）与 start（拦截）关口；结构化错误清单 | default-demo 破坏用例逐项报错可读；完好定义零误报 | 24、25 |
 | **28** | **实例编辑前台**（块2，R5-R6/R9/R11/R14） | DAG 页下方双栏（左任务列表/右属性表单；顶部实例级名称+总并发+params）+ 技能下拉（扫预定义 skills/，名称+版本）+ 保存写回 instance.yaml 并触发校验 + RUNNING 可见禁用 | 新建实例→补缺 processor 任务→校验过→启动跑通；编辑不污染预定义目录 | 24、27 |
 | **29** | **实例管理子页签 + 归档/下载/删除**（块4，R23-R25） | 实例管理子页签（活动/归档两段；名称/ID/状态/孤儿/进度/创建时间）+ 归档全链（archive 目录+manifest，沿用 lifecycle-design §5/§7）+ zip 多选打一个包下载 + 删除（RUNNING 禁删+自动解绑+丢失提醒） | 全生命周期：创建→运行→停止→归档→两段列表→下载 zip 完整→删除后解绑消失 | 独立（可提前/并行） |
@@ -681,6 +682,7 @@ workflow_list → 列出所有实例 + 状态
 ---
 
 ### Iter-26R: 运行时 items 展开（块1，自 Iter-26 拆分）
+**状态**：✅ **完成**（2026-09-03 GUI 验收，host v0.16.0，387 单测，报告 iter26r-report.md，设计 iter26r-design.md）
 
 **背景（2026-09-02 拍板）**：loop/concurrent 迭代节点在启动/重置时刻一次展开定死——"同一次运行内上游任务 output 作 items"（如 collect 产出清单→下游 loop 按清单展开）需**运行期延迟展开**，属架构级变更，拆分独立迭代，排 Iter-27 之前。Iter-26 的提取器/注入语义/`${wf_dir}` 拼写为其复用地基。
 
@@ -745,7 +747,7 @@ workflow_list → 列出所有实例 + 状态
 **依赖关系**：
 
 ```
-24 预定义目录 ──→ 25 数据流显性化 ──→ 26 items 提取 ──→ 26R 运行时 items 展开
+24 预定义目录 ──→ 25 数据流显性化 ──→ 26 items 提取 ──→ 26R 运行时 items 展开 ✅
       │                │                                  │
       │                └──────────→ 27 语义校验 ──→ 28 编辑前台
       │                                                  

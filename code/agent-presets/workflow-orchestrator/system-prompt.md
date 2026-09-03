@@ -167,12 +167,16 @@
   `.json`/`.jsonl`→json、`.yaml`/`.yml`→yaml、其余行文本）。markdown 提取表格（列名=字段名）
   优先于列表；JSON/YAML 支持数组与并列对象（并列 map 的键=条目 `id`）。对象 item 的注入：
   `${item变量}` 默认取 id/编号字段 → 名称字段 → 顺序编号；`${item变量.字段}` 取单层标量
-  （如 `outputs: ["output/${item.slug}.md"]`）。items 文件须在**启动时刻已存在**（workspace
-  文件，或 start/reset 路径经 `${wf_dir}` 引用实例目录内已有文件）；同一次运行内"上游任务
-  运行时才产出清单→下游 loop"尚不支持（Iter-26R 延迟展开）。
+  （如 `outputs: ["output/${item.slug}.md"]`）。
+- **运行时 items 延迟展开（Iter-26R）**：当 loop/concurrent 的 items 文件在启动时刻不存在、
+  且该路径是上游任务的 outputs 之一时，该组在启动时显示为**占位节点**（面板显示虚线琥珀色
+  组框"⏳ 等待 items..."）。上游任务完成后，Host 自动读取 items 文件并展开为 N 个迭代——
+  编排 Agent **无需手动干预**，按 `workflow_status` 返回的 `runnable` 列表正常派发即可。
+  下游 `depends-on: [组id]` 的任务在**组内全部迭代完成**后才放行（loop 串行全部 DONE、
+  concurrent 全部终态）。也可用 `deferred: true` 显式声明延迟（覆盖自动检测）。
 - **空 items 占位迭代**：items 文件提取结果为空（空文件/markdown 无表格无列表/空数组）时，
   该 loop/concurrent 展开为 **1 个占位迭代**（ID `<组id>/empty`、名称含"items 为空"），
-  `${item变量}` 注入空串。此时照常派发 subagent，**技能按 items 为空处理**（如写出空白
+  `${item变量}` 注入 `'empty'`。此时照常派发 subagent，**技能按 items 为空处理**（如写出空白
   输出文件保持数据链完整）；不要把它当作错误，也无需向用户追问。
 - **reset 产物清理（Iter-26）**：`workflow_reset` 返回含 `pendingCleanup`（`cmd` 字段为
   rm+mkdir 命令）——**必须立即用 bash 执行该命令**清空 output/logs（产物已归档备份至

@@ -270,6 +270,8 @@ function normalizeTask(t, idx, errors, warnings) {
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
     // Iter-26：items-format 显式声明（可选；缺省按扩展名推断，lines 兜底）
     base.itemsFormat = validateItemsFormat(t, id, errors)
+    // Iter-26R：deferred 显式声明（可选；缺省自动检测上游产出）
+    base.deferred = t.deferred === true || t.deferred === 'true' ? true : (t.deferred === false || t.deferred === 'false' ? false : null)
     // 循环错误处理策略
     const onError = t['on-error'] || 'break'
     if (['break', 'continue'].indexOf(onError) === -1) {
@@ -284,6 +286,8 @@ function normalizeTask(t, idx, errors, warnings) {
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
     base.itemsFormat = validateItemsFormat(t, id, errors)
+    // Iter-26R：deferred 显式声明（同 loop）
+    base.deferred = t.deferred === true || t.deferred === 'true' ? true : (t.deferred === false || t.deferred === 'false' ? false : null)
     base.maxConcurrency = t['max-concurrency'] != null ? Number(t['max-concurrency']) : null
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null

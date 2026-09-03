@@ -461,6 +461,8 @@ function normalizeTask(t, idx, errors, warnings) {
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
     // Iter-26：items-format 显式声明（可选；缺省按扩展名推断，lines 兜底）
     base.itemsFormat = validateItemsFormat(t, id, errors)
+    // Iter-26R：deferred 显式声明（可选；缺省自动检测上游产出）
+    base.deferred = t.deferred === true || t.deferred === 'true' ? true : (t.deferred === false || t.deferred === 'false' ? false : null)
     // 循环错误处理策略
     const onError = t['on-error'] || 'break'
     if (['break', 'continue'].indexOf(onError) === -1) {
@@ -475,6 +477,8 @@ function normalizeTask(t, idx, errors, warnings) {
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
     base.itemVar = t['item-var'] != null ? String(t['item-var']) : 'item'
     base.itemsFormat = validateItemsFormat(t, id, errors)
+    // Iter-26R：deferred 显式声明（同 loop）
+    base.deferred = t.deferred === true || t.deferred === 'true' ? true : (t.deferred === false || t.deferred === 'false' ? false : null)
     base.maxConcurrency = t['max-concurrency'] != null ? Number(t['max-concurrency']) : null
   } else if (type === 'human-decision') {
     base.prompt = t.prompt != null ? String(t.prompt) : null
@@ -809,6 +813,9 @@ function taskSnapshot(t) {
     _concurrentItem: t._concurrentItem || null,
     _concurrentIndex: t._concurrentIndex ?? 0,
     _concurrentMax: t._concurrentMax || null,
+    // Iter-26R：延迟展开标记（Client DAG 渲染占位组框）
+    _pendingItems: t._pendingItems || null,
+    _expanded: t._expanded || false,
   }
 }
 
@@ -895,6 +902,9 @@ function createWorkflowEngine() {
       _concurrentItem: t._concurrentItem || null,
       _concurrentIndex: t._concurrentIndex ?? 0,
       _concurrentMax: t._concurrentMax || null,
+      // Iter-26R：延迟展开标记（占位任务携带展开元数据）
+      _pendingItems: t._pendingItems || null,
+      _expanded: t._expanded || false,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -916,7 +926,36 @@ function createWorkflowEngine() {
     if (t.status === E_TASK_STATUS.FAILED && t._onError === 'break') {
       processBreak(taskId)
     }
+    // Iter-26R（D3）：组完成检测——迭代状态变更后检查同组是否全部终态
+    // 全部终态（DONE/SKIPPED/FAILED）→ 占位节点 DONE → 下游放行
+    checkGroupCompletion(t)
     return true
+  }
+
+  // Iter-26R（D3）：组完成检测纯函数
+  // 检查任务所属组（_loopGroup 或 _concurrentGroup）的所有迭代是否终态；
+  // 是则把对应占位节点（id=组id，_pendingItems 非空）置 DONE。
+  // 用户拍板：foreach/concurrent 必须内部 items 全部处理完成才认为整个任务完成。
+  function checkGroupCompletion(task) {
+    const groupId = task._loopGroup || task._concurrentGroup
+    if (!groupId) return
+    // 只检查迭代节点（id 含 '/'），不检查占位节点自身
+    if (task.id === groupId) return
+    const groupTasks = state.tasks.filter((t) =>
+      (t._loopGroup === groupId || t._concurrentGroup === groupId) && t.id !== groupId
+    )
+    if (groupTasks.length === 0) return
+    const allTerminal = groupTasks.every((t) =>
+      t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED || t.status === E_TASK_STATUS.FAILED
+    )
+    if (!allTerminal) return
+    // 全部终态 → 占位节点 DONE
+    const placeholder = state.tasks.find((t) => t.id === groupId && t._pendingItems)
+    if (placeholder && placeholder.status !== E_TASK_STATUS.DONE) {
+      placeholder.status = E_TASK_STATUS.DONE
+      placeholder._expanded = true // 确保标记已展开（即使空提取）
+      log('GROUP', '组 "' + groupId + '" 全部迭代终态，占位节点 DONE')
+    }
   }
 
   // Iter-7：返回就绪任务列表（dependsOn 全部完成 + 受 max-concurrency 限制）。
@@ -946,6 +985,9 @@ function createWorkflowEngine() {
     for (const t of state.tasks) {
       if (result.length >= slots) break
       if (t.status !== E_TASK_STATUS.PENDING) continue
+      // Iter-26R：占位节点（延迟组哨兵）永不派发——它由 expandDeferredGroups 消费，
+      // 出现在 runnable 会让编排侧拿到 processor=null 的假任务（GUI 验收实证泄漏）。
+      if (t._pendingItems) continue
       const deps = t.dependsOn || []
       if (!deps.every((d) => finished.has(d))) continue
       // Iter-8：并发组组级槽位——组内 RUNNING + 该组已列入 result 的数量 >= 组级 max 则不放行
@@ -1062,6 +1104,9 @@ function createWorkflowEngine() {
       _concurrentItem: t._concurrentItem || null,
       _concurrentIndex: t._concurrentIndex ?? 0,
       _concurrentMax: t._concurrentMax || null,
+      // Iter-26R：延迟展开标记（旧 state.json 无此字段 → null/false，兼容）
+      _pendingItems: t._pendingItems || null,
+      _expanded: t._expanded || false,
     })) : []
     state.updatedAt = Date.now()
   }
@@ -1126,6 +1171,76 @@ function createWorkflowEngine() {
     return snapshot()
   }
 
+  // ── Iter-26R（D4）：延迟展开前置检查 ─────────────────────────────────────
+  // 遍历 PENDING 占位节点（_pendingItems 非空 && !_expanded）→ 前驱全 DONE/SKIPPED
+  // → 调用 expandFn 展开 → 插入任务数组 → 占位标 _expanded=true。
+  // expandFn(placeholder, _pendingItems) → 返回展开后的迭代任务数组。
+  // 展开后继续正常计算 runnable（新迭代可能立即就绪）。
+  // fs/dirCtx 参数保留供未来扩展（当前 expandFn 内部处理文件读取）。
+  async function expandDeferredGroups(expandFn) {
+    if (!expandFn || typeof expandFn !== 'function') return
+    const finished = new Set(
+      state.tasks
+        .filter((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
+        .map((t) => t.id)
+    )
+    // 找出所有待展开的占位节点
+    const placeholders = state.tasks.filter((t) =>
+      t._pendingItems && !t._expanded && t.status === E_TASK_STATUS.PENDING
+    )
+    for (const ph of placeholders) {
+      const deps = ph.dependsOn || []
+      if (!deps.every((d) => finished.has(d))) continue
+      // 前驱全完成 → 展开
+      try {
+        const iterations = await expandFn(ph, ph._pendingItems)
+        if (!Array.isArray(iterations)) continue
+        // 插入迭代到占位节点之后
+        const idx = state.tasks.indexOf(ph)
+        if (idx === -1) continue
+        // 为每个迭代添加引擎级字段（status、gateResult 等）
+        const engineIterations = iterations.map((it) => ({
+          id: it.id,
+          name: it.name,
+          type: it.type || 'llm-task',
+          dependsOn: it.dependsOn || [],
+          status: E_TASK_STATUS.PENDING,
+          processor: it.processor || null,
+          skillDir: it.skillDir || null,
+          inputs: it.inputs || {},
+          outputs: it.outputs || [],
+          gate: it.gate || null,
+          gateResult: null,
+          retries: 0,
+          _loopGroup: it._loopGroup || null,
+          _loopItem: it._loopItem || null,
+          _loopIndex: it._loopIndex ?? 0,
+          _loopGroupName: it._loopGroupName || null,
+          _onError: it._onError || null,
+          _concurrentGroup: it._concurrentGroup || null,
+          _concurrentGroupName: it._concurrentGroupName || null,
+          _concurrentItem: it._concurrentItem || null,
+          _concurrentIndex: it._concurrentIndex ?? 0,
+          _concurrentMax: it._concurrentMax || null,
+          _pendingItems: null,
+          _expanded: false,
+        }))
+        // 插入到占位节点之后
+        state.tasks.splice(idx + 1, 0, ...engineIterations)
+        ph._expanded = true
+        log('EXPAND', '占位 "' + ph.id + '" 展开为 ' + engineIterations.length + ' 个迭代')
+        // 空提取（0 迭代）→ 占位直接 DONE（D3：全部终态→组完成）
+        if (engineIterations.length === 0) {
+          ph.status = E_TASK_STATUS.DONE
+          log('GROUP', '组 "' + ph.id + '" 空提取，占位节点直接 DONE')
+        }
+      } catch (e) {
+        // 展开失败（如 items 文件仍不存在）→ 占位保持 PENDING，记录错误
+        log('EXPAND-ERROR', '占位 "' + ph.id + '" 展开失败: ' + (e.message || e))
+      }
+    }
+  }
+
   return {
     begin,
     clear,
@@ -1133,6 +1248,7 @@ function createWorkflowEngine() {
     updateTask,
     processBreak,
     getRunnableTasks,
+    expandDeferredGroups, // Iter-26R
     setStage,
     setGateResult,
     setRetries,
@@ -2250,6 +2366,30 @@ name: integrator-checker
 不要输出 PASS/FAIL 之外的结论性内容。
 `,
   },
+  {
+    id: 'list-collector',
+    content: `---
+name: list-collector
+---
+# 技能：收集模块清单（list-collector）
+
+## 任务目标
+生成一份模块清单文件，供下游 loop/concurrent 任务作为 items 源（Iter-26R 运行时 items 展开演示）。
+
+## 执行步骤
+1. 编写一个纯文本文件，每行一个模块名（无空行、无注释）。
+2. 固定包含以下 3 个模块（每行一个）：
+   - \`login\`
+   - \`order\`
+   - \`payment\`
+
+## 输出要求
+- 将清单写入任务参数中指定的输出文件（outputs 列出的绝对路径）。
+- 文件格式：纯文本，每行一个模块名，共 3 行。
+- 完成后回复一行：\`DONE: <输出路径>\`。
+- 不要创建输出路径之外的任何文件。
+`,
+  },
 ]
 
 // 骨架 README（仅缺失时写，不覆盖用户内容）
@@ -2594,6 +2734,7 @@ async function expandDefinition(fs, src, params, dirCtx) {
     if (t.itemsFromRaw) {
       const itemsRel = injectParams(t.itemsFromRaw, p, dirVars)
       out.itemsFrom = await resolveRefPath(fs, src.workspaceRoot, itemsRel, src.predefinedRoot)
+      out.itemsRel = itemsRel // Iter-26R：解析前注入值（延迟组保留相对形态，finalizeDataflow 以实例目录绝对化）
       out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
       out.itemVar = t.itemVar
     }
@@ -2603,22 +2744,115 @@ async function expandDefinition(fs, src, params, dirCtx) {
   const finalTasks = []
   for (const t of tasks) {
     if (t.type === 'loop' && t.itemsFrom && t.itemVar) {
-      const text = await fs.readText(await fs.resolve(t.itemsFrom))
-      // Iter-26：结构化提取（items-format 声明 > 扩展名推断 > lines）；空提取 → [] 占位迭代
-      const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
-      const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p, dirVars)
-      finalTasks.push(...iterations)
+      // Iter-26R：延迟展开判定——items 文件不存在时检查是否应延迟
+      const itemsExist = await fileExists(fs, t.itemsFrom)
+      const shouldDefer = !itemsExist && shouldDeferExpansion(t, tasks)
+      if (shouldDefer) {
+        // 产出占位任务（id=组id，_pendingItems 携带展开元数据）
+        finalTasks.push(buildPlaceholderTask(t, p, dirVars))
+      } else {
+        const text = await fs.readText(await fs.resolve(t.itemsFrom))
+        // Iter-26：结构化提取（items-format 声明 > 扩展名推断 > lines）；空提取 → [] 占位迭代
+        const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
+        const iterations = await expandLoopTasks(fs, t, items, t.itemVar, p, dirVars)
+        finalTasks.push(...iterations)
+      }
     } else if (t.type === 'concurrent' && t.itemsFrom && t.itemVar) {
-      const text = await fs.readText(await fs.resolve(t.itemsFrom))
-      const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
-      const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p, dirVars)
-      finalTasks.push(...iterations)
+      // Iter-26R：延迟展开判定（同 loop）
+      const itemsExist = await fileExists(fs, t.itemsFrom)
+      const shouldDefer = !itemsExist && shouldDeferExpansion(t, tasks)
+      if (shouldDefer) {
+        finalTasks.push(buildPlaceholderTask(t, p, dirVars))
+      } else {
+        const text = await fs.readText(await fs.resolve(t.itemsFrom))
+        const items = E_extractItems(text, { format: t.itemsFormat || null, path: t.itemsFrom, taskId: t.id })
+        const iterations = await expandConcurrentTasks(fs, t, items, t.itemVar, p, dirVars)
+        finalTasks.push(...iterations)
+      }
     } else {
       finalTasks.push(t)
     }
   }
   parsed.tasks = finalTasks
   return parsed
+}
+
+// Iter-26R：文件存在性检查（纯函数，fs 可选）
+async function fileExists(fs, path) {
+  if (!fs || !path) return false
+  try {
+    const st = await fs.stat(await fs.resolve(path))
+    return !!st
+  } catch (e) { return false }
+}
+
+// Iter-26R：延迟展开判定（D1 混合方案）
+// 1. deferred=true 显式声明 → 延迟；deferred=false → 不延迟（报错）
+// 2. deferred=null（未声明）→ 自动检测：是否有上游任务 outputs 包含该路径
+// 匹配精度：itemsRel（解析前注入值，与 outputs 同为相对形态）精确匹配优先；
+// basename 兜底（一侧经 resolveRefPath 加了 workspaceRoot 前缀 / 用户混写绝对相对的场景）。
+function shouldDeferExpansion(task, allTasks) {
+  if (task.deferred === true) return true
+  if (task.deferred === false) return false
+  const rel = task.itemsRel || task.itemsFrom
+  if (!rel) return false
+  const base = rel.split('/').pop()
+  for (const t of allTasks) {
+    const outputs = t.outputs || []
+    for (const o of outputs) {
+      if (o === rel || o.split('/').pop() === base) return true
+    }
+  }
+  return false
+}
+
+// Iter-26R：构建占位任务（D2 占位=组完成哨兵）
+// id=组id，_pendingItems 携带展开元数据，_expanded=false。
+// 路径语义（GUI 验收修正）：items 文件由上游运行期产出、落在实例目录——
+//   相对 items-from → 保留相对形态 + itemsDeferred=true（finalizeDataflow 以实例目录绝对化，
+//   与上游 output 同基准）；绝对/~/items-from（含 ${wf_dir} 展开后）→ 直通保留，不标 deferred。
+// processor/gate 存第一遍已解析的绝对路径（占位不派发，字段本身置 null；展开时从 _pendingItems 取）。
+function buildPlaceholderTask(t, params, vars) {
+  const relDeferred = t.itemsRel && !isAbsoluteishPath(t.itemsRel)
+  const placeholder = {
+    id: t.id, // 占位 id=组 id（下游 depends-on:[组id] 天然工作）
+    name: (t.name || t.id) + '（等待 items）',
+    type: 'llm-task', // 占位不派发 subagent
+    dependsOn: t.dependsOn || [],
+    timeout: t.timeout || 600,
+    processor: null, // 占位不派发
+    inputs: injectInputsMap(t.inputsRaw || {}, params, vars),
+    outputs: injectArray(t.outputsRaw || [], params, vars),
+    gate: null,
+    // Iter-26R 运行时标记
+    _pendingItems: {
+      itemsFrom: relDeferred ? t.itemsRel : t.itemsFrom,
+      itemsDeferred: !!relDeferred, // true=相对形态待实例目录绝对化（finalizeDataflow 处理）
+      itemsFormat: t.itemsFormat || null,
+      itemVar: t.itemVar,
+      processor: t.processor || null, // 第一遍已解析的绝对路径（含 ${item} 时展开期按迭代二次注入）
+      processorRaw: t.processorRaw,
+      inputsRaw: t.inputsRaw || {},
+      outputsRaw: t.outputsRaw || [],
+      gate: t.gate || null,
+      onError: t.onError || 'break',
+      maxConcurrency: t.maxConcurrency || null,
+      taskType: t.type, // 'loop' | 'concurrent'
+    },
+    _expanded: false,
+    // 组元数据（DAG 组框渲染）
+    _loopGroup: t.type === 'loop' ? t.id : null,
+    _loopGroupName: t.type === 'loop' ? (t.name || t.id) : null,
+    _loopItem: null,
+    _loopIndex: 0,
+    _onError: t.type === 'loop' ? (t.onError || 'break') : null,
+    _concurrentGroup: t.type === 'concurrent' ? t.id : null,
+    _concurrentGroupName: t.type === 'concurrent' ? (t.name || t.id) : null,
+    _concurrentItem: null,
+    _concurrentIndex: 0,
+    _concurrentMax: t.type === 'concurrent' ? t.maxConcurrency : null,
+  }
+  return placeholder
 }
 
 // ── Iter-25 阶段2：数据流终态（R20 目录变量补全 + R15 显性化 + R21a skillDir）──
@@ -2653,10 +2887,17 @@ function finalizeDataflow(tasks, dirCtx) {
     const tvars = { ...baseVars }
     if (out.processor) tvars['skill_dir'] = parentDir(out.processor) || undefined
     out.inputs = injectInputsMap(out.inputs, {}, tvars)   // 先注入 ${wf_dir}/${skill_dir}
-    out.outputs = injectArray(out.outputs, {}, tvars)
+    out.outputs = injectArray(out.outputs || [], {}, tvars)
     if (wfDir) {                                          // 再对仍相对的值以实例目录为基准绝对化
       out.inputs = absolutizeInputsMap(out.inputs, wfDir)
       out.outputs = (out.outputs || []).map((x) => absolutizeDataflowPath(x, wfDir))
+    }
+    // Iter-26R：延迟组 items-from 同基准绝对化——itemsDeferred 标记的相对值以实例目录为基准，
+    // 与上游 output 落点一致（expandDefinition 时文件尚不存在，两级链解析落到 workspaceRoot 是错的）。
+    // 绝对路径（用户显式指定/解析已得）不标 deferred，直通保留。
+    if (out._pendingItems && out._pendingItems.itemsDeferred) {
+      if (wfDir) out._pendingItems.itemsFrom = absolutizeDataflowPath(out._pendingItems.itemsFrom, wfDir)
+      out._pendingItems.itemsDeferred = false
     }
     out.skillDir = tvars['skill_dir'] || null
     return out
@@ -2912,15 +3153,18 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   }
 
   // ── 每次工具调用解析绑定的引擎/存储（避免跨会话闭包串扰，多会话并行安全）──
+  // Iter-26R：返回值补 entry（实例条目，含 dir/meta）——workflow_status 的延迟展开
+  // 前置检查（expandDeferredGroups）需要 entry.dir 构造 expandFn；此前 b.entry 恒
+  // undefined 导致展开从未触发（GUI 验收实证）。
   async function bind(exec, args) {
     if (args && (args.statePath || args.workspaceRoot)) {
-      return { engine, storage, instanceId: null }
+      return { engine, storage, instanceId: null, entry: null }
     }
     if (registry) {
       const entry = await registry.forSession(exec)
-      if (entry) return { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId }
+      if (entry) return { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId, entry }
     }
-    return { engine, storage, instanceId: null }
+    return { engine, storage, instanceId: null, entry: null }
   }
 
   function withInstanceId(snapshot, b) {
@@ -3059,6 +3303,11 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (args.task && args.taskStatus) {
           b.engine.updateTask(String(args.task), { status: String(args.taskStatus) })
         }
+        // Iter-26R（D4）：延迟展开前置检查——占位节点前驱就绪时展开为迭代
+        if (b.entry) {
+          const expandFn = makeExpandFn(b.entry)
+          await b.engine.expandDeferredGroups(expandFn)
+        }
         const r = await b.storage.save()
         b.engine.setPersist(r)
         return withInstanceId(b.engine.snapshot(), b)
@@ -3090,6 +3339,59 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
     parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
     parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
     return parsed
+  }
+
+  // Iter-26R（D4）：延迟展开回调——占位节点前驱就绪时读 items 文件并展开为迭代数组
+  // 由 engine.expandDeferredGroups 调用；返回的迭代已含 processor/inputs/outputs 绝对路径。
+  // entry 参数：当前实例条目（提供 dir/wsRoot 上下文）。
+  function makeExpandFn(entry) {
+    const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
+    const instDir = entry.dir ? String(entry.dir).replace(/\/+$/, '') : ''
+    const dirVars = { wf_dir: instDir || undefined }
+    return async function expandDeferred(placeholder, pendingItems) {
+      if (!pendingItems || !pendingItems.itemsFrom) return []
+      // Iter-26R：itemsFrom 已由 finalizeDataflow 以实例目录绝对化（itemsDeferred 清标记）；
+      // 兜底——hydrate 的旧占位若仍是相对形态，以实例目录拼接（与 D1 基准一致）。
+      let itemsPath = String(pendingItems.itemsFrom)
+      if (!isAbsoluteishPath(itemsPath) && instDir) itemsPath = instDir + '/' + itemsPath
+      // 读 items 文件（可能仍不存在→readText 抛错→expandDeferredGroups catch 占位保持 PENDING）
+      const text = await fs.readText(await fs.resolve(itemsPath))
+      const items = E_extractItems(text, {
+        format: pendingItems.itemsFormat || null,
+        path: itemsPath,
+        taskId: placeholder.id,
+      })
+      // 构造临时任务对象（复用 expandLoop/ConcurrentTasks）
+      const tmpTask = {
+        id: placeholder.id,
+        name: placeholder.name,
+        type: pendingItems.taskType,
+        dependsOn: placeholder.dependsOn || [],
+        processorRaw: pendingItems.processorRaw,
+        inputsRaw: pendingItems.inputsRaw || {},
+        outputsRaw: pendingItems.outputsRaw || [],
+        gate: pendingItems.gate || null,
+        onError: pendingItems.onError || 'break',
+        maxConcurrency: pendingItems.maxConcurrency || null,
+        itemsFrom: itemsPath,
+        itemsFormat: pendingItems.itemsFormat || null,
+        itemVar: pendingItems.itemVar,
+      }
+      // processor 用占位中已解析的绝对路径（expandDefinition 第一遍 resolveRefPath 产物）；
+      // 含 ${item} 场景由 expandLoop/ConcurrentTasks 按迭代二次注入——与即时展开路径一致。
+      tmpTask.processor = pendingItems.processor
+        || (tmpTask.processorRaw ? await resolveRefPath(fs, wsRoot, tmpTask.processorRaw) : null)
+      // 展开（空提取 → []，由 expandDeferredGroups 处理占位 DONE）
+      let iterations = []
+      if (pendingItems.taskType === 'loop') {
+        iterations = await expandLoopTasks(fs, tmpTask, items, pendingItems.itemVar, {}, dirVars)
+      } else if (pendingItems.taskType === 'concurrent') {
+        iterations = await expandConcurrentTasks(fs, tmpTask, items, pendingItems.itemVar, {}, dirVars)
+      }
+      // Iter-26R：迭代 inputs/outputs 以实例目录为基准绝对化 + skillDir（与即时展开路径
+      // 的 finalizeDataflow 阶段2 同款；outputsRaw 是相对形态，注入 ${item} 后需同基准绝对化）
+      return finalizeDataflow(iterations, { wfDir: instDir })
+    }
   }
 
   // 条目是否有已落盘运行状态（一律以磁盘 state.json 为准，避免内存标记过期）
@@ -3714,6 +4016,40 @@ const BUILTIN_TEMPLATES = [
       '    inputs:',
       '      items: "samples/items/features.yaml"',
       '    outputs: ["output/yaml-conc/${feat.id}.md"]',
+      '',
+    ].join('\n'),
+  },
+  {
+    name: 'runtime-items-demo',
+    description: 'Iter-26R 运行时 items 展开演示：上游 collect 写清单 → 下游 loop 按清单展开（items 文件启动时不存在，运行期延迟展开）',
+    yaml: [
+      '# Iter-26R 运行时 items 展开演示',
+      '# 场景：上游 collect 任务写模块清单到 output/modules.txt，下游 loop 任务按清单展开为 N 个迭代',
+      '# 启动时 output/modules.txt 不存在 → analyze 显示为占位组框（虚线琥珀色"⏳ 等待 items..."）',
+      '# collect 完成后 → Host 自动读取 items 文件 → 占位展开为 3 个迭代 → 逐个执行 → 全部完成',
+      '# 验收要点：面板观察占位组框→展开→迭代执行→下游放行',
+      'name: runtime-items-demo',
+      'version: "1.0"',
+      'description: "Iter-26R 运行时 items 展开：collect→loop 延迟展开"',
+      'tasks:',
+      '  - id: collect',
+      '    name: "收集模块清单"',
+      '    processor: skills/list-collector/SKILL.md',
+      '    outputs:',
+      '      - output/modules.txt',
+      '',
+      '  - id: analyze',
+      '    name: "逐模块分析"',
+      '    type: loop',
+      '    processor: skills/integrator/SKILL.md',
+      '    items-from: output/modules.txt',
+      '    item-var: mod',
+      '    inputs:',
+      '      spec: "output/modules.txt"',
+      '    outputs:',
+      '      - "output/analyze/${mod}.md"',
+      '    depends-on:',
+      '      - collect',
       '',
     ].join('\n'),
   },

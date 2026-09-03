@@ -140,6 +140,30 @@ name: integrator-checker
 不要输出 PASS/FAIL 之外的结论性内容。
 `,
   },
+  {
+    id: 'list-collector',
+    content: `---
+name: list-collector
+---
+# 技能：收集模块清单（list-collector）
+
+## 任务目标
+生成一份模块清单文件，供下游 loop/concurrent 任务作为 items 源（Iter-26R 运行时 items 展开演示）。
+
+## 执行步骤
+1. 编写一个纯文本文件，每行一个模块名（无空行、无注释）。
+2. 固定包含以下 3 个模块（每行一个）：
+   - \`login\`
+   - \`order\`
+   - \`payment\`
+
+## 输出要求
+- 将清单写入任务参数中指定的输出文件（outputs 列出的绝对路径）。
+- 文件格式：纯文本，每行一个模块名，共 3 行。
+- 完成后回复一行：\`DONE: <输出路径>\`。
+- 不要创建输出路径之外的任何文件。
+`,
+  },
 ]
 
 // 骨架 README（仅缺失时写，不覆盖用户内容）

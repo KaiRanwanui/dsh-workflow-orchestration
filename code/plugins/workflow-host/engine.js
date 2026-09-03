@@ -41,6 +41,9 @@ function taskSnapshot(t) {
     _concurrentItem: t._concurrentItem || null,
     _concurrentIndex: t._concurrentIndex ?? 0,
     _concurrentMax: t._concurrentMax || null,
+    // Iter-26R：延迟展开标记（Client DAG 渲染占位组框）
+    _pendingItems: t._pendingItems || null,
+    _expanded: t._expanded || false,
   }
 }
 
@@ -127,6 +130,9 @@ function createWorkflowEngine() {
       _concurrentItem: t._concurrentItem || null,
       _concurrentIndex: t._concurrentIndex ?? 0,
       _concurrentMax: t._concurrentMax || null,
+      // Iter-26R：延迟展开标记（占位任务携带展开元数据）
+      _pendingItems: t._pendingItems || null,
+      _expanded: t._expanded || false,
     }))
     state.updatedAt = Date.now()
     log('BEGIN', '工作流 "' + state.workflow + '" 已初始化，tasks=' + state.tasks.length)
@@ -148,7 +154,36 @@ function createWorkflowEngine() {
     if (t.status === E_TASK_STATUS.FAILED && t._onError === 'break') {
       processBreak(taskId)
     }
+    // Iter-26R（D3）：组完成检测——迭代状态变更后检查同组是否全部终态
+    // 全部终态（DONE/SKIPPED/FAILED）→ 占位节点 DONE → 下游放行
+    checkGroupCompletion(t)
     return true
+  }
+
+  // Iter-26R（D3）：组完成检测纯函数
+  // 检查任务所属组（_loopGroup 或 _concurrentGroup）的所有迭代是否终态；
+  // 是则把对应占位节点（id=组id，_pendingItems 非空）置 DONE。
+  // 用户拍板：foreach/concurrent 必须内部 items 全部处理完成才认为整个任务完成。
+  function checkGroupCompletion(task) {
+    const groupId = task._loopGroup || task._concurrentGroup
+    if (!groupId) return
+    // 只检查迭代节点（id 含 '/'），不检查占位节点自身
+    if (task.id === groupId) return
+    const groupTasks = state.tasks.filter((t) =>
+      (t._loopGroup === groupId || t._concurrentGroup === groupId) && t.id !== groupId
+    )
+    if (groupTasks.length === 0) return
+    const allTerminal = groupTasks.every((t) =>
+      t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED || t.status === E_TASK_STATUS.FAILED
+    )
+    if (!allTerminal) return
+    // 全部终态 → 占位节点 DONE
+    const placeholder = state.tasks.find((t) => t.id === groupId && t._pendingItems)
+    if (placeholder && placeholder.status !== E_TASK_STATUS.DONE) {
+      placeholder.status = E_TASK_STATUS.DONE
+      placeholder._expanded = true // 确保标记已展开（即使空提取）
+      log('GROUP', '组 "' + groupId + '" 全部迭代终态，占位节点 DONE')
+    }
   }
 
   // Iter-7：返回就绪任务列表（dependsOn 全部完成 + 受 max-concurrency 限制）。
@@ -178,6 +213,9 @@ function createWorkflowEngine() {
     for (const t of state.tasks) {
       if (result.length >= slots) break
       if (t.status !== E_TASK_STATUS.PENDING) continue
+      // Iter-26R：占位节点（延迟组哨兵）永不派发——它由 expandDeferredGroups 消费，
+      // 出现在 runnable 会让编排侧拿到 processor=null 的假任务（GUI 验收实证泄漏）。
+      if (t._pendingItems) continue
       const deps = t.dependsOn || []
       if (!deps.every((d) => finished.has(d))) continue
       // Iter-8：并发组组级槽位——组内 RUNNING + 该组已列入 result 的数量 >= 组级 max 则不放行
@@ -294,6 +332,9 @@ function createWorkflowEngine() {
       _concurrentItem: t._concurrentItem || null,
       _concurrentIndex: t._concurrentIndex ?? 0,
       _concurrentMax: t._concurrentMax || null,
+      // Iter-26R：延迟展开标记（旧 state.json 无此字段 → null/false，兼容）
+      _pendingItems: t._pendingItems || null,
+      _expanded: t._expanded || false,
     })) : []
     state.updatedAt = Date.now()
   }
@@ -358,6 +399,76 @@ function createWorkflowEngine() {
     return snapshot()
   }
 
+  // ── Iter-26R（D4）：延迟展开前置检查 ─────────────────────────────────────
+  // 遍历 PENDING 占位节点（_pendingItems 非空 && !_expanded）→ 前驱全 DONE/SKIPPED
+  // → 调用 expandFn 展开 → 插入任务数组 → 占位标 _expanded=true。
+  // expandFn(placeholder, _pendingItems) → 返回展开后的迭代任务数组。
+  // 展开后继续正常计算 runnable（新迭代可能立即就绪）。
+  // fs/dirCtx 参数保留供未来扩展（当前 expandFn 内部处理文件读取）。
+  async function expandDeferredGroups(expandFn) {
+    if (!expandFn || typeof expandFn !== 'function') return
+    const finished = new Set(
+      state.tasks
+        .filter((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
+        .map((t) => t.id)
+    )
+    // 找出所有待展开的占位节点
+    const placeholders = state.tasks.filter((t) =>
+      t._pendingItems && !t._expanded && t.status === E_TASK_STATUS.PENDING
+    )
+    for (const ph of placeholders) {
+      const deps = ph.dependsOn || []
+      if (!deps.every((d) => finished.has(d))) continue
+      // 前驱全完成 → 展开
+      try {
+        const iterations = await expandFn(ph, ph._pendingItems)
+        if (!Array.isArray(iterations)) continue
+        // 插入迭代到占位节点之后
+        const idx = state.tasks.indexOf(ph)
+        if (idx === -1) continue
+        // 为每个迭代添加引擎级字段（status、gateResult 等）
+        const engineIterations = iterations.map((it) => ({
+          id: it.id,
+          name: it.name,
+          type: it.type || 'llm-task',
+          dependsOn: it.dependsOn || [],
+          status: E_TASK_STATUS.PENDING,
+          processor: it.processor || null,
+          skillDir: it.skillDir || null,
+          inputs: it.inputs || {},
+          outputs: it.outputs || [],
+          gate: it.gate || null,
+          gateResult: null,
+          retries: 0,
+          _loopGroup: it._loopGroup || null,
+          _loopItem: it._loopItem || null,
+          _loopIndex: it._loopIndex ?? 0,
+          _loopGroupName: it._loopGroupName || null,
+          _onError: it._onError || null,
+          _concurrentGroup: it._concurrentGroup || null,
+          _concurrentGroupName: it._concurrentGroupName || null,
+          _concurrentItem: it._concurrentItem || null,
+          _concurrentIndex: it._concurrentIndex ?? 0,
+          _concurrentMax: it._concurrentMax || null,
+          _pendingItems: null,
+          _expanded: false,
+        }))
+        // 插入到占位节点之后
+        state.tasks.splice(idx + 1, 0, ...engineIterations)
+        ph._expanded = true
+        log('EXPAND', '占位 "' + ph.id + '" 展开为 ' + engineIterations.length + ' 个迭代')
+        // 空提取（0 迭代）→ 占位直接 DONE（D3：全部终态→组完成）
+        if (engineIterations.length === 0) {
+          ph.status = E_TASK_STATUS.DONE
+          log('GROUP', '组 "' + ph.id + '" 空提取，占位节点直接 DONE')
+        }
+      } catch (e) {
+        // 展开失败（如 items 文件仍不存在）→ 占位保持 PENDING，记录错误
+        log('EXPAND-ERROR', '占位 "' + ph.id + '" 展开失败: ' + (e.message || e))
+      }
+    }
+  }
+
   return {
     begin,
     clear,
@@ -365,6 +476,7 @@ function createWorkflowEngine() {
     updateTask,
     processBreak,
     getRunnableTasks,
+    expandDeferredGroups, // Iter-26R
     setStage,
     setGateResult,
     setRetries,
