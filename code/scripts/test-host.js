@@ -749,7 +749,7 @@ async function runCase16() {
 // ── 用例 18：预定义目录物化（Iter-24）──
 async function runCase18() {
   console.log('［用例 18］预定义目录物化 — 技能/模板/骨架幂等覆盖 + 根定位')
-  const { BUILTIN_SKILLS, detectPredefinedRoot, materializeBuiltinAssets } = require('../plugins/workflow-host/builtin-skills.js')
+  const { BUILTIN_SKILLS, BUILTIN_TEMPLATE_FILES, detectPredefinedRoot, materializeBuiltinAssets } = require('../plugins/workflow-host/builtin-skills.js')
   const { files, fs: mockFs } = makeMockFs()
 
   // 1) 根定位：DSH_HOME 优先，缺省 HOME/.dsh
@@ -774,19 +774,23 @@ async function runCase18() {
   check('c18 物化: ok', r.ok === true)
   check('c18 物化: 根路径回传', r.root === detectPredefinedRoot())
   check('c18 物化: 技能 5 个全写', BUILTIN_SKILLS.every((s) => r.written.indexOf('skills/' + s.id + '/SKILL.md') >= 0))
-  check('c18 物化: 模板写入', r.written.indexOf('templates/tpl-a.yaml') >= 0 && r.written.indexOf('templates/tpl-b.yaml') >= 0)
+  // Iter-27a：模板写子目录布局 templates/<name>/<name>.yaml
+  check('c18 物化: 模板写入（子目录布局）', r.written.indexOf('templates/tpl-a/tpl-a.yaml') >= 0 && r.written.indexOf('templates/tpl-b/tpl-b.yaml') >= 0)
   check('c18 物化: 骨架 README 写出', r.written.indexOf('samples/README.md') >= 0 && r.written.indexOf('docs/README.md') >= 0)
   const skillPath = r.root + '/skills/deep-analysis/SKILL.md'
   check('c18 技能: 内容含 frontmatter name', String(files.get(skillPath)).startsWith('---\nname: deep-analysis\n---'))
   check('c18 技能: 正文原样保留', String(files.get(skillPath)).indexOf('## 任务目标') > 0)
+  // Iter-27a：items-demo 静态文件工作副本迁入模板子目录 + templates README（子目录布局说明）
+  check('c18 物化: items-demo 静态文件迁入模板子目录', BUILTIN_TEMPLATE_FILES.every((f) => r.written.indexOf(f.path) >= 0), JSON.stringify(r.written))
+  check('c18 物化: templates/README.md 写出（子目录布局说明）', r.written.indexOf('templates/README.md') >= 0 && String(files.get(r.root + '/templates/README.md')).indexOf('子目录') >= 0)
 
   // 3) 幂等覆盖：改写模板/技能后再物化 → 覆盖回规范内容；用户 README 不被覆盖
-  files.set(r.root + '/templates/tpl-a.yaml', 'name: user-edited\n')
+  files.set(r.root + '/templates/tpl-a/tpl-a.yaml', 'name: user-edited\n')
   files.set(r.root + '/skills/spec-writer/SKILL.md', 'user edited\n')
   files.set(r.root + '/samples/README.md', 'user custom samples readme\n')
   const r2 = await materializeBuiltinAssets(mockFs, templates)
   check('c18 幂等: ok', r2.ok === true)
-  check('c18 幂等: 模板覆盖回规范内容', files.get(r.root + '/templates/tpl-a.yaml') === 'name: tpl-a\n')
+  check('c18 幂等: 模板覆盖回规范内容', files.get(r.root + '/templates/tpl-a/tpl-a.yaml') === 'name: tpl-a\n')
   check('c18 幂等: 技能覆盖回规范内容', String(files.get(r.root + '/skills/spec-writer/SKILL.md')).startsWith('---\nname: spec-writer\n---'))
   check('c18 幂等: 用户 samples/README.md 不被覆盖', files.get(r.root + '/samples/README.md') === 'user custom samples readme\n')
 
@@ -1315,7 +1319,8 @@ async function runCase21() {
   {
     const mjsSrc = require('fs').readFileSync(require('path').join(__dirname, '../agent-presets/workflow-orchestrator/workflow-host.mjs'), 'utf8')
     check('c21 items-demo: 模板登记（BUILTIN_TEMPLATES，items 源=samples 两级链）', mjsSrc.includes("name: 'items-demo'") && mjsSrc.includes('samples/items/modules-table.md') && mjsSrc.includes('${mod.slug}'))
-    check('c21 items-demo: 六任务带 inputs（GUI 验收修复：integrator 技能需要输入；name 无 ${} 字面）', (mjsSrc.match(/items: "samples\/items\//g) || []).length === 6 && !mjsSrc.includes('并发归档（${mod.slug}'))
+    // Iter-27a：模板静态引用迁入子目录（inputs/items/），参考件仍在 samples/
+    check('c21 items-demo: 六任务带 inputs（Iter-27a 引用改 inputs/items/；name 无 ${} 字面）', (mjsSrc.match(/items: "inputs\/items\//g) || []).length === 6 && !mjsSrc.includes('并发归档（${mod.slug}'))
     check('c21 items-demo: 样例物化登记（BUILTIN_SAMPLES 四格式）', mjsSrc.includes('samples/items/modules.md') && mjsSrc.includes('samples/items/components.json') && mjsSrc.includes('samples/items/features.yaml'))
   }
 }
@@ -1664,7 +1669,133 @@ tasks:
   }
 }
 
+// ── 用例 23：预定义目录结构与实例化（Iter-27a：路径分类/解析锚点/子目录物化/1:1 复制/扫描下钻）──
+async function runCase23() {
+  console.log('［用例 23］Iter-27a — workflow-paths + 子目录物化 + create 1:1 复制 + 模板扫描下钻')
+  const { isAbsoluteishPath, isVariablePath, resolveStaticPath, presetTemplateDirOf } = require('../shared/workflow-paths.js')
+  const { expandDefinition, copyTemplateStaticTree, registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { createInstanceRegistry } = require('../plugins/workflow-host/instance-store.js')
+  const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
+  const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
 
+  // 1) 路径分类（Linux 字符串区分：/ 开头=绝对；~=伪绝对；盘符=Windows 形态；其余=相对）
+  check('c23 分类: / 开头=绝对', isAbsoluteishPath('/abs/x.md') === true)
+  check('c23 分类: ~/ 伪绝对', isAbsoluteishPath('~/x.md') === true)
+  check('c23 分类: Windows 盘符', isAbsoluteishPath('C:\\x.md') === true)
+  check('c23 分类: 相对（裸名/./../）', isAbsoluteishPath('rel/x.md') === false && isAbsoluteishPath('./x.md') === false && isAbsoluteishPath('../x.md') === false)
+  check('c23 分类: 变量路径判定', isVariablePath('${p}/x.md') === true && isVariablePath('plain/x.md') === false)
+
+  // 2) presetTemplateDirOf：子目录形态命中；平铺 legacy/外部路径 → null
+  check('c23 预置: 子目录形态命中', presetTemplateDirOf('/pre/templates/demo/demo.yaml', '/pre') === '/pre/templates/demo')
+  check('c23 预置: 平铺 legacy → null', presetTemplateDirOf('/pre/templates/demo.yaml', '/pre') === null)
+  check('c23 预置: 外部路径 → null', presetTemplateDirOf('/ws/wfs/x.yaml', '/pre') === null)
+  check('c23 预置: 空/缺根 → null', presetTemplateDirOf(null, '/pre') === null && presetTemplateDirOf('/pre/templates/a/b.yaml', null) === null)
+  check('c23 预置: 反斜杠归一', presetTemplateDirOf('\\pre\\templates\\demo\\demo.yaml', '/pre') === '/pre/templates/demo')
+
+  // 3) resolveStaticPath：优先目录（实例目录→defDir）→ 两级链 → 回退第一优先
+  const { fs: fsA } = makeMockFs()
+  fsA.writeText({ path: '/inst/inputs/items/m.md' }, '- inst\n')
+  fsA.writeText({ path: '/pre/templates/demo/inputs/items/m.md' }, '- tpl\n')
+  fsA.writeText({ path: '/ws/inputs/items/m.md' }, '- ws\n')
+  fsA.writeText({ path: '/pre/inputs/items/m.md' }, '- pre\n')
+  check('c23 链: 实例目录最优先（1:1 副本命中）', await resolveStaticPath(fsA, 'inputs/items/m.md', { priorityDirs: ['/inst', '/pre/templates/demo'], workspaceRoot: '/ws', predefinedRoot: '/pre' }) === '/inst/inputs/items/m.md')
+  check('c23 链: defDir 次优先（实例副本缺失自愈）', await resolveStaticPath(fsA, 'inputs/items/m.md', { priorityDirs: [null, '/pre/templates/demo'], workspaceRoot: '/ws', predefinedRoot: '/pre' }) === '/pre/templates/demo/inputs/items/m.md')
+  check('c23 链: 无优先目录 → 两级链 workspace 赢', await resolveStaticPath(fsA, 'inputs/items/m.md', { priorityDirs: [], workspaceRoot: '/ws', predefinedRoot: '/pre' }) === '/ws/inputs/items/m.md')
+  check('c23 链: 全 miss 回退第一优先目录', await resolveStaticPath(fsA, 'inputs/items/missing.md', { priorityDirs: ['/inst'], workspaceRoot: '/ws', predefinedRoot: '/pre' }) === '/inst/inputs/items/missing.md')
+  check('c23 链: 绝对直通', await resolveStaticPath(fsA, '/abs/x.md', { priorityDirs: ['/inst'], workspaceRoot: '/ws', predefinedRoot: '/pre' }) === '/abs/x.md')
+
+  // 4) copyTemplateStaticTree：递归 1:1 复制 + 定义文件排除 + 结构保留 + 失败收集
+  const { fs: fsB, files: filesB } = makeMockFs()
+  fsB.writeText({ path: '/pre/templates/demo/demo.yaml' }, 'name: demo\n')
+  fsB.writeText({ path: '/pre/templates/demo/inputs/items/a.md' }, '- A\n')
+  fsB.writeText({ path: '/pre/templates/demo/inputs/notes/b.md' }, '- B\n')
+  const cp = await copyTemplateStaticTree(fsB, '/pre/templates/demo', '/inst2', '/pre/templates/demo/demo.yaml')
+  check('c23 复制: 两静态文件复制（定义文件排除）', cp.copied === 2 && cp.failed.length === 0, JSON.stringify(cp))
+  check('c23 复制: 相对结构保留', filesB.get('/inst2/inputs/items/a.md') === '- A\n' && filesB.get('/inst2/inputs/notes/b.md') === '- B\n')
+  check('c23 复制: 定义文件未复制', filesB.get('/inst2/demo.yaml') === undefined)
+  const cpBad = await copyTemplateStaticTree(null, '/pre/templates/none', '/inst3', null)
+  check('c23 失败: fs 缺失 → failed 收集不抛异常', cpBad.copied === 0 && cpBad.failed.length > 0, JSON.stringify(cpBad))
+  // mock listDir 对缺失目录返回 []（真实 DSH fs 会抛错）→ failed 收集语义单列：
+  const cpMissing = await copyTemplateStaticTree({ listDir: async () => { throw new Error('enoent') }, resolve: async (p) => ({ path: p }), readText: async () => { throw new Error('enoent') }, writeText: async () => {} }, '/pre/templates/none', '/inst3', null)
+  check('c23 失败: listDir 抛错 → failed 收集不抛异常', cpMissing.copied === 0 && cpMissing.failed.length === 1 && cpMissing.failed[0].includes('enoent'), JSON.stringify(cpMissing))
+
+  // 5) expandDefinition 集成：items-from 静态解析实例目录优先 → defDir → 两级链
+  const wfItems = [
+    'name: t23',
+    'version: "1"',
+    'tasks:',
+    '  - id: grp',
+    '    name: G',
+    '    type: loop',
+    '    processor: /x/SKILL.md',
+    '    items-from: inputs/items/m.md',
+    '    item-var: it',
+    '    outputs: ["output/g/${it}.md"]',
+  ].join('\n')
+  const pInst = await expandDefinition(fsA, { text: wfItems, workspaceRoot: '/ws', predefinedRoot: '/pre' }, {}, { wfDir: '/inst' })
+  check('c23 展开: 实例副本优先（inst 内容命中）', pInst.tasks.length === 1 && pInst.tasks[0].id === 'grp/inst', JSON.stringify(pInst.tasks.map(t => t.id)))
+  const pTpl = await expandDefinition(fsA, { text: wfItems, workspaceRoot: '/ws', predefinedRoot: '/pre' }, {}, { defDir: '/pre/templates/demo' })
+  check('c23 展开: defDir 锚点（begin 预置路径）', pTpl.tasks.length === 1 && pTpl.tasks[0].id === 'grp/tpl', JSON.stringify(pTpl.tasks.map(t => t.id)))
+
+  // 6) workflow_create 工具级：预置 workflowPath → 实例目录 1:1 复制 + presetCopy 回传
+  const { fs: fsC, files: filesC } = makeMockFs()
+  process.env.DSH_HOME = '/ws/t23-pre'
+  fsC.writeText({ path: '/ws/t23-pre/workflow-agent/templates/demo/demo.yaml' }, 'name: demo\nversion: "1"\ntasks:\n  - id: a\n    name: A\n    processor: /x/SKILL.md\n    outputs: ["output/a.md"]\n')
+  fsC.writeText({ path: '/ws/t23-pre/workflow-agent/templates/demo/inputs/items/x.md' }, '- alpha\n')
+  const registered = {}
+  const ctxC = {
+    tools: { register(t) { registered[t.name] = t } },
+    get(n) {
+      if (n === 'fs') return fsC
+      return undefined
+    },
+  }
+  const registry = createInstanceRegistry(ctxC, { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(ctxC, null, null, registry)
+  const exec = { agent: { session: { header: { id: 'sess-23', cwd: '/ws/t23' } } } }
+  const rc = await registered.workflow_create.execute({ workflowPath: '/ws/t23-pre/workflow-agent/templates/demo/demo.yaml' }, exec)
+  const instDir = '/ws/t23/.workflow-agent/instances/' + rc.instanceId
+  check('c23 create: CREATED + 1:1 复制回传', rc.phase === 'CREATED' && rc.presetCopy && rc.presetCopy.copied === 1 && rc.presetCopy.failed.length === 0, JSON.stringify(rc.presetCopy))
+  check('c23 create: 静态文件已入实例（相对结构保留）', filesC.get(instDir + '/inputs/items/x.md') === '- alpha\n')
+  check('c23 create: 定义文件写为 instance.yaml（不重复复制）', filesC.has(instDir + '/instance.yaml') && filesC.get(instDir + '/demo.yaml') === undefined)
+  // 非 preset 来源（workspace YAML）→ 不复制、无 presetCopy 标记（1:1 守卫：换会话创建）
+  fsC.writeText({ path: '/ws/t23/wfs/plain.yaml' }, 'name: plain\nversion: "1"\ntasks:\n  - id: a\n    name: A\n    processor: /x/SKILL.md\n    outputs: ["output/a.md"]\n')
+  const rp = await registered.workflow_create.execute({ workflowPath: '/ws/t23/wfs/plain.yaml' }, { agent: { session: { header: { id: 'sess-23b', cwd: '/ws/t23' } } } })
+  check('c23 create: 非 preset 来源不复制（presetCopy=null）', rp.phase === 'CREATED' && rp.presetCopy === null, JSON.stringify({ p: rp.presetCopy, e: rp.error, ph: rp.phase }))
+  delete process.env.DSH_HOME
+
+  // 7) /wf/templates 扫描下钻：子目录优先、平铺兼容、同名子目录赢
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const { fs: fsD } = makeMockFs()
+  let routeHandler = null
+  const ctxD = {
+    get(name) {
+      if (name === 'webServer') return { register(def) { routeHandler = def.handler } }
+      if (name === 'fs') return fsD
+      return undefined
+    },
+  }
+  mjs.registerWebRoutes(ctxD, createInstanceRegistry(ctxD, { createWorkflowEngine, createWorkflowStorage }))
+  const callD = (method, url) => new Promise((resolve, reject) => {
+    const res = { code: 0, payload: '', writeHead(c) { this.code = c }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
+    const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+  process.env.DSH_HOME = '/ws/t23-pre2'
+  fsD.writeText({ path: '/ws/t23-pre2/workflow-agent/templates/sub-tpl/sub-tpl.yaml' }, 'name: sub-tpl\n')
+  fsD.writeText({ path: '/ws/t23-pre2/workflow-agent/templates/sub-tpl/inputs/x.md' }, 'X')
+  fsD.writeText({ path: '/ws/t23-pre2/workflow-agent/templates/old-tpl.yaml' }, 'name: old-tpl\n')
+  fsD.writeText({ path: '/ws/t23-pre2/workflow-agent/templates/dup/dup.yaml' }, 'name: from-subdir\n')
+  fsD.writeText({ path: '/ws/t23-pre2/workflow-agent/templates/dup.yaml' }, 'name: from-flat\n')
+  const rt = await callD('GET', '/wf/templates')
+  const byName = {}
+  for (const x of rt.body.predefined) byName[x.name] = x
+  check('c23 扫描: 子目录模板下钻命中', !!byName['sub-tpl'] && byName['sub-tpl'].path === '/ws/t23-pre2/workflow-agent/templates/sub-tpl/sub-tpl.yaml', JSON.stringify(byName['sub-tpl'] || {}))
+  check('c23 扫描: 平铺 legacy 仍列出', !!byName['old-tpl'] && byName['old-tpl'].path.endsWith('/templates/old-tpl.yaml'))
+  check('c23 扫描: 同名去重子目录赢', !!byName['dup'] && byName['dup'].path.endsWith('/dup/dup.yaml') && byName['dup'].yaml.includes('from-subdir'), JSON.stringify(byName['dup'] || {}))
+  check('c23 扫描: 子目录非 YAML 文件不混入', rt.body.predefined.every((x) => !/inputs/.test(x.path)))
+  process.env.DSH_HOME = undefined
+}
 
 // ── 用例 1：合法串行工作流（llm-task + loop + quality-gate） ───────────────
 const WF_OK = `
@@ -2002,6 +2133,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase21()
     // ── 用例 22：运行时 items 展开（Iter-26R）──
     await runCase22()
+    // ── 用例 23：预定义目录结构与实例化（Iter-27a）──
+    await runCase23()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

@@ -31,7 +31,8 @@
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
 已完成: …（同上）… → Iter-26 ✅ → **Iter-26R ✅（2026-09-03 关闭：运行时 items 展开，host v0.16.0，387 单测，GUI 验收通过；报告 iter26r-report.md，设计 iter26r-design.md）**
- 当前:   **Iter-27 语义校验（待启动，动工前先确认设计）**。后续=28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移），host v0.17.0，419 单测，用户 GUI 验收通过（四内建模板开箱即用），报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
+ 当前:   **Iter-27b 语义校验（设计已确认 iter27-design.md，待启动）**。后续=28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -697,13 +698,30 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-27: 语义校验（块1，R8/R12）
+### Iter-27a ✅: 预定义目录结构与实例化（块1，2026-09-03 关闭，自 Iter-27 拆分）
 
-> **Iter-25 验证输入（2026-09-02 用户表态，开工设计确认时优先处理）**：任务缺 processor 是**需要修改的问题，不能告警放过**——Iter-25 的 create warnings 属临时方案；本迭代须把"缺 processor / gate 缺 checker"升级为**错误级**（结构化错误清单，非警告），并设计实例级"定义不完整/需修改"显性标示（前台展示归 Iter-28）。与 D4（校验挂创建/编辑关口）及 R11（创建后编辑补全）的协调——创建是否拦截 vs 派生状态标示+启动闸门——开工前设计确认拍板。
+> 详案：`iter27-design.md`（拆分版 27a/27b；四轮拍板落档：①create 硬拦截→27b、②items 双语境、Q1 create 物化、Q2 目录结构调整、Q3 绝对豁免收窄至实例层、四点静态文件模型）。
+
+**交付**：
+1. templates **子目录自包含布局**（每工作流一子目录=发布单元；`<名>.yaml`+`inputs/...`，与实例目录同构镜像；samples/ 转纯参考不被引用；templates/README.md 迁移说明）；
+2. **create/begin 1:1 复制**（四点②③）：preset 来源整目录复制进实例（定义写 instance.yaml、静态文件原样保结构、相对引用零调整、文本 only），返回 `presetCopy={copied,failed}`；
+3. **静态 items 解析链**：实例目录（1:1 副本）→ defDir（模板子目录自愈）→ 两级链兜底；技能恒两级链（R4）；
+4. **绝对路径=用户指定产物**（四点④）：create 经 params 注入或人工调整，引擎直通保持原样；
+5. `/wf/templates` 扫描下钻子目录+平铺 legacy 兼容（同名**子目录赢**）；`/wf/create` 200 补 presetCopy；
+6. 共享模块 `workflow-paths.js`（isAbsoluteishPath 前移+isVariablePath+resolveStaticPath+presetTemplateDirOf）；persona 契约同步（模板布局/1:1 复制/绝对路径入口）。
+
+**验证**：单测 387→419 全绿（用例 23 共 28 项+用例 18 增补；修 1 真 bug：start 路径 src 缺 predefinedRoot 致预定义端探测丢失）；GUI 验收（用户）：**四内建模板开箱即用通过**。
+**总结**：`iter27a-report.md`（host v0.17.0，client 不动）。
+
+---
+
+### Iter-27b: 语义校验（块1，R8/R12）
+
+> **设计已确认（2026-09-03，iter27-design.md 拆分版四轮拍板）**：缺 processor / gate 缺 checker 升**错误级**结构化清单；**拍板①=create 硬拦截**（begin 同拒；start/resume 闸门保留防创建后退化+legacy；reset 回传不拦；R11 流程变化=Iter-28 前补全=修定义/补技能后重新 create）；**拍板②=items 双语境**（preset 定义语境=模板子目录锚点+禁字面绝对路径 E-ABS-IN-DEF；实例语境=实例目录 1:1 副本优先→绝对直通）。
 
 **交付**：
 1. 校验引擎（Host 端纯函数 + 工具暴露 `workflow_validate`）：技能存在性（预定义+workspace 两级）、输入文件存在性（workspace 或上游 outputs）、**上下游 outputs↔inputs 衔接**、dependsOn 闭环/无环、items 文件存在与格式可解析、缺 processor 给出必须指定的错误；
-2. 挂 create / start 关口（start 拦截，create 警告不拦截——结合上方用户表态，create 关口的拦截/标示语义需重新确认）；
+2. 挂 create / start 关口（**create/begin 硬拦截**，start/resume 实时闸门，reset 回传不拦——拍板①=B）；
 3. 校验结果**结构化返回**（错误清单：任务/字段/原因），供编辑界面与面板展示。
 
 **验收要点**：default-demo 破坏性用例（删技能/删上游输出/造环/缺 processor）逐项报出可读错误；完好定义零误报。

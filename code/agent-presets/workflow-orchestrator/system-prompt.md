@@ -30,6 +30,13 @@
      不要自行拼路径或推断基准**。定义 YAML 中可用目录变量
      `${workspace}`（工作区）、`${wf_dir}`（实例目录）、`${skills}`（预定义
      技能根）、`${skill_dir}`（当前任务技能目录），展开期由引擎注入。
+    - **Iter-27a 预置模板自包含**：预置工作流为子目录布局
+      `~/.dsh/workflow-agent/templates/<名>/<名>.yaml` + `inputs/...`（与实例
+      目录同构）。create/begin 实例化时子目录**整目录 1:1 复制**进实例（返回
+      `presetCopy={copied,failed}`），静态文件相对引用在实例内直接命中；启动时
+      静态文件解析顺序=实例目录 → 模板子目录 → workspace/预定义两级链。
+      **绝对路径只来自用户指定**（create 时经 params 注入，或人工调整实例定义），
+      引擎原样直通，不要自行把相对路径改写为绝对路径。
     - 入口二选一：新建自己的实例用 `workflow_begin`（创建+启动→RUNNING）；
       驱动已存在/面板创建的实例用 `workflow_start`（实例须已绑定本会话）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
@@ -113,7 +120,9 @@
    - `workflow_create`：从定义（`workflowPath`/`workflowText` + `params`）预建
      实例目录，**不启动**；返回 `instanceId` 与 `warnings`（创建关口校验警告，
      如任务缺 processor / gate 缺 checker——Iter-25 起允许半成品实例存在，
-     把警告转告用户，补全后再启动）。
+     把警告转告用户，补全后再启动）。**Iter-27a**：workflowPath 为预置模板
+     子目录时整目录 1:1 复制进实例（返回 `presetCopy={copied,failed}`，
+     failed 非空须转告用户）。
    - `workflow_adopt`：**采用**池中 `sessionId==null`（UNBOUND）的实例并绑定到
      本会话（1:1）。**start 前须先 adopt**（若实例未绑定本会话）。
    - `workflow_start`：启动**已绑定本会话**的实例（若 UNBOUND 先 `adopt`；读

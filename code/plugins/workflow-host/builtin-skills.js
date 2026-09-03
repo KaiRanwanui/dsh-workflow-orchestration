@@ -5,8 +5,9 @@
 //   - BUILTIN_SKILLS：随插件发布的内建技能（正文自 workflow_test_ws/skills/
 //     收编，头部补 frontmatter name）。物化到预定义目录 skills/<id>/SKILL.md。
 //   - materializeBuiltinAssets：插件启动时把内建资产物化到
-//     ${DSH_HOME:-$HOME/.dsh}/workflow-agent/（templates/skills 同名直接覆盖，
-//     samples/docs 骨架 README 仅缺失时写）。幂等；任一文件失败不阻断其余。
+//     ${DSH_HOME:-$HOME/.dsh}/workflow-agent/（Iter-27a 起模板写子目录布局
+//     templates/<name>/<name>.yaml+静态文件；技能同名直接覆盖；README 仅缺失时写）。
+//     幂等；任一文件失败不阻断其余。
 //   - 本函数同时承担探针职责：Host fs 服务对用户主目录的写能力以
 //     journalctl 中 '[workflow-agent] materialize' 日志为证（Iter-24 步骤 0）。
 // ============================================================================
@@ -167,11 +168,15 @@ name: list-collector
 ]
 
 // 骨架 README（仅缺失时写，不覆盖用户内容）
-const SAMPLES_README = `# 样例工作流（samples）
+// Iter-27a：samples 转纯参考性质——仅供阅读的样例，不再被任何预置定义引用
+//（items 样例已迁入 templates/items-demo/inputs/items/，原文件保留作参考）。
+const SAMPLES_README = `# 样例文件（samples）
 
-本目录存放样例工作流定义（YAML）。放入本目录的 .yaml 文件会与预定义模板一起出现在创建下拉列表中。
+本目录为**纯参考性质**：仅供人阅读的样例文件，不被任何预置工作流定义引用，
+工作流实例也不会使用本目录文件（Iter-27a 起）。
 
-items/ 子目录存放 items 结构化提取样例（Iter-26），被内建模板 items-demo 经两级解析链引用：
+items/ 子目录为 items 结构化提取参考样例（Iter-26 引入；Iter-27a 起工作副本
+迁入 templates/items-demo/inputs/items/，此处保留作参考）：
 - modules.md（markdown 列表，标量 item）
 - modules-table.md（markdown 表格，对象 item，列名=字段名）
 - components.json（JSON 数组，对象 item）
@@ -183,7 +188,27 @@ const DOCS_README = `# 工作流文档（docs）
 本目录存放工作流与技能的使用说明文档。
 `
 
-// ── Iter-26：items 提取样例（samples/items/，同名覆盖物化；items-demo 模板引用）──
+// Iter-27a：templates 子目录布局说明（仅缺失时写；含平铺 legacy 迁移说明——
+// fs 服务无删除 API，旧平铺 <name>.yaml 残留靠本说明引导手工清理；下拉扫描已
+// 同名去重且子目录赢，残留不影响功能）。
+const TEMPLATES_README = `# 预定义工作流模板（templates）
+
+Iter-27a 起每个预定义工作流占用**一个子目录**（自包含发布单元，互不影响发布）：
+
+    templates/<工作流名>/
+      <工作流名>.yaml    # 工作流定义（实例化时写为实例 instance.yaml）
+      inputs/...         # 该工作流引用的静态文件（与实例目录同名同位）
+      output/            # 可有可无（运行期产出目录，预置通常不放）
+
+- 子目录结构与实例目录同构：create 实例化时整目录 1:1 复制，相对引用路径零调整。
+- 静态文件引用必须使用**相对路径**且落在本子目录内（语义校验 Iter-27b 起强制；
+  绝对路径仅限 create 时用户经 params 指定或人工调整实例定义时使用）。
+- 兼容：平铺的 templates/<名>.yaml（旧布局）仍会列出；与子目录同名时**子目录赢**。
+  旧平铺文件建议手工删除（本系统 fs 服务无删除 API，不做自动清理）。
+`
+
+// ── Iter-26：items 提取样例（samples/items/ 参考件；Iter-27a 起工作副本迁入
+// templates/items-demo/inputs/items/，由 BUILTIN_TEMPLATE_FILES 物化）────────
 // 四文件覆盖四种提取形态：markdown 列表（标量）/ markdown 表格（对象）/ JSON 数组（对象）/
 // YAML 并列 map（键=id、标量值=name）。
 const BUILTIN_SAMPLES = [
@@ -225,6 +250,28 @@ const BUILTIN_SAMPLES = [
       'export: 导出服务',
       '',
     ].join('\n'),
+  },
+]
+
+// ── Iter-27a：items-demo 模板静态文件（templates/items-demo/inputs/items/）──
+// 模板子目录=实例级同构镜像：create 1:1 复制后实例相对引用零调整、自包含。
+// 与 BUILTIN_SAMPLES 内容一致（工作副本 vs 参考件）。
+const BUILTIN_TEMPLATE_FILES = [
+  {
+    path: 'templates/items-demo/inputs/items/modules.md',
+    content: BUILTIN_SAMPLES[0].content,
+  },
+  {
+    path: 'templates/items-demo/inputs/items/modules-table.md',
+    content: BUILTIN_SAMPLES[1].content,
+  },
+  {
+    path: 'templates/items-demo/inputs/items/components.json',
+    content: BUILTIN_SAMPLES[2].content,
+  },
+  {
+    path: 'templates/items-demo/inputs/items/features.yaml',
+    content: BUILTIN_SAMPLES[3].content,
   },
 ]
 
@@ -279,26 +326,33 @@ async function materializeBuiltinAssets(fs, templates) {
   for (const d of ['templates', 'skills', 'samples', 'docs']) {
     await ensureFile(d + '/.gitkeep', '', true)
   }
-  // 内建模板（同名直接覆盖——升级策略 A2，版本控制未来交 git 仓）
+  // 内建模板（Iter-27a 子目录布局：templates/<name>/<name>.yaml；同名直接覆盖
+  // ——升级策略 A2，版本控制未来交 git 仓）
   for (const t of (templates || [])) {
     if (!t || !t.name || !t.yaml) continue
-    await ensureFile('templates/' + t.name + '.yaml', t.yaml, true)
+    await ensureFile('templates/' + t.name + '/' + t.name + '.yaml', t.yaml, true)
   }
   // 内建技能（同名直接覆盖）
   for (const s of BUILTIN_SKILLS) {
     await ensureFile('skills/' + s.id + '/SKILL.md', s.content, true)
   }
-  // samples/docs 骨架 README（仅缺失时写）
+  // templates/samples/docs 骨架 README（仅缺失时写；templates README 含子目录布局与迁移说明）
+  await ensureFile('templates/README.md', TEMPLATES_README, false)
   await ensureFile('samples/README.md', SAMPLES_README, false)
   await ensureFile('docs/README.md', DOCS_README, false)
-  // Iter-26：items 提取样例（同名覆盖，升级可更新内容）
+  // Iter-26：items 提取参考样例（samples/items/ 参考件，同名覆盖，升级可更新内容）
   for (const s of BUILTIN_SAMPLES) {
     await ensureFile(s.path, s.content, true)
+  }
+  // Iter-27a：items-demo 模板静态文件（templates/items-demo/inputs/items/ 工作副本，
+  // 同名覆盖；与参考件内容一致）
+  for (const f of BUILTIN_TEMPLATE_FILES) {
+    await ensureFile(f.path, f.content, true)
   }
 
   return { ok: failed.length === 0, root, written, failed }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { BUILTIN_SKILLS, BUILTIN_SAMPLES, SAMPLES_README, DOCS_README, detectPredefinedRoot, materializeBuiltinAssets }
+  module.exports = { BUILTIN_SKILLS, BUILTIN_SAMPLES, BUILTIN_TEMPLATE_FILES, SAMPLES_README, DOCS_README, TEMPLATES_README, detectPredefinedRoot, materializeBuiltinAssets }
 }

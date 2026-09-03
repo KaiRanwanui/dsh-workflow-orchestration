@@ -20,18 +20,28 @@ function parentDir(p) {
 // Iter-24：两级解析链——workspace 根优先 → 预定义根兜底；绝对路径直通；
 // 双 miss 回退 workspace 相对路径（保持既有报错语义：下游 readText 按完整路径报缺失）。
 // 替换旧"定义文件目录逐级上探"（resolveRel）。predefinedRoot 参数供测试注入。
-function isAbsoluteishPath(p) {
-  return /^([a-zA-Z]:[\\/]|\/|~\/|~$)/.test(p)
-}
+// Iter-27a：isAbsoluteishPath 前移至 shared/workflow-paths.js（单一事实源；
+// mjs 内联同作用域直呼，此处经 E_ 别名引用；Node 独立测试 require 兜底）。
+// 同批前移：isVariablePath / resolveStaticPath / presetTemplateDirOf。
+let E_isAbsoluteishPath = typeof isAbsoluteishPath !== 'undefined' ? isAbsoluteishPath
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').isAbsoluteishPath : null)
+let E_resolveStaticPath = typeof resolveStaticPath !== 'undefined' ? resolveStaticPath
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').resolveStaticPath : null)
+let E_presetTemplateDirOf = typeof presetTemplateDirOf !== 'undefined' ? presetTemplateDirOf
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').presetTemplateDirOf : null)
 // Node 直测（require 本源文件）时 builtin-skills 不在同作用域——require 兜底；
 // mjs 内联作用域有 detectPredefinedRoot（builtin-skills section 在前），走 typeof 分支。
 function fallbackPredefinedRoot() {
   try { return require('../workflow-host/builtin-skills').detectPredefinedRoot() } catch (e) { return null }
 }
+// Iter-27a：预定义根定位统一入口（mjs 内联走同作用域 detectPredefinedRoot，Node 直测走 require 兜底）
+function detectPredefinedRootSafe() {
+  return (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null) || fallbackPredefinedRoot()
+}
 
 async function resolveRefPath(fs, workspaceRoot, rel, predefinedRoot) {
   const p = String(rel || '').replace(/\\/g, '/')
-  if (isAbsoluteishPath(p)) return p
+  if (E_isAbsoluteishPath(p)) return p
   const roots = []
   const ws = workspaceRoot ? String(workspaceRoot).replace(/\/+$/, '') : ''
   if (ws) roots.push(ws)
@@ -171,6 +181,9 @@ function definitionError(errors) {
 // begin 一步式路径不传（实例目录尚不存在，展开后 createBind）。items 读取改经
 // extractItems（items-format 声明/扩展名推断/四格式/空提取→[]，空提取由
 // expandLoop/ConcurrentTasks 产出占位迭代）。
+// Iter-27a：dirCtx 增 defDir（预置模板子目录锚点）——begin 传 workflowPath 所在
+// 子目录；start/reset 传 meta.sourcePath 推导值。静态 items 解析优先序=
+// 实例目录（1:1 副本）→ defDir → 两级链。
 async function expandDefinition(fs, src, params, dirCtx) {
   const parsed = E_parseWorkflow(src.text)
   if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
@@ -201,7 +214,15 @@ async function expandDefinition(fs, src, params, dirCtx) {
     }
     if (t.itemsFromRaw) {
       const itemsRel = injectParams(t.itemsFromRaw, p, dirVars)
-      out.itemsFrom = await resolveRefPath(fs, src.workspaceRoot, itemsRel, src.predefinedRoot)
+      // Iter-27a（四点②③）：静态 items 解析链——优先目录（实例目录 → defDir 模板
+      // 子目录）→ 两级链兜底；技能不动（processor/gate 恒两级链，R4 不物化）。
+      // predefinedRoot 兜底 detectPredefinedRoot（与 resolveRefPath 同语义：start 路径
+      // 的 src 不带 predefinedRoot，不能因此丢掉预定义端探测）。
+      out.itemsFrom = await E_resolveStaticPath(fs, itemsRel, {
+        priorityDirs: [dirCtx && dirCtx.wfDir, dirCtx && dirCtx.defDir],
+        workspaceRoot: src.workspaceRoot,
+        predefinedRoot: src.predefinedRoot || detectPredefinedRootSafe(),
+      })
       out.itemsRel = itemsRel // Iter-26R：解析前注入值（延迟组保留相对形态，finalizeDataflow 以实例目录绝对化）
       out.itemsFromRaw = t.itemsFromRaw // 保留原始值供循环展开二次注入
       out.itemVar = t.itemVar
@@ -281,7 +302,7 @@ function shouldDeferExpansion(task, allTasks) {
 //   与上游 output 同基准）；绝对/~/items-from（含 ${wf_dir} 展开后）→ 直通保留，不标 deferred。
 // processor/gate 存第一遍已解析的绝对路径（占位不派发，字段本身置 null；展开时从 _pendingItems 取）。
 function buildPlaceholderTask(t, params, vars) {
-  const relDeferred = t.itemsRel && !isAbsoluteishPath(t.itemsRel)
+  const relDeferred = t.itemsRel && !E_isAbsoluteishPath(t.itemsRel)
   const placeholder = {
     id: t.id, // 占位 id=组 id（下游 depends-on:[组id] 天然工作）
     name: (t.name || t.id) + '（等待 items）',
@@ -334,7 +355,7 @@ function buildPlaceholderTask(t, params, vars) {
 // 纯函数：返回新数组，不修改入参。
 function absolutizeDataflowPath(p, base) {
   const s = String(p || '')
-  if (!s || isAbsoluteishPath(s) || s.indexOf('${') !== -1) return s
+  if (!s || E_isAbsoluteishPath(s) || s.indexOf('${') !== -1) return s
   return base ? String(base).replace(/\/+$/, '') + '/' + s : s
 }
 
@@ -407,6 +428,50 @@ async function materializeInputsIntoInstance(fs, tasks, dir, wsRoot) {
     }
   }
   return tasks
+}
+
+// ── Iter-27a（四点②③）：预置模板子目录静态树 1:1 复制 ─────────────────────
+// 模板子目录=实例级同构镜像：create/begin 实例化时把子目录内全部文件原样复制进
+// 实例目录（相对结构保留 → 相对引用路径零调整，实例自包含）。
+// fs 服务只有 readText/writeText/listDir/stat（无 copy/delete）→ 递归文本复制，
+// **仅文本文件**（二进制不支持，沿 Iter-26 物化先例声明局限）。
+// excludePath：定义文件本身（已写为实例 instance.yaml），跳过。
+// listDir 条目 type==='file' 视为文件，其余（'directory'/'dir'）下钻。
+// 返回 { copied: number, failed: string[] }；单文件失败不阻断其余。
+async function copyTemplateStaticTree(fs, srcDir, destDir, excludePath) {
+  const copied = []
+  const failed = []
+  if (!fs || !srcDir || !destDir) return { copied: 0, failed: ['fs/srcDir/destDir 缺失'] }
+  const src = String(srcDir).replace(/\/+$/, '')
+  const dest = String(destDir).replace(/\/+$/, '')
+  const excl = excludePath ? String(excludePath).replace(/\\/g, '/') : null
+  async function walk(dir) {
+    let entries = []
+    try {
+      entries = await fs.listDir(await fs.resolve(dir))
+    } catch (e) {
+      failed.push(dir + ': ' + (e && e.message ? e.message : String(e)))
+      return
+    }
+    for (const en of (entries || [])) {
+      if (!en || !en.name) continue
+      const child = dir + '/' + en.name
+      if (excl && child.replace(/\\/g, '/') === excl) continue
+      if (en.type === 'file') {
+        try {
+          const text = await fs.readText(await fs.resolve(child))
+          await fs.writeText(await fs.resolve(dest + child.slice(src.length)), text)
+          copied.push(child.slice(src.length + 1))
+        } catch (e) {
+          failed.push(child + ': ' + (e && e.message ? e.message : String(e)))
+        }
+      } else {
+        await walk(child)
+      }
+    }
+  }
+  await walk(src)
+  return { copied: copied.length, failed }
 }
 
 // ── 循环展开：将 loop Task 展开为 N 个串行迭代实例 ────────────────────────
@@ -680,9 +745,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const src = await loadWorkflowSource(fs, args, (args && args.workspaceRoot) || sessionCwd(exec) || undefined)
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const params = (args && args.params) || {}
+        // Iter-27a：预置工作流（templates/<子目录>/）defDir 锚点——begin 展开期
+        // 实例目录尚不存在，静态 items 相对引用优先 defDir（模板子目录）解析。
+        //（声明在外层：创建实例后的 1:1 复制同用此值）
+        let beginDefDir = args.workflowPath
+          ? (E_presetTemplateDirOf(args.workflowPath, detectPredefinedRootSafe()) || undefined)
+          : undefined
         let parsed
         try {
-          parsed = await expandDefinition(fs, src, params)
+          parsed = await expandDefinition(fs, src, params, beginDefDir ? { defDir: beginDefDir } : undefined)
         } catch (e) {
           if (e && e.workflowBeginErrors) {
             // 保持既有契约：解析错误经快照 workflowBeginErrors 字段返回
@@ -714,6 +785,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             // Iter-25 修复（潜伏 bug）：begin 路径此前从未置 hasState，begin→stop→reset
             // 会被 reset 工具按 stage=CREATED 误拒（workflow_start 路径一直有置）。
             entry.hasState = true
+            // Iter-27a（四点②③）：预置工作流子目录 1:1 复制（定义已写 instance.yaml；
+            // 静态文件原样复制，相对引用零调整；文本 only；失败不阻断 begin 主流程）
+            if (beginDefDir) b.presetCopy = await copyTemplateStaticTree(fs, beginDefDir, entry.dir, args.workflowPath)
           }
         }
         if (!wfDir) wfDir = args.statePath ? parentDir(String(args.statePath)) : (src.workspaceRoot || null) // legacy 单实例布局（默认④）
@@ -803,7 +877,11 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
     const text = stripInstanceHeader(raw)
     const params = (entry.meta && entry.meta.params) || {}
     const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
-    const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params, { wfDir: entry.dir })
+    // Iter-27a：预置工作流 defDir 锚点（meta.sourcePath → templates/<子目录>）。
+    // 静态 items 解析优先序=实例目录（1:1 副本，自包含主路径）→ defDir（模板子目录，
+    // 实例副本缺失时自愈）→ 两级链兜底（非预置来源/旧实例）。
+    const defDir = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe()) || undefined
+    const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params, { wfDir: entry.dir, defDir })
     parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
     parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
     return parsed
@@ -821,7 +899,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
       // Iter-26R：itemsFrom 已由 finalizeDataflow 以实例目录绝对化（itemsDeferred 清标记）；
       // 兜底——hydrate 的旧占位若仍是相对形态，以实例目录拼接（与 D1 基准一致）。
       let itemsPath = String(pendingItems.itemsFrom)
-      if (!isAbsoluteishPath(itemsPath) && instDir) itemsPath = instDir + '/' + itemsPath
+      if (!E_isAbsoluteishPath(itemsPath) && instDir) itemsPath = instDir + '/' + itemsPath
       // 读 items 文件（可能仍不存在→readText 抛错→expandDeferredGroups catch 占位保持 PENDING）
       const text = await fs.readText(await fs.resolve(itemsPath))
       const items = E_extractItems(text, {
@@ -911,7 +989,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_create ───────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_create',
-    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED", warnings[]}——warnings 为创建关口校验警告（任务缺 processor / quality-gate 缺 checker；Iter-25 起允许此类半成品实例存在，启动前应补全）。启动用 workflow_start。',
+    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED", warnings[], presetCopy}——warnings 为创建关口校验警告（任务缺 processor / quality-gate 缺 checker；Iter-25 起允许此类半成品实例存在，启动前应补全）。Iter-27a：workflowPath 为预置模板子目录（templates/<名>/<名>.yaml）时，子目录内全部文件 1:1 复制进实例目录（静态文件自包含，相对引用零调整；文本文件），返回 presetCopy={copied,failed}。启动用 workflow_start。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -943,9 +1021,18 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             params: args.params || {},
           })
           : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: args.params || {} }))
+        // Iter-27a（四点②③）：预置工作流子目录 1:1 复制——模板子目录与实例目录
+        // 同构，静态文件原样复制（相对引用零调整，实例自包含）；定义文件本身已写
+        // 为 instance.yaml，跳过；文本 only；单文件失败不阻断（失败清单回传）。
+        let presetCopy = null
+        const tplDir = args.workflowPath
+          ? (E_presetTemplateDirOf(args.workflowPath, detectPredefinedRootSafe()) || null)
+          : null
+        if (tplDir) presetCopy = await copyTemplateStaticTree(fs, tplDir, entry.dir, args.workflowPath)
         // Iter-25（D4）：创建关口校验警告（缺 processor / gate 无 checker）——实例照常创建，
         // 校验与执行事件解耦；补全后重创建或（Iter-28 起）编辑实例。
-        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: parsed.warnings || [] }
+        // Iter-27a：presetCopy = { copied, failed }（仅预置工作流子目录来源时返回）。
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: parsed.warnings || [], presetCopy }
       } catch (e) {
         return errPayload(e)
       }
@@ -1197,5 +1284,5 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRefPath, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError, finalizeDataflow, absolutizeDataflowPath }
+  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath: E_isAbsoluteishPath, resolveStaticPath: E_resolveStaticPath, presetTemplateDirOf: E_presetTemplateDirOf, copyTemplateStaticTree, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError, finalizeDataflow, absolutizeDataflowPath }
 }
