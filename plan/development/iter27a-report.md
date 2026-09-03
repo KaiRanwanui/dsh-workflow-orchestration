@@ -1,7 +1,8 @@
 # Iter-27a 报告 — 预定义目录结构与实例化（语义校验前置）
 
-- **状态**：✅ 完成关闭（2026-09-03，用户 GUI 验收通过后收尾）
-- **版本**：host v0.17.0 / client 不动（v0.6.1）
+- **状态**：✅ 完成关闭（2026-09-03，用户 GUI 验收通过后收尾；含后补丁且复验通过）
+- **版本**：host v0.17.1（主体 v0.17.0 + 后补丁）/ client 不动（v0.6.1）
+- **提交**：`300923d`（主体）+ `dd48ff0`（后补丁+收尾），已推 origin/main
 - **配套**：`iter27-design.md`（拆分版 27a/27b，四轮拍板落档）
 - **背景**：自 Iter-27 拆分（拍板 S1=B）——预定义目录结构调整是 27b 校验双语境锚点的前提
 
@@ -24,10 +25,16 @@
 
 ## 验证结论
 
-- **单测**：387 → 419 全绿（新增用例 23 共 28 项：路径分类五态/presetTemplateDirOf 四情形/resolveStaticPath 优先级五情形/copyTemplateStaticTree 三情形/expandDefinition 实例副本与 defDir 锚点集成/workflow_create 1:1 复制与非 preset 零复制/扫描下钻四情形；用例 18 增补子目录物化断言；用例 21 断言随模板迁移更新）
+- **单测**：387 → 419 → 421 全绿（用例 23 新增 28 项：路径分类五态/presetTemplateDirOf 四情形/resolveStaticPath 优先级五情形/copyTemplateStaticTree 三情形/expandDefinition 实例副本与 defDir 锚点集成/workflow_create 1:1 复制与非 preset 零复制/扫描下钻四情形；用例 18/21 断言随模板迁移与后补丁互斥更新）
 - **修复真 bug**：expandInstanceDefinition 的 src 不带 predefinedRoot，resolveStaticPath 初版无 detectPredefinedRoot 兜底 → start 路径预定义端探测丢失（c21 物化用例暴露；已修，与 resolveRefPath 同语义）
 - **部署**：sync 9 section → package.json 0.17.0 → build.js（lib 求值级加载通过）→ persona/mjs 三份 cp 至 `~/.dsh/.agent-presets/workflow-orchestrator/`（diff 一致）→ 用户重启 dsh.service
-- **GUI 验收（用户执行）**：✅ 四个内建模板（default-demo/serial-demo/items-demo/runtime-items-demo）开箱即用验证通过
+- **GUI 验收（用户执行）**：✅ 四个内建模板（default-demo/serial-demo/items-demo/runtime-items-demo）开箱即用验证通过；后补丁复验通过（items-demo 派发带 item 值、inputs 为空仍跑通、default-demo 不受影响）
+
+## 后补丁：items-from 与 inputs 互斥（2026-09-03，用户提出定义层问题，host v0.17.1）
+
+- **问题**：loop/concurrent 任务把 items-from 文件再声明进 inputs（items-demo ×6、runtime-items-demo ×1）——根因是 integrator 技能（两输入汇总语义）被复用为逐 item 处理器、且派发契约未透出条目值
+- **拍板**：互斥约定（items-from=专用条目获取输入，仅用于循环/并发控制，条目值经快照 `_loopItem` 随派发传入子会话；inputs=业务内容来源）；重复声明 27b 记 **W-ITEMS-INPUT-DUP 警告级**；新建专用技能、当轮作 27a 后补丁
+- **落地**：模板 7 处重复 inputs 清零（items-demo v1.3）；新建 `item-processor` 技能（按派发 item 值处理+empty 空清单占位；integrator 保持两输入汇总）；persona 派发契约补「迭代任务 prompt 带 `item = <_loopItem>` 行」；c21 断言随新形态更新并加 default-demo 防误伤断言
 
 ## 边界与遗留（已定归属）
 

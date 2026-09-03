@@ -31,7 +31,7 @@
 已完成: …（同上）… → Iter-23 ✅ → **Iter-24 ✅（2026-09-02 关闭：预定义目录与安装布局 ~/.dsh/workflow-agent/，物化模板2+技能5+两级解析链+模板下拉切源，host v0.13.0/client v0.6.1，250 单测，用户 GUI 全链路验证通过，git 7896bc3→8c65d10 已推送，总结 iter24-report.md）**
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
 已完成: …（同上）… → Iter-26 ✅ → **Iter-26R ✅（2026-09-03 关闭：运行时 items 展开，host v0.16.0，387 单测，GUI 验收通过；报告 iter26r-report.md，设计 iter26r-design.md）**
-已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移），host v0.17.0，419 单测，用户 GUI 验收通过（四内建模板开箱即用），报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
+已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移）+后补丁 items-from/inputs 互斥（条目值经 _loopItem 随派发传入、新建 item-processor 技能、模板 7 处重复 inputs 清零），host v0.17.1，421 单测，用户 GUI 验收通过（四内建模板开箱即用+补丁复验），git 300923d→dd48ff0 已推送，报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
  当前:   **Iter-27b 语义校验（设计已确认 iter27-design.md，待启动）**。后续=28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 

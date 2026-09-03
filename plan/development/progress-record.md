@@ -89,6 +89,28 @@
 
 ## 已完成工作
 
+### 21. Iter-27a: 预定义目录结构与实例化 + items-from/inputs 互斥后补丁（2026-09-03，✅ 完成关闭）
+
+**迭代报告**：`plan/development/iter27a-report.md`（设计=`iter27-design.md` 拆分版，四轮拍板落档；自 Iter-27 拆分，27b 语义校验待启动）
+
+**主体交付**（host v0.17.0）：
+- templates **子目录自包含**：每工作流一子目录（`<名>.yaml`+`inputs/...`）与实例目录同构镜像；samples/ 转纯参考；templates/README.md 迁移说明
+- **create/begin 1:1 复制**：preset 来源整目录复制进实例（定义写 instance.yaml、静态文件原样保结构、文本 only），返回 `presetCopy={copied,failed}`
+- **静态 items 解析链**：实例目录（1:1 副本）→ defDir（模板子目录自愈）→ 两级链；技能恒两级链（R4）
+- 绝对路径=用户指定产物（create params/人工调整），引擎直通不改写
+- `/wf/templates` 扫描下钻子目录+平铺 legacy 兼容（同名**子目录赢**）；共享模块 `workflow-paths.js`（isAbsoluteishPath 前移+resolveStaticPath+presetTemplateDirOf）
+
+**后补丁**（GUI 验收后用户指出定义层问题，host v0.17.1）：
+- **items-from 与 inputs 互斥**（用户拍板）：items-from=专用条目获取输入（仅用于循环/并发控制，条目值经任务快照 `_loopItem` 随派发传入子会话）；inputs=业务内容来源，禁重复声明 items 文件
+- 模板 7 处重复 inputs 声明清零（items-demo×6 v1.3 + runtime-items-demo analyze）；新建专用逐 item 技能 `item-processor`（按派发 item 值处理+empty 空清单占位；integrator 保持 default-demo 两输入汇总不被误伤）
+- persona 派发契约补「迭代任务 prompt 带 `item = <_loopItem>` 行」；27b 校验表记 **W-ITEMS-INPUT-DUP（警告级，用户拍板）**
+
+**验证**：单测 387→419→421 全绿（用例 23 新增 28 项+用例 18/21 断言随迁移/互斥更新；修复 1 真 bug=start 路径 src 缺 predefinedRoot 致预定义端探测丢失）；GUI 验收（用户）=四内建模板开箱即用通过+补丁复验通过。
+
+**提交**：`300923d`（主体）+ `dd48ff0`（后补丁+收尾），已推 origin/main。
+
+---
+
 ### 18. Iter-23 前置探针 + 设计定稿 + 方向 A 开发（2026-09-02，✅ 完成关闭）
 
 - **前置探针**（stopa-6 动态插件，用后 undefine）：Case R（停在活动回合）✅ 持久留 `turn/end {data:{reason:{kind:'aborted',reason:{kind:'user'}}}}`，live `session.log`/冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致，turn/reason 稳定）；Case I（停在空闲）❌ 零痕迹（cancel 纯 no-op，RPC 假性 accepted:true）——Host 侧原理性不可检测。报告 `plan/development/iter23-probe-report.md`，探针存档 `code/probes/stopa-user-stop-signal-probe.js`。
