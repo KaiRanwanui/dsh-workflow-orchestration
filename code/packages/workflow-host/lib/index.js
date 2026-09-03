@@ -2483,6 +2483,34 @@ name: list-collector
 - 不要创建输出路径之外的任何文件。
 `,
   },
+  {
+    id: 'item-processor',
+    content: `---
+name: item-processor
+---
+# 技能：逐条目处理（item-processor）
+
+## 任务目标
+处理派发消息中给出的**本迭代条目（item）**，产出该条目的分析文档。
+本技能用于 loop/concurrent 任务的迭代执行：每条 item 一次任务。处理对象
+**以派发消息中的 item 值为准**，不要读取 items 清单文件——清单仅用于
+循环/并发控制，不作为业务输入（Iter-27a 约定：items-from 与 inputs 互斥）。
+
+## 执行步骤
+1. 从派发消息中找到本迭代的 item 值（形如 \`item = <值>\`）——这就是本次要
+   处理的条目。
+2. 若 item 值为 \`empty\`：说明 items 清单为空（占位迭代）——生成一份空结果
+   文档，注明“items 为空，无条目可处理”，按正常流程写出并结束。
+3. 围绕该条目撰写内容：条目概述 + 要点分析（不少于 3 条）。
+4. 若任务参数还列出了其他 inputs（业务参考文件），用 read 读取并引用。
+
+## 输出要求
+- 将结果写入任务参数中指定的输出文件（outputs 列出的绝对路径；路径中已含
+  本条目标识）。
+- 完成后回复一行：\`DONE: <输出路径>\`。
+- 不要修改任何输入文件或 items 清单。
+`,
+  },
 ]
 
 // 骨架 README（仅缺失时写，不覆盖用户内容）
@@ -4180,74 +4208,64 @@ const BUILTIN_TEMPLATES = [
     description: 'Iter-26 items 结构化提取演示：markdown/JSON/YAML × loop/concurrent 六任务（items 来自模板子目录 inputs/items/，免改免参）',
     yaml: [
       '# items 演示：三格式（markdown 列表/表格、JSON 数组、YAML 并列 map）各跑 loop+concurrent。',
-      '# items-from/inputs 引用本模板子目录 inputs/items/（Iter-27a 子目录自包含：create 1:1 复制后实例内直接命中）。',
+      '# items-from 引用本模板子目录 inputs/items/（Iter-27a 子目录自包含：create 1:1 复制后实例内直接命中）。',
+      '# 约定（Iter-27a 补丁，用户拍板）：items-from 与 inputs 互斥——items 清单仅用于循环/并发控制，',
+      '# 条目值随迭代派发传入子会话（_loopItem），不作为业务输入在 inputs 重复声明。',
       '# 注：任务名中不要写字面 ${item.xxx}（任务名不做注入，会被当成普通文字展示）。',
       'name: items-demo',
-      'version: "1.2"',
+      'version: "1.3"',
       'description: "items 结构化提取演示：三格式 × loop/concurrent"',
       'max-concurrency: 3',
       'tasks:',
       '  - id: md-loop',
       '    name: "Markdown 列表 · 串行评审"',
       '    type: loop',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/modules.md',
       '    item-var: mod',
-      '    inputs:',
-      '      items: "inputs/items/modules.md"',
       '    outputs: ["output/md-loop/${mod}.md"]',
       '',
       '  - id: md-concurrent',
       '    name: "Markdown 表格 · 并发归档（slug 路径注入）"',
       '    type: concurrent',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/modules-table.md',
       '    item-var: mod',
       '    max-concurrency: 2',
-      '    inputs:',
-      '      items: "inputs/items/modules-table.md"',
       '    outputs: ["output/md-conc/${mod.slug}.md"]',
       '',
       '  - id: json-loop',
       '    name: "JSON 数组 · 串行构建（id 默认链）"',
       '    type: loop',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/components.json',
       '    item-var: comp',
-      '    inputs:',
-      '      items: "inputs/items/components.json"',
       '    outputs: ["output/json-loop/${comp.id}.md"]',
       '',
       '  - id: json-concurrent',
       '    name: "JSON 数组 · 并发摘要（slug 路径注入）"',
       '    type: concurrent',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/components.json',
       '    item-var: comp',
       '    max-concurrency: 2',
-      '    inputs:',
-      '      items: "inputs/items/components.json"',
       '    outputs: ["output/json-conc/${comp.slug}.md"]',
       '',
       '  - id: yaml-loop',
       '    name: "YAML 并列 · 串行清单（id 默认链）"',
       '    type: loop',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/features.yaml',
       '    item-var: feat',
-      '    inputs:',
-      '      items: "inputs/items/features.yaml"',
       '    outputs: ["output/yaml-loop/${feat.id}.md"]',
       '',
       '  - id: yaml-concurrent',
       '    name: "YAML 并列 · 并发标注（id 默认链）"',
       '    type: concurrent',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: inputs/items/features.yaml',
       '    item-var: feat',
       '    max-concurrency: 2',
-      '    inputs:',
-      '      items: "inputs/items/features.yaml"',
       '    outputs: ["output/yaml-conc/${feat.id}.md"]',
       '',
     ].join('\n'),
@@ -4274,11 +4292,9 @@ const BUILTIN_TEMPLATES = [
       '  - id: analyze',
       '    name: "逐模块分析"',
       '    type: loop',
-      '    processor: skills/integrator/SKILL.md',
+      '    processor: skills/item-processor/SKILL.md',
       '    items-from: output/modules.txt',
       '    item-var: mod',
-      '    inputs:',
-      '      spec: "output/modules.txt"',
       '    outputs:',
       '      - "output/analyze/${mod}.md"',
       '    depends-on:',

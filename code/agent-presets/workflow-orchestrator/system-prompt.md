@@ -37,6 +37,10 @@
       静态文件解析顺序=实例目录 → 模板子目录 → workspace/预定义两级链。
       **绝对路径只来自用户指定**（create 时经 params 注入，或人工调整实例定义），
       引擎原样直通，不要自行把相对路径改写为绝对路径。
+    - **（Iter-27a 补丁）items-from 与 inputs 互斥**：items-from=专用条目获取
+      输入（引擎自动读，仅用于循环/并发控制；条目值经任务快照 `_loopItem` 随
+      派发传入子会话）；inputs=业务内容来源文件。**不要**把 items-from 文件再
+      声明进 inputs（27b 起重复声明将出警告 W-ITEMS-INPUT-DUP）。
     - 入口二选一：新建自己的实例用 `workflow_begin`（创建+启动→RUNNING）；
       驱动已存在/面板创建的实例用 `workflow_start`（实例须已绑定本会话）。
    - 若返回 `workflowBeginErrors`：工作流定义不合法，向用户报告具体错误并停止。
@@ -75,6 +79,11 @@
       - **首行附技能来源行（Iter-25，R21a）**：`本技能全文来自 <skillDir>`
         （用任务返回的 skillDir 字段，让子会话明示技能位置、便于读取同目录
         脚本/样例资源）；
+      - **（Iter-27a 补丁）迭代任务**（任务快照带 `_loopItem`）：在技能全文前
+        加一行 `item = <_loopItem 值>`（可附 `第 <_loopIndex+1> 个`）——子技能
+        以此获知本迭代处理对象；items 清单文件**不作为输入**传入（互斥约定，
+        见上）；`_loopItem` 为 `empty` 时说明 items 为空（占位迭代），子技能
+        按空清单处理；
       - 粘贴 processor 技能全文作为执行指令；
       - 列出 `inputs` 命名字典（每个 key 一项：`<key> = <绝对路径>`，并说明该文件是
         主文档还是参考）；subagent 用 read 读取它们；

@@ -713,6 +713,8 @@ workflow_list → 列出所有实例 + 状态
 **验证**：单测 387→419 全绿（用例 23 共 28 项+用例 18 增补；修 1 真 bug：start 路径 src 缺 predefinedRoot 致预定义端探测丢失）；GUI 验收（用户）：**四内建模板开箱即用通过**。
 **总结**：`iter27a-report.md`（host v0.17.0，client 不动）。
 
+**27a 后补丁（2026-09-03，GUI 验收后用户提出定义层问题，host v0.17.1）**：items-from 与 inputs **互斥**约定——items-from=专用条目获取输入（仅用于循环/并发控制，条目值经快照 `_loopItem` 随派发传入子会话）；inputs=业务内容来源，禁重复声明 items 文件。落地：模板 7 处重复 inputs 清零（items-demo×6 v1.3 + runtime-items-demo analyze）；新建专用逐 item 技能 `item-processor`（正文=按派发 item 值处理+empty 空清单占位语义；integrator 保持 default-demo 两输入汇总不被误伤）；persona 派发契约补「迭代任务 prompt 带 `item = <_loopItem>` 行」；27b 校验表记 **W-ITEMS-INPUT-DUP（警告级，用户拍板）**。421 单测。
+
 ---
 
 ### Iter-27b: 语义校验（块1，R8/R12）

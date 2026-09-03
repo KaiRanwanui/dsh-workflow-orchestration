@@ -115,6 +115,7 @@ Iter-25（D4）把"缺 processor / gate 缺 checker"降为 create warnings 临�
 | E-ABS-IN-DEF | error | **preset 定义引用字面绝对路径静态文件**（四点①） |
 | E-ITEMS-PARSE | error | items 文件存在但提取失败（坏 JSON/顶层标量；**空提取不算错**，26R Q1-b 占位迭代合法） |
 | W-REF-MISMATCH | warning | input 与上游 output basename 相同但完整路径不同（疑似拼写不一致） |
+| W-ITEMS-INPUT-DUP | warning | items-from 与 inputs 声明同一文件（27a 补丁拍板 2026-09-03：items-from=专用条目获取输入仅用于循环/并发控制，条目值经 _loopItem 随派发传入子会话；inputs=业务内容来源，两者互斥） |
 
 **延迟组判定（26R 不误报）**：`shouldDeferExpansion` 抽成共享 `deferDisposition()`（入 workflow-paths.js），expandDefinition 与校验共用单一事实源；判定=延迟 → 跳过 items 存在性。inputs 衔接同款：命中任一任务 outputs（相对精确+basename 兜底）→ 成立不查文件。
 

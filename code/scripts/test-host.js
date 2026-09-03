@@ -1319,8 +1319,11 @@ async function runCase21() {
   {
     const mjsSrc = require('fs').readFileSync(require('path').join(__dirname, '../agent-presets/workflow-orchestrator/workflow-host.mjs'), 'utf8')
     check('c21 items-demo: 模板登记（BUILTIN_TEMPLATES，items 源=samples 两级链）', mjsSrc.includes("name: 'items-demo'") && mjsSrc.includes('samples/items/modules-table.md') && mjsSrc.includes('${mod.slug}'))
-    // Iter-27a：模板静态引用迁入子目录（inputs/items/），参考件仍在 samples/
-    check('c21 items-demo: 六任务带 inputs（Iter-27a 引用改 inputs/items/；name 无 ${} 字面）', (mjsSrc.match(/items: "inputs\/items\//g) || []).length === 6 && !mjsSrc.includes('并发归档（${mod.slug}'))
+    // Iter-27a 后补丁（用户拍板）：items-from 与 inputs 互斥——模板六任务不再把
+    // items 文件声明进 inputs；processor 换专用逐 item 技能（含 runtime analyze 共 7 处）
+    check('c21 items-demo: 六任务 items-from 保留（items-demo×6+runtime×1=7）', (mjsSrc.match(/'    items-from: /g) || []).length === 7 && !mjsSrc.includes('并发归档（${mod.slug}'))
+    check('c21 items-demo: inputs 重复声明清零 + processor 换 item-processor（×7）', (mjsSrc.match(/items: "inputs\/items\//g) || []).length === 0 && (mjsSrc.match(/processor: skills\/item-processor\/SKILL\.md/g) || []).length === 7)
+    check('c21 items-demo: default-demo integrator 两输入汇总场景不被误伤', (mjsSrc.match(/processor: skills\/integrator\/SKILL\.md/g) || []).length === 2 && mjsSrc.includes('spec: "output/spec.md"'))
     check('c21 items-demo: 样例物化登记（BUILTIN_SAMPLES 四格式）', mjsSrc.includes('samples/items/modules.md') && mjsSrc.includes('samples/items/components.json') && mjsSrc.includes('samples/items/features.yaml'))
   }
 }

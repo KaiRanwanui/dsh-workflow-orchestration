@@ -75,7 +75,7 @@
       （phase=CREATED 未启动 / READY 已有状态；附 sessionState 派生状态
       UNBOUND/BOUND/DONE/BROKEN 与 orphans 孤儿 id）；workflow_create 从定义
       预建实例目录（不启动），返回 warnings 创建校验警告（任务缺 processor/
-      gate 缺 checker——半成品实例允许存在，转告用户补全后再启动）。Iter-27a：预置模板子目录实例化时整目录 1:1 复制进实例（presetCopy.failed 非空须转告）；绝对路径只来自用户指定，引擎直通不改写；
+      gate 缺 checker——半成品实例允许存在，转告用户补全后再启动）。Iter-27a：预置模板子目录实例化时整目录 1:1 复制进实例（presetCopy.failed 非空须转告）；绝对路径只来自用户指定，引擎直通不改写；items-from 与 inputs 互斥（items 清单仅用于循环/并发控制，条目值经 _loopItem 随派发传入子会话，不再作为 input 重复声明——迭代任务派发 prompt 须带 item = <_loopItem> 行，empty=空清单占位）；
       workflow_adopt 采用池中 UNBOUND（sessionId==null）
       实例并绑定本会话（start 前须先 adopt 若实例未绑定）；workflow_start 启动
       已绑定实例并返回 runnable（RUNNING 拒、STOPPED 拒用 resume、COMPLETED/FAILED
