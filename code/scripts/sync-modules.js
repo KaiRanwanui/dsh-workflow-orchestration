@@ -15,6 +15,7 @@ const SOURCES = {
   'workflow-parser': path.join(ROOT, 'shared/workflow-parser.js'),
   'items-extract': path.join(ROOT, 'shared/items-extract.js'), // Iter-26：items 提取器（须位于 workflow-parser 之后：依赖同作用域 parseYaml）
   'workflow-paths': path.join(ROOT, 'shared/workflow-paths.js'), // Iter-27a：路径分类/解析锚点（isAbsoluteishPath 前移自此；须位于 tools-preset 之前）
+  'workflow-validate': path.join(ROOT, 'shared/workflow-validate.js'), // Iter-27b：语义校验引擎（排 workflow-paths 后：E_ 别名同作用域直呼；其内部再引用 items-extract/schema，均在前置 section）
   'engine': path.join(ROOT, 'plugins/workflow-host/engine.js'),
   'storage': path.join(ROOT, 'plugins/workflow-host/storage.js'),
   'instance-store': path.join(ROOT, 'plugins/workflow-host/instance-store.js'),

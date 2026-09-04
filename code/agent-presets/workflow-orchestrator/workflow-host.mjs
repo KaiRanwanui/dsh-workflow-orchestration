@@ -404,8 +404,10 @@ function parseWorkflow(text) {
   return { name, version, description: raw.description || null, params, tasks, errors, warnings, maxConcurrency }
 }
 
-// Iter-25：warnings 通道启用（processor 缺省 / gate 无 checker → 警告非错误，D4 决议：
-// 校验挂创建关口，创建态允许半成品，实例照常保存；运行时由 persona 护栏报告）。
+// Iter-25：warnings 通道启用（D4 决议）。Iter-27b：processor 缺省 / gate 无 checker
+// 自 warnings 升错误级——归 workflow-validate 统一出口（E-PROCESSOR-MISSING /
+// E-GATE-CHECKER-MISSING，create/begin/start 关口硬拦）；此处 warnings 数组保留恒空
+// （返回形状兼容，供旧调用方解构）。
 function normalizeTask(t, idx, errors, warnings) {
   const id = t.id != null ? String(t.id).trim() : ''
   if (!id) {
@@ -443,18 +445,17 @@ function normalizeTask(t, idx, errors, warnings) {
         errors.push('Task "' + id + '" 的 quality-gate.on-failure 必须是 retry|block|skip，实际: ' + onFailure)
       }
       base.gateRaw = g.checker != null ? String(g.checker) : null
-      if (base.gateRaw == null && warnings) warnings.push('Task "' + id + '" 的 quality-gate 未指定 checker——该门禁将被跳过')
+      // Iter-27b：缺 checker 不再此处警告——workflow-validate 出 E-GATE-CHECKER-MISSING（错误级）
       base.gateOnFailure = onFailure
       base.gateMaxRetries = g['max-retries'] != null ? Number(g['max-retries']) : 0
     }
   }
 
   // 类型专属校验
-  // Iter-25（D4）：processor 缺省降为警告——创建态允许半成品（R11 编辑后补全）
+  // Iter-27b：processor 缺省不再此处警告——workflow-validate 出 E-PROCESSOR-MISSING（错误级）
   if (type === 'llm-task' || !type) {
-    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
+    // processor 必填校验已上收 workflow-validate
   } else if (type === 'loop') {
-    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
     if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
@@ -471,7 +472,7 @@ function normalizeTask(t, idx, errors, warnings) {
     base.onError = onError
   } else if (type === 'concurrent') {
     // Iter-8：并发执行（同 loop 结构，迭代无依赖可并行）
-    if (!base.processorRaw && warnings) warnings.push('Task "' + id + '" 未指定 processor（技能）——执行该任务前须补全')
+    // Iter-27b：processor 缺省校验已上收 workflow-validate（E-PROCESSOR-MISSING）
     if (t['items-from'] == null) errors.push('Task "' + id + '" 缺少必填字段: items-from')
     if (t['item-var'] == null) errors.push('Task "' + id + '" 缺少必填字段: item-var')
     base.itemsFromRaw = t['items-from'] != null ? String(t['items-from']) : null
@@ -550,6 +551,9 @@ if (typeof module !== 'undefined' && module.exports) {
 //   - presetTemplateDirOf：sourcePath 位于 <predefinedRoot>/templates/<子目录>/<file>
 //     时返回子目录绝对路径（预置工作流判定；create 1:1 复制与 defDir 锚点共用）。
 //     平铺 legacy（templates/<file>.yaml）与外部路径返回 null。
+//   - deferDisposition（Iter-27b 自 tools-preset.shouldDeferExpansion 前移）：延迟展开
+//     判定单一事实源——expandDefinition 与语义校验共用。true=延迟（items 运行期由
+//     上游产出，校验跳过 items 存在性）；显式 deferred:false → false（校验同报）。
 // ============================================================================
 
 function isAbsoluteishPath(p) {
@@ -610,8 +614,347 @@ function presetTemplateDirOf(sourcePath, predefinedRoot) {
   return prefix + rest.slice(0, idx)
 }
 
+// Iter-27b 前移（原 tools-preset.shouldDeferExpansion，D1 混合方案）：
+// 1. deferred=true 显式声明 → 延迟；deferred=false → 不延迟（校验同报 E-ITEMS-MISSING）
+// 2. deferred=null（未声明）→ 自动检测：是否有上游任务 outputs 包含该路径
+// 匹配精度：itemsRel（解析前注入值，与 outputs 同为相对形态）精确匹配优先；
+// basename 兜底（一侧经 resolveRefPath 加了 workspaceRoot 前缀 / 用户混写绝对相对的场景）。
+// Iter-27b 双形态：expandDefinition 传展开后任务（itemsRel/outputs 优先，行为不变）；
+// 校验传 raw parsed 任务（回退 itemsFromRaw/outputsRaw，同为相对形态对称比较）。
+function deferDisposition(task, allTasks) {
+  if (task.deferred === true) return true
+  if (task.deferred === false) return false
+  const rel = task.itemsRel || task.itemsFrom || task.itemsFromRaw
+  if (!rel) return false
+  const base = String(rel).split('/').pop()
+  for (const t of (allTasks || [])) {
+    const outputs = t.outputs || t.outputsRaw || []
+    for (const o of outputs) {
+      if (o === rel || o.split('/').pop() === base) return true
+    }
+  }
+  return false
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isAbsoluteishPath, isVariablePath, resolveStaticPath, presetTemplateDirOf }
+  module.exports = { isAbsoluteishPath, isVariablePath, resolveStaticPath, presetTemplateDirOf, deferDisposition }
+}
+
+// ---- module: workflow-validate ----
+// ============================================================================
+// workflow-agent — 语义校验引擎（Iter-27b，R8/R12）
+// 文件：code/shared/workflow-validate.js
+// 说明：
+//   - 纯函数：输入 raw parsed（parseWorkflow 原始产物，*Raw 字段保留）+ 语境锚点 +
+//     fs 探针，输出 { ok, errors, warnings } 结构化清单；纯异步零副作用，仅
+//     stat/readText 探针。parse 结构错误不在本引擎复报（调用方关口先行拦截）。
+//   - 语境（context，拍板②双语境）：
+//       'definition-preset'  preset 定义语境（templates/<子目录>/）：静态文件必须在该
+//                            子目录内存在（不走两级链，四点①）；raw 字面绝对路径 →
+//                            E-ABS-IN-DEF（保证预置发布完整）。
+//       'definition'         非 preset 定义语境（workspace YAML / inline text）：两级链
+//                            （workspace→预定义，现状）；字面绝对允许（用户指定产物），
+//                            仅查存在。
+//       'instance'           实例语境（create 之后）：实例目录及子目录优先（1:1 副本）
+//                            → defDir → 两级链兜底；绝对直通仅查存在。
+//   - raw 与 expanded 双轨（四点①④同时成立的关键）：E-ABS-IN-DEF 查 raw 字面；
+//     存在性查 ${} 注入后的展开值——「params 注入展开为绝对 = create 时用户指定
+//     合法入口」（四点④）；preset 语境变量展开为绝对按直通查存在（§5.1 变量路径列，
+//     create 时展开后按实例语境判）。
+//   - ${item / ${item.*}（迭代期才定）与展开后仍含 ${ 的值（未知 param / 定义语境的
+//     ${wf_dir}）一律跳过；点号键非迭代上下文不可解析，校验期一律占位 → 统一跳过。
+//   - 延迟组（26R 不误报）：deferDisposition（workflow-paths 共享单一事实源）判定=
+//     延迟 → 跳过 items 存在性；显式 deferred:false 不跳（同报 E-ITEMS-MISSING）。
+//     items 文件命中时仍做格式探针（E-ITEMS-PARSE）。
+//   - 空 items 提取不算错（26R Q1-b 占位迭代合法）；提取抛错（坏 JSON/顶层标量）
+//     → E-ITEMS-PARSE。
+//   - inputs 衔接（§5.1）：命中任一任务 outputs（展开值相对精确 + basename 兜底）→
+//     成立不查文件；仅 basename 命中（完整路径不同）→ 追加 W-REF-MISMATCH（疑似
+//     拼写不一致）。outputs 声明本身不校验（运行期产出）。
+//   - 技能（processor）恒两级链（R4 不复制不物化）：E-SKILL-MISSING 用内置两级链
+//     stat 探针（与 tools-preset.resolveRefPath 同语义；shared 不反向依赖 plugin，
+//     一致性由单测对齐）。gate checker 文件缺失不在拍板错误码表（10 码）内，保持
+//     现状启动期报错语义不入引擎（局限记录 iter27b-report）。
+//   - fs 缺失时降级：仅做纯静态检查（环/缺 processor/缺 checker/字面绝对/互斥警告），
+//     存在性探测全部跳过——引擎不因无探针而误报。
+// ============================================================================
+
+// 共享同目录模块：mjs 内联同作用域直呼（typeof 探测；workflow-validate section 排
+// workflow-paths / items-extract / schema 之后），Node 独立加载走 require 兜底。
+let wvE_isAbsoluteishPath = typeof isAbsoluteishPath !== 'undefined' ? isAbsoluteishPath
+  : (typeof require !== 'undefined' ? require('./workflow-paths').isAbsoluteishPath : null)
+let wvE_resolveStaticPath = typeof resolveStaticPath !== 'undefined' ? resolveStaticPath
+  : (typeof require !== 'undefined' ? require('./workflow-paths').resolveStaticPath : null)
+let wvE_deferDisposition = typeof deferDisposition !== 'undefined' ? deferDisposition
+  : (typeof require !== 'undefined' ? require('./workflow-paths').deferDisposition : null)
+let wvE_extractItems = typeof extractItems !== 'undefined' ? extractItems
+  : (typeof require !== 'undefined' ? require('./items-extract').extractItems : null)
+let wvE_PARAM_PATTERN = typeof PARAM_PATTERN !== 'undefined' ? PARAM_PATTERN
+  : (typeof require !== 'undefined' && require('./workflow-schema').PARAM_PATTERN
+    ? require('./workflow-schema').PARAM_PATTERN
+    : /\$\{(\w+)\}/g)
+
+// ── 轻量 ${} 注入（与 tools-preset.injectParams 非迭代分支同语义；一致性单测对齐）──
+// 优先级：目录变量保留字（D2）→ params → 占位保留。点号键（${x.y}）仅迭代上下文可
+// 解析，校验期一律占位保留 → 由「仍含 ${ 即跳过」统一兜住。
+function expandRef(value, params, dirVars) {
+  if (typeof value !== 'string') return value
+  return value.replace(wvE_PARAM_PATTERN, (whole, key) => {
+    if (key.indexOf('.') !== -1) return whole
+    if (dirVars && dirVars[key] !== undefined) return String(dirVars[key])
+    if (params && params[key] !== undefined) return String(params[key])
+    return whole
+  })
+}
+
+// 注：内部助手带 wv 前缀——mjs 内联为模块级作用域，避免与 workflow-paths 的
+// 同义函数（normalizeSlashes 等）重声明冲突（ESM 严格模式）。
+function wvNormalize(p) { return String(p || '').replace(/\\/g, '/') }
+
+function basenameOf(p) {
+  const n = wvNormalize(p)
+  const i = n.lastIndexOf('/')
+  return i >= 0 ? n.slice(i + 1) : n
+}
+
+async function pathExists(fs, p) {
+  if (!fs || !p) return false
+  try {
+    const st = await fs.stat(await fs.resolve(p))
+    return !!st
+  } catch (e) { return false }
+}
+
+// 技能两级链探针（与 tools-preset.resolveRefPath 同语义：workspace → 预定义；
+// 绝对直通；双 miss=false）
+async function skillRefExists(fs, ref, workspaceRoot, predefinedRoot) {
+  const p = wvNormalize(ref)
+  if (wvE_isAbsoluteishPath(p)) return pathExists(fs, p)
+  const roots = []
+  const ws = workspaceRoot ? String(workspaceRoot).replace(/\/+$/, '') : ''
+  if (ws) roots.push(ws)
+  const pre = predefinedRoot ? String(predefinedRoot).replace(/\/+$/, '') : ''
+  if (pre && pre !== ws) roots.push(pre)
+  for (const r of roots) {
+    if (await pathExists(fs, r + '/' + p)) return true
+  }
+  return false
+}
+
+// 静态文件语境探测（拍板②双语境表）。返回 { status: 'ok'|'miss'|'skip', path }；
+// 'skip' = 变量未知（迭代期/未知 param/定义语境 ${wf_dir}）或 preset raw 字面绝对
+// （E-ABS-IN-DEF 已单报，调用方传 literalAbs）；'ok'/'miss' 附命中/回退路径。
+async function probeStaticPath(fs, rawVal, opts) {
+  const o = opts || {}
+  if (!fs) return { status: 'skip', path: null }
+  if (o.literalAbs) return { status: 'skip', path: null }
+  const expanded = wvNormalize(expandRef(wvNormalize(rawVal), o.params, o.dirVars))
+  if (expanded.indexOf('${') !== -1) return { status: 'skip', path: null }
+  if (o.context === 'definition-preset') {
+    // preset 定义语境：相对 = 仅模板子目录锚点（不走两级链，四点①）；
+    // params 注入展开为绝对 = 用户指定合法入口 → 直通查存在（§5.1 变量路径列）。
+    if (wvE_isAbsoluteishPath(expanded)) {
+      return (await pathExists(fs, expanded)) ? { status: 'ok', path: expanded } : { status: 'miss', path: expanded }
+    }
+    if (!o.defDir) return { status: 'skip', path: null } // 防御：无锚点不误报
+    const cand = String(o.defDir).replace(/\/+$/, '') + '/' + expanded
+    return (await pathExists(fs, cand)) ? { status: 'ok', path: cand } : { status: 'miss', path: cand }
+  }
+  if (o.context === 'instance') {
+    // 实例语境：绝对直通；相对 = 实例目录（1:1 副本）→ defDir → 两级链兜底
+    if (wvE_isAbsoluteishPath(expanded)) {
+      return (await pathExists(fs, expanded)) ? { status: 'ok', path: expanded } : { status: 'miss', path: expanded }
+    }
+    const resolved = await wvE_resolveStaticPath(fs, expanded, {
+      priorityDirs: [o.wfDir, o.defDir],
+      workspaceRoot: o.workspaceRoot,
+      predefinedRoot: o.predefinedRoot,
+    })
+    return (await pathExists(fs, resolved)) ? { status: 'ok', path: resolved } : { status: 'miss', path: resolved }
+  }
+  // 非 preset 定义语境：两级链（workspace→预定义，现状）；绝对（字面或展开）直通
+  if (wvE_isAbsoluteishPath(expanded)) {
+    return (await pathExists(fs, expanded)) ? { status: 'ok', path: expanded } : { status: 'miss', path: expanded }
+  }
+  const resolved = await wvE_resolveStaticPath(fs, expanded, {
+    priorityDirs: [],
+    workspaceRoot: o.workspaceRoot,
+    predefinedRoot: o.predefinedRoot,
+  })
+  return (await pathExists(fs, resolved)) ? { status: 'ok', path: resolved } : { status: 'miss', path: resolved }
+}
+
+// E-DEP-CYCLE：dependsOn 图 DFS 三色（白=未访问 灰=在栈 黑=完成）；自环=环；
+// 未知引用跳过（归 parser 现状）。同环多入口按成员集合去重，报一条完整环路径。
+function detectDepCycles(tasks) {
+  const byId = new Map()
+  for (const t of tasks) byId.set(t.id, t)
+  const color = new Map()
+  const cycles = []
+  const seen = new Set()
+  function visit(id, stack) {
+    color.set(id, 1)
+    stack.push(id)
+    const t = byId.get(id)
+    for (const dep of ((t && t.dependsOn) || [])) {
+      if (!byId.has(dep)) continue
+      const c = color.get(dep) || 0
+      if (c === 1) {
+        const i = stack.indexOf(dep)
+        const cyc = stack.slice(i).concat([dep])
+        const key = cyc.slice(0, -1).slice().sort().join('|')
+        if (!seen.has(key)) { seen.add(key); cycles.push(cyc) }
+      } else if (c === 0) {
+        visit(dep, stack)
+      }
+    }
+    stack.pop()
+    color.set(id, 2)
+  }
+  for (const t of tasks) {
+    if (!(color.get(t.id) || 0)) visit(t.id, [])
+  }
+  return cycles
+}
+
+// ── 主入口 ─────────────────────────────────────────────────────────────────
+// opts = { parsed, params?, workspaceRoot?, predefinedRoot?, defDir?, wfDir?, context?, fs? }
+// 返回 { ok, errors: [{code,task,field,message}], warnings: [同构] }
+async function validateWorkflow(opts) {
+  const o = opts || {}
+  const parsed = o.parsed
+  const out = { ok: true, errors: [], warnings: [] }
+  if (!parsed || !Array.isArray(parsed.tasks)) {
+    out.ok = false
+    out.errors.push({ code: 'E-ITEMS-PARSE', task: null, field: 'workflow', message: 'parsed 缺失或无 tasks（应先过 parseWorkflow）' })
+    return out
+  }
+  const pushE = (code, task, field, message) => out.errors.push({ code, task, field, message })
+  const pushW = (code, task, field, message) => out.warnings.push({ code, task, field, message })
+  const context = o.context || 'definition'
+  const params = o.params || {}
+  const fs = o.fs || null
+  const dirVars = {
+    workspace: o.workspaceRoot || undefined,
+    skills: o.predefinedRoot ? String(o.predefinedRoot).replace(/\/+$/, '') + '/skills' : undefined,
+  }
+  if (o.wfDir) dirVars['wf_dir'] = String(o.wfDir).replace(/\/+$/, '')
+  const tasks = parsed.tasks
+  const probeOpts = {
+    context, params, dirVars, fs,
+    workspaceRoot: o.workspaceRoot, predefinedRoot: o.predefinedRoot, defDir: o.defDir, wfDir: o.wfDir,
+  }
+
+  // 1) E-DEP-CYCLE（dependsOn 环/自依赖）
+  for (const cyc of detectDepCycles(tasks)) {
+    pushE('E-DEP-CYCLE', cyc[0], 'depends-on', '任务依赖成环: ' + cyc.join(' → '))
+  }
+
+  // 2) 上游 outputs 集合（展开值比较，与 input 展开同基准对称；26R 精确+basename 同款）
+  const allOutputs = []
+  for (const t of tasks) {
+    for (const ov of (t.outputsRaw || [])) allOutputs.push(wvNormalize(expandRef(String(ov), params, dirVars)))
+  }
+
+  // 3) 逐任务静态检查
+  for (const t of tasks) {
+    // E-PROCESSOR-MISSING（自 parser warning 升级；llm-task/loop/concurrent 均派发 subagent 必须指定）
+    if (!t.processorRaw) {
+      pushE('E-PROCESSOR-MISSING', t.id, 'processor', '未指定 processor（技能）——必须补全后才能创建/启动')
+    } else if (fs) {
+      // E-SKILL-MISSING（processor 两级链探针；展开后仍含 ${ 跳过）
+      const ref = wvNormalize(expandRef(t.processorRaw, params, dirVars))
+      if (ref.indexOf('${') === -1 && !(await skillRefExists(fs, ref, o.workspaceRoot, o.predefinedRoot))) {
+        pushE('E-SKILL-MISSING', t.id, 'processor', '技能不存在（两级链 miss）: ' + ref)
+      }
+    }
+    // E-GATE-CHECKER-MISSING（自 parser warning 升级；gateRaw 属性仅在 quality-gate 对象存在时由 parser 设置）
+    if ('gateRaw' in t && t.gateRaw == null) {
+      pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'quality-gate 未指定 checker——该门禁必须补全')
+    }
+
+    // inputs 逐值：字面绝对（preset）→ 上游衔接（精确/basename）→ 语境探测
+    const rawInputs = t.inputsRaw || {}
+    let dupWarned = false
+    for (const key of Object.keys(rawInputs)) {
+      const v = rawInputs[key]
+      for (const raw0 of (Array.isArray(v) ? v : [v])) {
+        const raw = wvNormalize(String(raw0))
+        const expanded = wvNormalize(expandRef(raw, params, dirVars))
+        const literalAbs = context === 'definition-preset' && wvE_isAbsoluteishPath(raw)
+        if (literalAbs) {
+          pushE('E-ABS-IN-DEF', t.id, 'inputs.' + key, 'preset 定义禁用字面绝对路径静态文件（须置于模板子目录内）: ' + raw)
+        }
+        // W-ITEMS-INPUT-DUP（拍板 2026-09-03：items-from 与 inputs 互斥；每任务至多一条）
+        if (t.itemsFromRaw && !dupWarned) {
+          const ir = wvNormalize(t.itemsFromRaw)
+          if (raw === ir || (basenameOf(raw) !== '' && basenameOf(raw) === basenameOf(ir))) {
+            pushW('W-ITEMS-INPUT-DUP', t.id, 'items-from', 'items-from 与 inputs 声明同一文件（互斥约定：条目经 _loopItem 随派发传入，inputs 勿再声明该文件）: ' + ir)
+            dupWarned = true
+          }
+        }
+        if (literalAbs) continue // 已单报，不重复探测
+        if (expanded.indexOf('${') !== -1) continue // 迭代期/未知变量
+        // 上游衔接：精确 → basename 兜底（W-REF-MISMATCH）
+        if (allOutputs.indexOf(expanded) !== -1) continue
+        const base = basenameOf(expanded)
+        if (base && allOutputs.some((x) => basenameOf(x) === base)) {
+          pushW('W-REF-MISMATCH', t.id, 'inputs.' + key, 'input 与上游 output 仅 basename 相同而完整路径不同（疑似拼写不一致）: ' + expanded)
+          continue
+        }
+        const found = await probeStaticPath(fs, raw, probeOpts)
+        if (found.status === 'miss') {
+          pushE('E-INPUT-MISSING', t.id, 'inputs.' + key, '输入文件不存在且非上游产出: ' + expanded)
+        }
+      }
+    }
+
+    // items（loop/concurrent）：延迟组跳过存在性；命中则做格式探针
+    if (t.itemsFromRaw) {
+      const raw = wvNormalize(t.itemsFromRaw)
+      const literalAbs = context === 'definition-preset' && wvE_isAbsoluteishPath(raw)
+      if (literalAbs) {
+        pushE('E-ABS-IN-DEF', t.id, 'items-from', 'preset 定义禁用字面绝对路径静态文件（须置于模板子目录内）: ' + raw)
+      } else {
+        const found = await probeStaticPath(fs, raw, probeOpts)
+        if (found.status === 'miss') {
+          // 延迟组跳过（deferDisposition 单一事实源）；显式 deferred:false 不跳（拍板同报）
+          const deferred = wvE_deferDisposition ? wvE_deferDisposition(t, tasks) : false
+          if (!deferred) {
+            pushE('E-ITEMS-MISSING', t.id, 'items-from', 'items 文件不存在且非上游产出（无延迟豁免）: ' + wvNormalize(expandRef(raw, params, dirVars)))
+          }
+        } else if (found.status === 'ok') {
+          // E-ITEMS-PARSE：文件存在但提取失败；空提取不报（26R Q1-b 占位迭代合法）
+          try {
+            const text = await fs.readText(await fs.resolve(found.path))
+            try {
+              wvE_extractItems(text, { format: t.itemsFormat || null, path: found.path, taskId: t.id })
+            } catch (e2) {
+              pushE('E-ITEMS-PARSE', t.id, 'items-from', 'items 文件存在但提取失败: ' + (e2 && e2.message ? e2.message : String(e2)))
+            }
+          } catch (e1) {
+            // 探测/读取竞态：按 miss 走延迟组判定，不误报 E-ITEMS-PARSE
+            const deferred = wvE_deferDisposition ? wvE_deferDisposition(t, tasks) : false
+            if (!deferred) {
+              pushE('E-ITEMS-MISSING', t.id, 'items-from', 'items 文件读取失败: ' + (e1 && e1.message ? e1.message : String(e1)))
+            }
+          }
+        }
+      }
+    }
+  }
+
+  out.ok = out.errors.length === 0
+  return out
+}
+
+// 校验结果 → 单行可读串（关口拒绝 message / persona 转告用）
+function formatValidationItem(it) {
+  return '[' + it.code + '] 任务 "' + (it.task || '-') + '" ' + it.field + ': ' + it.message
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { validateWorkflow, expandRef, detectDepCycles, skillRefExists, probeStaticPath, formatValidationItem }
 }
 
 // ---- module: items-extract ----
@@ -2726,6 +3069,15 @@ let E_resolveStaticPath = typeof resolveStaticPath !== 'undefined' ? resolveStat
   : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').resolveStaticPath : null)
 let E_presetTemplateDirOf = typeof presetTemplateDirOf !== 'undefined' ? presetTemplateDirOf
   : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').presetTemplateDirOf : null)
+// Iter-27b：语义校验引擎（shared/workflow-validate.js）——create/begin/start/resume
+// 关口与 workflow_validate 工具共用；mjs 内联同作用域直呼（section 排 workflow-paths
+// 之后），Node 直测 require 兜底。
+let E_validateWorkflow = typeof validateWorkflow !== 'undefined' ? validateWorkflow
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-validate').validateWorkflow : null)
+let E_formatValidationItem = typeof formatValidationItem !== 'undefined' ? formatValidationItem
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-validate').formatValidationItem : null)
+let E_deferDisposition = typeof deferDisposition !== 'undefined' ? deferDisposition
+  : (typeof require !== 'undefined' ? require('../../shared/workflow-paths').deferDisposition : null)
 // Node 直测（require 本源文件）时 builtin-skills 不在同作用域——require 兜底；
 // mjs 内联作用域有 detectPredefinedRoot（builtin-skills section 在前），走 typeof 分支。
 function fallbackPredefinedRoot() {
@@ -2861,10 +3213,15 @@ function stripInstanceHeader(text) {
   return lines.slice(i).join('\n')
 }
 
+// Iter-27b 验收修正：被拦后的权威行为提示——LLM 只许转告清单并停止，禁止自行
+// 搜索/替换技能或输入文件（同名≠正确，可能引用错误甚至恶意文件）；修复责任在用户。
+const GATE_HINT = '校验被拦：仅向用户转告 errors 清单并停止，等待用户修复（补技能/文件或修定义）后再按其指示重试或重新 create/begin；严禁自行在工作区搜索、猜测或替换技能/输入文件'
+
 // 定义不合法错误（携带 workflowBeginErrors 数组，begin 路径保持既有契约）
 function definitionError(errors) {
   const e = new Error('workflow 定义不合法: ' + errors.join('; '))
   e.workflowBeginErrors = errors
+  e.hint = GATE_HINT
   return e
 }
 
@@ -2972,24 +3329,11 @@ async function fileExists(fs, path) {
   } catch (e) { return false }
 }
 
-// Iter-26R：延迟展开判定（D1 混合方案）
-// 1. deferred=true 显式声明 → 延迟；deferred=false → 不延迟（报错）
-// 2. deferred=null（未声明）→ 自动检测：是否有上游任务 outputs 包含该路径
-// 匹配精度：itemsRel（解析前注入值，与 outputs 同为相对形态）精确匹配优先；
-// basename 兜底（一侧经 resolveRefPath 加了 workspaceRoot 前缀 / 用户混写绝对相对的场景）。
+// Iter-26R：延迟展开判定（D1 混合方案）。Iter-27b：函数体前移至 shared/workflow-paths.js
+// 的 deferDisposition（expandDefinition 与语义校验共用单一事实源）；此处保留同名薄壳
+//（expandDefinition 调用点与模块导出形状不变）。
 function shouldDeferExpansion(task, allTasks) {
-  if (task.deferred === true) return true
-  if (task.deferred === false) return false
-  const rel = task.itemsRel || task.itemsFrom
-  if (!rel) return false
-  const base = rel.split('/').pop()
-  for (const t of allTasks) {
-    const outputs = t.outputs || []
-    for (const o of outputs) {
-      if (o === rel || o.split('/').pop() === base) return true
-    }
-  }
-  return false
+  return E_deferDisposition(task, allTasks)
 }
 
 // Iter-26R：构建占位任务（D2 占位=组完成哨兵）
@@ -3405,7 +3749,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_begin ────────────────────────────────────────────────────────
   const beginTool = {
     name: 'workflow_begin',
-    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量；定义中可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}（展开期注入为绝对路径）。loop/concurrent 支持 items-format（lines|markdown|json|yaml，缺省按扩展名推断）与对象 item 注入（${item} 默认链 id→名称→序号、${item.字段} 标量；空 items 展开为 <组id>/empty 占位迭代，items 文件须启动时刻已存在）。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（processor 技能绝对路径、inputs 命名字典与 outputs 列表均为绝对路径——inputs/outputs 相对路径以实例目录为基准解析、skillDir 技能目录、门禁配置、instanceId）与初始 PENDING 状态；定义不合法时返回 errors 列表。processor 未指定的任务照常返回（processor=null，由编排侧向用户报告，Iter-25 起 parser 降为创建警告）。',
+    description: '解析并启动一个工作流定义（YAML）。参数 workflowPath 为本机绝对路径；或传 workflowText 直接给 YAML 文本。可选 params 对象注入工作流级 ${param} 模板变量；定义中可用目录变量 ${workspace}/${wf_dir}/${skills}/${skill_dir}（展开期注入为绝对路径）。loop/concurrent 支持 items-format（lines|markdown|json|yaml，缺省按扩展名推断）与对象 item 注入（${item} 默认链 id→名称→序号、${item.字段} 标量；空 items 展开为 <组id>/empty 占位迭代，items 文件须启动时刻已存在）。可选 workspaceRoot / statePath 指定状态落盘位置（兼容旧单实例布局）；默认在当前会话工作区创建实例目录 <cwd>/.workflow-agent/instances/<workflowName-uuid8>/（instance.yaml/state.json/metadata.json/output/logs），状态写入实例目录。成功返回解析出的任务列表（processor 技能绝对路径、inputs 命名字典与 outputs 列表均为绝对路径——inputs/outputs 相对路径以实例目录为基准解析、skillDir 技能目录、门禁配置、instanceId）与初始 PENDING 状态。Iter-27b：定义不合法或语义校验未通过（缺 processor/依赖环/技能或文件缺失等，结构化 validation.errors 清单）时整体拒绝，不建实例目录，workflowBeginErrors 返回可读清单。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -3458,9 +3802,34 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             await b.storage.save()
             const s = b.engine.snapshot()
             s.workflowBeginErrors = e.workflowBeginErrors
+            s.hint = GATE_HINT
             return withInstanceId(s, b)
           }
           throw e
+        }
+
+        // Iter-27b（拍板①=B）：语义校验——begin 同 create 整体拒（校验先于 createBind，
+        // 不建实例目录）。复用既有 workflowBeginErrors 快照契约 + 附结构化 validation。
+        // 定义语境（实例目录未建，无 wfDir）；preset 来源=definition-preset 锚点。
+        const rawBegin = E_parseWorkflow(src.text)
+        const vResBegin = await E_validateWorkflow({
+          parsed: rawBegin,
+          params,
+          workspaceRoot: src.workspaceRoot,
+          predefinedRoot: detectPredefinedRootSafe(),
+          defDir: beginDefDir || undefined,
+          context: beginDefDir ? 'definition-preset' : 'definition',
+          fs,
+        })
+        if (!vResBegin.ok) {
+          const msg = 'workflow 语义校验未通过（' + vResBegin.errors.length + ' 项错误），须补全后重新 begin/create'
+          b.engine.setError(msg)
+          await b.storage.save()
+          const s = b.engine.snapshot()
+          s.workflowBeginErrors = vResBegin.errors.map(E_formatValidationItem)
+          s.validation = { ok: false, errors: vResBegin.errors, warnings: vResBegin.warnings }
+          s.hint = GATE_HINT
+          return withInstanceId(s, b)
         }
 
         // ── Iter-10：多实例布局——成功路径创建实例目录并切换绑定 ──
@@ -3485,6 +3854,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             // Iter-27a（四点②③）：预置工作流子目录 1:1 复制（定义已写 instance.yaml；
             // 静态文件原样复制，相对引用零调整；文本 only；失败不阻断 begin 主流程）
             if (beginDefDir) b.presetCopy = await copyTemplateStaticTree(fs, beginDefDir, entry.dir, args.workflowPath)
+            // Iter-27b：校验快照落盘（创建后退化标示 + Iter-28 数据源；失败不阻断 begin）
+            try {
+              await registry.patchMeta(cwd, entry.instanceId, { validation: { ok: true, errors: [], warnings: vResBegin.warnings, validatedAt: new Date().toISOString() } })
+            } catch (e2) { /* 快照失败不阻断 begin */ }
           }
         }
         if (!wfDir) wfDir = args.statePath ? parentDir(String(args.statePath)) : (src.workspaceRoot || null) // legacy 单实例布局（默认④）
@@ -3498,6 +3871,8 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const r = await b.storage.save()
         b.engine.setPersist(r)
         const beginSnap = withInstanceId(b.engine.snapshot(), b)
+        // Iter-27b：begin 附 validation 摘要（通过；W 级提醒随行）
+        beginSnap.validation = { ok: true, warnings: vResBegin.warnings.map(E_formatValidationItem) }
         if (b.recoveredConflict && b.recoveredConflict.length > 0) beginSnap.recoveredConflict = b.recoveredConflict
         return beginSnap
       } catch (error) {
@@ -3549,7 +3924,13 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         }
         const r = await b.storage.save()
         b.engine.setPersist(r)
-        return withInstanceId(b.engine.snapshot(), b)
+        const snap = b.engine.snapshot()
+        // Iter-27b：附 validation 摘要（metadata 快照；旧实例无字段=ok 兼容，hydrate 不误标退化）
+        if (b.entry) {
+          const mv = b.entry.meta && b.entry.meta.validation
+          snap.validation = mv || { ok: true, errors: [], warnings: [], legacy: true }
+        }
+        return withInstanceId(snap, b)
       } catch (error) {
         b.engine.setError(error.message)
         return withInstanceId(b.engine.snapshot(), b)
@@ -3582,6 +3963,41 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
     parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
     parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
     return parsed
+  }
+
+  // ── Iter-27b：语义校验关口辅助 ────────────────────────────────────────────
+  // 校验拒绝错误（携带结构化清单；errPayload 展开为 errors 字段回传）
+  function validationError(res) {
+    const items = (res && res.errors) || []
+    const e = new Error('workflow 语义校验未通过（' + items.length + ' 项错误），须补全后重试: '
+      + items.map(E_formatValidationItem).join('；'))
+    e.validationErrors = items
+    e.hint = GATE_HINT
+    return e
+  }
+
+  // 读实例 instance.yaml → raw parse → 实时语义校验（实例语境，不信任落盘）。
+  // start/resume/reset/workflow_validate 共用。parse 失败返回 parseErrors（reset 沿
+  // 既有 expandInstanceDefinition throw 通道先行失败，此分支纯防御；validate 工具如实回传）。
+  async function validateInstanceEntry(entry) {
+    const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+    const text = stripInstanceHeader(raw)
+    const parsed = E_parseWorkflow(text)
+    const meta = entry.meta || {}
+    if (parsed.errors && parsed.errors.length > 0) return { parsed, parseErrors: parsed.errors }
+    // Iter-27a 同款锚点：meta.sourcePath → templates/<子目录>（实例副本缺失时自愈语义）
+    const defDir = E_presetTemplateDirOf(meta.sourcePath, detectPredefinedRootSafe()) || undefined
+    const vRes = await E_validateWorkflow({
+      parsed,
+      params: meta.params || {},
+      workspaceRoot: meta.sessionCwd || undefined,
+      predefinedRoot: detectPredefinedRootSafe(),
+      defDir,
+      wfDir: entry.dir,
+      context: 'instance',
+      fs,
+    })
+    return { parsed, vRes }
   }
 
   // Iter-26R（D4）：延迟展开回调——占位节点前驱就绪时读 items 文件并展开为迭代数组
@@ -3650,6 +4066,8 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   function errPayload(e) {
     const out = { error: (e && e.message) || String(e) }
     if (e && e.workflowBeginErrors) out.workflowBeginErrors = e.workflowBeginErrors
+    if (e && e.validationErrors) out.errors = e.validationErrors // Iter-27b：结构化校验清单
+    if (e && e.hint) out.hint = e.hint // Iter-27b 验收修正：被拦后只转告+停止的权威提示
     return out
   }
 
@@ -3686,7 +4104,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_create ───────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_create',
-    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。返回 {instanceId, dir, workflowName, phase:"CREATED", warnings[], presetCopy}——warnings 为创建关口校验警告（任务缺 processor / quality-gate 缺 checker；Iter-25 起允许此类半成品实例存在，启动前应补全）。Iter-27a：workflowPath 为预置模板子目录（templates/<名>/<名>.yaml）时，子目录内全部文件 1:1 复制进实例目录（静态文件自包含，相对引用零调整；文本文件），返回 presetCopy={copied,failed}。启动用 workflow_start。',
+    description: '从工作流定义（workflowPath 或 workflowText）+ params 创建 workflow 实例目录（instance.yaml/metadata.json/output/logs），校验定义但不启动执行。Iter-27b（拍板①=B）：语义校验硬拦截——缺 processor/quality-gate 缺 checker/依赖成环/技能缺失/静态文件缺失/preset 字面绝对路径（E-ABS-IN-DEF）等 errors 非空时拒绝创建（不建实例目录）并返回结构化 errors 清单，修复定义后重新 create；通过则创建并落盘 validation 快照。返回 {instanceId, dir, workflowName, phase:"CREATED", warnings[], validation, presetCopy}——warnings 为 W 级提醒（W-REF-MISMATCH 拼接疑义/W-ITEMS-INPUT-DUP 重复声明，须转告用户）。Iter-27a：workflowPath 为预置模板子目录（templates/<名>/<名>.yaml）时，子目录内全部文件 1:1 复制进实例目录（静态文件自包含，相对引用零调整；文本文件），返回 presetCopy={copied,failed}。启动用 workflow_start。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -3710,6 +4128,22 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!src) throw new Error('需要 workflowPath 或 workflowText 参数')
         const parsed = E_parseWorkflow(src.text)
         if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
+        // Iter-27b（拍板①=B）：语义校验硬拦——errors 非空拒绝创建（不建实例目录）。
+        // 语境：preset 模板子目录来源=definition-preset（defDir 锚点+禁字面绝对
+        // E-ABS-IN-DEF）；其余=definition（两级链）。校验先于 createBind（拒绝零副作用）。
+        const tplDirPre = args.workflowPath
+          ? (E_presetTemplateDirOf(args.workflowPath, detectPredefinedRootSafe()) || null)
+          : null
+        const vRes = await E_validateWorkflow({
+          parsed,
+          params: args.params || {},
+          workspaceRoot: cwd,
+          predefinedRoot: detectPredefinedRootSafe(),
+          defDir: tplDirPre || undefined,
+          context: tplDirPre ? 'definition-preset' : 'definition',
+          fs,
+        })
+        if (!vRes.ok) throw validationError(vRes)
         const entry = await (registry.sessionIdOf(exec)
           ? registry.createBind(cwd, registry.sessionIdOf(exec), { // Iter-19：1:1 + CONFLICT 自愈
             workflowName: parsed.name,
@@ -3722,14 +4156,12 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         // 同构，静态文件原样复制（相对引用零调整，实例自包含）；定义文件本身已写
         // 为 instance.yaml，跳过；文本 only；单文件失败不阻断（失败清单回传）。
         let presetCopy = null
-        const tplDir = args.workflowPath
-          ? (E_presetTemplateDirOf(args.workflowPath, detectPredefinedRootSafe()) || null)
-          : null
-        if (tplDir) presetCopy = await copyTemplateStaticTree(fs, tplDir, entry.dir, args.workflowPath)
-        // Iter-25（D4）：创建关口校验警告（缺 processor / gate 无 checker）——实例照常创建，
-        // 校验与执行事件解耦；补全后重创建或（Iter-28 起）编辑实例。
-        // Iter-27a：presetCopy = { copied, failed }（仅预置工作流子目录来源时返回）。
-        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: parsed.warnings || [], presetCopy }
+        if (tplDirPre) presetCopy = await copyTemplateStaticTree(fs, tplDirPre, entry.dir, args.workflowPath)
+        // Iter-27b：校验快照落盘（创建后退化标示 + Iter-28 数据源）；warnings 改由
+        // validate 出口（parser 两处 warning 已下线升错误级）。
+        const validationSnapshot = { ok: vRes.ok, errors: vRes.errors, warnings: vRes.warnings, validatedAt: new Date().toISOString() }
+        await registry.patchMeta(cwd, entry.instanceId, { validation: validationSnapshot })
+        return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: vRes.warnings.map(E_formatValidationItem), validation: validationSnapshot, presetCopy }
       } catch (e) {
         return errPayload(e)
       }
@@ -3739,7 +4171,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_start ────────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_start',
-    description: '启动一个已存在的 workflow 实例：读实例 instance.yaml → 解析展开 → 引擎置 PENDING → 写实例 state.json → 返回任务列表与 runnable（编排循环起点）。缺省 instanceId 时用当前会话活跃实例。RUNNING 中的实例会拒绝（先 stop 或 reset）。返回快照含 instanceId。',
+    description: '启动一个已存在的 workflow 实例：读实例 instance.yaml → 解析展开 → 引擎置 PENDING → 写实例 state.json → 返回任务列表与 runnable（编排循环起点）。缺省 instanceId 时用当前会话活跃实例。RUNNING 中的实例会拒绝（先 stop 或 reset）。Iter-27b：启动前实时语义校验（重读 instance.yaml，不信任创建时快照；防创建后退化+legacy），未通过拒绝启动并返回结构化 errors 清单——补全技能/文件后重试，或修复定义后重新 create。返回快照含 instanceId。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -3768,6 +4200,11 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (stage === 'RUNNING') throw new Error('实例 ' + entry.instanceId + ' 正在运行中（stage=RUNNING）')
         if (stage === 'STOPPED') throw new Error('实例 ' + entry.instanceId + ' 已停止；用 workflow_resume 续跑')
         if (stage === 'COMPLETED' || stage === 'FAILED') throw new Error('实例 ' + entry.instanceId + ' 已完成/失败（stage=' + stage + '）；用 workflow_reset 重跑')
+        // Iter-27b：start 实时闸门——重读 instance.yaml 实时校验（实例语境，不信任
+        // 创建时落盘快照；防创建后退化 + legacy 旧实例）。errors → 拒绝启动+结构化清单。
+        const startGate = await validateInstanceEntry(entry)
+        if (startGate.parseErrors) throw definitionError(startGate.parseErrors)
+        if (!startGate.vRes.ok) throw validationError(startGate.vRes)
         if (!entry.hasState) {
           const parsed = await expandInstanceDefinition(entry)
           entry.engine.begin(parsed)
@@ -3850,7 +4287,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_reset ────────────────────────────────────────────────────────
   ctx.tools.register({
     name: 'workflow_reset',
-    description: '重置一个 workflow 实例并可直接重跑：先归档备份实例内容（<ts>_reset_<state>/）→ 从 instance.yaml 重新解析展开 → 引擎全新 PENDING → 覆盖 state.json → 返回快照含 pendingCleanup（rm 命令）——**编排 Agent 必须立即用 bash 执行 pendingCleanup.cmd 清空 output/logs**（fs 服务无删除 API，清空由会话执行；备份已在 archive/ 保留全部产物）。缺省 instanceId 时用当前会话活跃实例。',
+    description: '重置一个 workflow 实例并可直接重跑：先归档备份实例内容（<ts>_reset_<state>/）→ 从 instance.yaml 重新解析展开 → 引擎全新 PENDING → 覆盖 state.json → 返回快照含 pendingCleanup（rm 命令）——**编排 Agent 必须立即用 bash 执行 pendingCleanup.cmd 清空 output/logs**（fs 服务无删除 API，清空由会话执行；备份已在 archive/ 保留全部产物）。缺省 instanceId 时用当前会话活跃实例。Iter-27b：返回附 validation 校验结果（回传不拦；有错时转告用户修定义后重新 create）。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -3879,6 +4316,13 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         // Iter-22：reset 不依赖内存 state.def（hydrate 不恢复 def，历史/重启/hydrate-only 实例
         // 必无 def）——从 instance.yaml 重新解析展开定义再重置，任意可 reset 实例都能重跑。
         const parsed = await expandInstanceDefinition(entry)
+        // Iter-27b：reset 校验回传不拦（拍板——重置是恢复操作；parse 错误已由上方
+        // expandInstanceDefinition 既有 throw 通道先行失败，此处 vRes 恒在）
+        let resetValidation = null
+        try {
+          const rg = await validateInstanceEntry(entry)
+          resetValidation = rg.vRes || null
+        } catch (e2) { /* 校验失败不拦 reset（回传 null） */ }
         entry.engine.resetWithDefinition(parsed) // → 全新 PENDING
         entry.engine.setError(null)
         const r = await entry.storage.save()
@@ -3897,7 +4341,80 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
           cmd: 'rm -rf ' + q(entry.dir + '/output') + ' ' + q(entry.dir + '/logs') + ' && mkdir -p ' + q(entry.dir + '/output') + ' ' + q(entry.dir + '/logs'),
         }
         snap.resetNote = '状态已重置；output/logs 已备份至 ' + backupDir + '，须立即执行 pendingCleanup.cmd 清空产物'
+        // Iter-27b：reset 附校验结果（回传不拦；有错时提醒修定义后重新 create）
+        if (resetValidation) {
+          snap.validation = resetValidation
+          if (!resetValidation.ok) {
+            snap.resetNote += '；注意：实例定义存在 ' + resetValidation.errors.length + ' 项校验错误（reset 不拦，建议修复后重新 create）'
+          }
+        }
         return snap
+      } catch (e) {
+        return errPayload(e)
+      }
+    },
+  })
+
+  // ── workflow_validate（Iter-27b 新增：只读语义校验工具）────────────────────
+  ctx.tools.register({
+    name: 'workflow_validate',
+    description: '只读语义校验一个 workflow：传 instanceId（实例语境——重读该实例 instance.yaml 实时校验，不信任创建时快照；缺省用当前会话活跃实例）；或传 workflowPath|workflowText + 可选 params（定义语境——workflowPath 位于预置 templates/<子目录>/ 时自动锚定模板子目录并禁用字面绝对路径 E-ABS-IN-DEF）。返回 {ok, errors:[{code,task,field,message}], warnings:[同构], context, instanceId?/dir?/parseErrors?}。错误码：E-DEP-CYCLE/E-PROCESSOR-MISSING/E-SKILL-MISSING/E-GATE-CHECKER-MISSING/E-INPUT-MISSING/E-ITEMS-MISSING/E-ABS-IN-DEF/E-ITEMS-PARSE；警告：W-REF-MISMATCH/W-ITEMS-INPUT-DUP。不改任何状态（仅 stat/readText 探针）。',
+    parameters: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        instanceId: { type: 'string', description: '实例 id（缺省=当前会话活跃实例；与 workflowPath/workflowText 二选一，显式传路径时优先路径形态）' },
+        workflowPath: { type: 'string', description: '工作流 YAML 的绝对路径（定义语境）' },
+        workflowText: { type: 'string', description: '工作流 YAML 文本（与 workflowPath 二选一）' },
+        params: { type: 'object', additionalProperties: true, description: '工作流参数（${param} 展开后重判存在性）' },
+        workspaceRoot: { type: 'string', description: '工作区根（缺省=会话工作区）' },
+      },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: true },
+      render(_a, v) { return [{ type: 'text', text: JSON.stringify(v, null, 2) }] },
+    },
+    async execute(args, exec) {
+      try {
+        if (!fs) throw new Error('fs service unavailable')
+        const wantInstance = args && (args.instanceId || (!args.workflowPath && !args.workflowText))
+        if (wantInstance) {
+          if (!registry) throw new Error('registry unavailable')
+          const entry = await registry.resolveEntry(exec, args && args.instanceId, { active: true })
+          if (!entry) throw new Error('实例不存在' + (args && args.instanceId ? ': ' + args.instanceId : '（且当前会话无活跃实例，可先 workflow_create 或传 workflowPath/workflowText）'))
+          const res = await validateInstanceEntry(entry)
+          const out = { context: 'instance', instanceId: entry.instanceId, dir: entry.dir }
+          if (res.parseErrors) {
+            out.ok = false
+            out.parseErrors = res.parseErrors
+            out.errors = []
+            out.warnings = []
+          } else {
+            out.ok = res.vRes.ok
+            out.errors = res.vRes.errors
+            out.warnings = res.vRes.warnings
+          }
+          return out
+        }
+        const src = await loadWorkflowSource(fs, args || {}, (args && args.workspaceRoot) || sessionCwd(exec) || undefined)
+        if (!src) throw new Error('需要 instanceId 或 workflowPath/workflowText 参数')
+        const parsed = E_parseWorkflow(src.text)
+        if (parsed.errors && parsed.errors.length > 0) {
+          return { ok: false, context: 'definition', parseErrors: parsed.errors, errors: [], warnings: [] }
+        }
+        const defDir = args.workflowPath
+          ? (E_presetTemplateDirOf(args.workflowPath, detectPredefinedRootSafe()) || undefined)
+          : undefined
+        const vRes = await E_validateWorkflow({
+          parsed,
+          params: (args && args.params) || {},
+          workspaceRoot: src.workspaceRoot,
+          predefinedRoot: detectPredefinedRootSafe(),
+          defDir,
+          context: defDir ? 'definition-preset' : 'definition',
+          fs,
+        })
+        return { ok: vRes.ok, context: defDir ? 'definition-preset' : 'definition', errors: vRes.errors, warnings: vRes.warnings }
       } catch (e) {
         return errPayload(e)
       }
@@ -3907,7 +4424,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ── workflow_resume（Iter-18 新增：仅 STOPPED 续跑）────────────────────────
   ctx.tools.register({
     name: 'workflow_resume',
-    description: '续跑一个已停止（STOPPED）的 workflow 实例：engine.resume() 从已存 state.json hydrate 续跑保进度（保 DONE）→ RUNNING。缺省 instanceId 用当前会话活跃实例。仅 STOPPED 可 resume；PENDING/RUNNING/COMPLETED/FAILED 拒绝。返回快照含 instanceId。',
+    description: '续跑一个已停止（STOPPED）的 workflow 实例：engine.resume() 从已存 state.json hydrate 续跑保进度（保 DONE）→ RUNNING。缺省 instanceId 用当前会话活跃实例。仅 STOPPED 可 resume；PENDING/RUNNING/COMPLETED/FAILED 拒绝。Iter-27b：续跑前实时语义校验（同 start 闸门），未通过拒绝并返回结构化 errors 清单。返回快照含 instanceId。',
     parameters: {
       type: 'object',
       additionalProperties: true,
@@ -3927,6 +4444,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (!(await entryStateOnDisk(entry))) throw new Error('实例 ' + entry.instanceId + ' 尚未启动（CREATED），无进度可续跑')
         const stage = entry.engine.snapshot().stage
         if (stage !== 'STOPPED') throw new Error('resume 仅允许 STOPPED（当前 ' + stage + '）')
+        // Iter-27b：resume 沿用 start 实时闸门（拍板——防创建后退化+legacy；保进度续跑前把关）
+        const resumeGate = await validateInstanceEntry(entry)
+        if (resumeGate.parseErrors) throw definitionError(resumeGate.parseErrors)
+        if (!resumeGate.vRes.ok) throw validationError(resumeGate.vRes)
         entry.engine.resume() // STOPPED→RUNNING，保 DONE
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
@@ -4475,6 +4996,28 @@ function registerWebRoutes(ctx, registry) {
               writeJson(res, 400, { error: 'invalid workflow definition', workflowBeginErrors: parsed.errors })
               return
             }
+            // Iter-27b（拍板①=B）：/wf/create 同款语义硬拦——errors 非空 400 结构化拒
+            //（不建实例；GUI 前台清单展示归 Iter-28，本版先通数据通道）。preset 子目录
+            // 来源=definition-preset 语境（defDir 锚点+禁字面绝对），其余=definition。
+            const tplDirPre = srcPath ? (presetTemplateDirOf(srcPath, detectPredefinedRoot()) || null) : null
+            const vRes = await validateWorkflow({
+              parsed,
+              params: args.params || {},
+              workspaceRoot: root,
+              predefinedRoot: detectPredefinedRoot(),
+              defDir: tplDirPre || undefined,
+              context: tplDirPre ? 'definition-preset' : 'definition',
+              fs,
+            })
+            if (!vRes.ok) {
+              writeJson(res, 400, {
+                error: 'invalid workflow definition',
+                workflowBeginErrors: vRes.errors.map(formatValidationItem),
+                errors: vRes.errors,
+                hint: GATE_HINT, // Iter-27b 验收修正：面板/调用方同款"只转告+停止"约束
+              })
+              return
+            }
             let entry
             if (args.sessionId) {
               // Iter-19：走 createBind（1:1 守卫 + CONFLICT 自愈：解绑冲突旧实例→新建当前绑定）
@@ -4491,10 +5034,15 @@ function registerWebRoutes(ctx, registry) {
             // 静态文件原样复制、相对引用零调整；定义本身已写 instance.yaml；文本 only；
             // 单文件失败不阻断，失败清单随响应回传）
             let presetCopy = null
-            const tplDir = srcPath ? (presetTemplateDirOf(srcPath, detectPredefinedRoot()) || null) : null
+            const tplDir = tplDirPre
             if (tplDir) presetCopy = await copyTemplateStaticTree(fs, tplDir, entry.dir, srcPath)
-            // Iter-25（D4）：创建关口校验警告（缺 processor / gate 无 checker）随响应返回
-            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root, sessionId: args.sessionId || null, recoveredConflict: entry._recoveredConflict || [], warnings: parsed.warnings || [], presetCopy })
+            // Iter-27b：校验快照落盘 + 200 响应补 validation/warnings（W 级，validate 出口；
+            // parser warnings 已下线）；warnings 字符串化保持旧形状兼容。
+            const validationSnapshot = { ok: true, errors: [], warnings: vRes.warnings, validatedAt: new Date().toISOString() }
+            try {
+              await registry.patchMeta(root, entry.instanceId, { validation: validationSnapshot })
+            } catch (e2) { /* 快照失败不阻断创建 */ }
+            writeJson(res, 200, { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', workspaceRoot: root, sessionId: args.sessionId || null, recoveredConflict: entry._recoveredConflict || [], warnings: vRes.warnings.map(formatValidationItem), validation: { ok: true, warnings: vRes.warnings.map(formatValidationItem), validatedAt: validationSnapshot.validatedAt }, presetCopy })
           } catch (e) {
             writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
           }

@@ -74,8 +74,19 @@
       7) 实例管理（用户要求时）：workflow_list 列出本会话工作区全部实例
       （phase=CREATED 未启动 / READY 已有状态；附 sessionState 派生状态
       UNBOUND/BOUND/DONE/BROKEN 与 orphans 孤儿 id）；workflow_create 从定义
-      预建实例目录（不启动），返回 warnings 创建校验警告（任务缺 processor/
-      gate 缺 checker——半成品实例允许存在，转告用户补全后再启动）。Iter-27a：预置模板子目录实例化时整目录 1:1 复制进实例（presetCopy.failed 非空须转告）；绝对路径只来自用户指定，引擎直通不改写；items-from 与 inputs 互斥（items 清单仅用于循环/并发控制，条目值经 _loopItem 随派发传入子会话，不再作为 input 重复声明——迭代任务派发 prompt 须带 item = <_loopItem> 行，empty=空清单占位）；
+      预建实例目录（不启动）。Iter-27b 语义硬拦截：定义存在语义错误（缺
+      processor/gate 缺 checker/依赖成环/技能或静态文件缺失/preset 字面绝对路径）
+      时拒绝创建（不建实例目录）并返回结构化 errors 清单——被拦时只做两件事：
+      逐条转告清单+停止等待用户；修复（补技能/文件/改定义）由用户完成并明确指示
+      后再重新 create，严禁自行在工作区搜索/猜测/替换技能或输入文件（同名≠正确，
+      防引用错误甚至恶意文件，安全红线；响应 hint 字段同款约束）；创建成功
+      返回 warnings（W 级：W-REF-MISMATCH/W-ITEMS-INPUT-DUP，须转告）与
+      validation 摘要；workflow_validate（只读）随时体检一个实例或定义文件，
+      返回 {ok, errors, warnings, context}；workflow_start/workflow_resume 启动/
+      续跑前实时校验（不信任创建时快照，防创建后退化），被拦时只转告 errors 清单
+      即停止，严禁自行找替代文件，等用户补齐并明确指示后再试；workflow_reset
+      返回附 validation（回传不拦，
+      ok=false 时转告建议修定义重新 create）。Iter-27a：预置模板子目录实例化时整目录 1:1 复制进实例（presetCopy.failed 非空须转告）；绝对路径只来自用户指定，引擎直通不改写；items-from 与 inputs 互斥（items 清单仅用于循环/并发控制，条目值经 _loopItem 随派发传入子会话，不再作为 input 重复声明——迭代任务派发 prompt 须带 item = <_loopItem> 行，empty=空清单占位）；
       workflow_adopt 采用池中 UNBOUND（sessionId==null）
       实例并绑定本会话（start 前须先 adopt 若实例未绑定）；workflow_start 启动
       已绑定实例并返回 runnable（RUNNING 拒、STOPPED 拒用 resume、COMPLETED/FAILED

@@ -71,7 +71,8 @@
 
 3. **执行一个 Task**：
    a. `workflow_status({task: <id>, taskStatus: "RUNNING"})`
-   b. **（Iter-25 护栏）若该 Task 的 `processor` 为 null**（创建时未指定技能）：
+   b. **（Iter-25 护栏，27b 后仅兜 legacy 实例）若该 Task 的 `processor` 为 null**
+      （Iter-27b 起创建/启动关口已拦截此类实例，仅旧实例可能命中）：
       **不得派发 subagent**——保持任务 PENDING，向用户报告
       "任务 <id> 未指定技能（processor），请补全后继续"，等待用户指示。
    c. 读取该 Task 的 `processor` 技能文件全文（用 read 工具）。
@@ -93,8 +94,9 @@
 
 4. **质量门禁**（若配置了 quality-gate）：
    a. `workflow_status({task: <id>, taskStatus: "RUNNING", gateResult: undefined})` 保持任务状态。
-   b. **（Iter-25 护栏）若 `gate.checker` 为 null**（配置了门禁但未指定检查技能，
-      创建警告已提示）：按未配置门禁处理——输出校验通过后直接标 DONE，不虚构门禁。
+   b. **（Iter-25 护栏，27b 后仅兜 legacy 实例）若 `gate.checker` 为 null**
+      （配置了门禁但未指定检查技能——Iter-27b 起创建关口已拦截，仅旧实例可能命中）：
+      按未配置门禁处理——输出校验通过后直接标 DONE，不虚构门禁。
    c. 读取 `gate.checker` 技能文件全文。
    d. 构造独立 subagent prompt（**不共享 Task 会话**）：
       - 粘贴 checker 技能全文；
@@ -127,21 +129,41 @@
       `READY` 已有状态，含 stage 与任务计数；附 `sessionState` 派生状态
       `UNBOUND/BOUND/DONE/BROKEN` 与 `orphans` 孤儿实例 id）。
    - `workflow_create`：从定义（`workflowPath`/`workflowText` + `params`）预建
-     实例目录，**不启动**；返回 `instanceId` 与 `warnings`（创建关口校验警告，
-     如任务缺 processor / gate 缺 checker——Iter-25 起允许半成品实例存在，
-     把警告转告用户，补全后再启动）。**Iter-27a**：workflowPath 为预置模板
+     实例目录，**不启动**。**Iter-27b（拍板①=B）语义硬拦截**：定义存在语义错误
+     （缺 processor / gate 缺 checker / depends-on 成环 / 技能或静态文件缺失 /
+     preset 模板引用字面绝对路径等）时**拒绝创建**（不建实例目录），返回结构化
+     `errors` 清单（每项 `{code, task, field, message}`，码表：
+     `E-DEP-CYCLE`/`E-PROCESSOR-MISSING`/`E-SKILL-MISSING`/`E-GATE-CHECKER-MISSING`/
+     `E-INPUT-MISSING`/`E-ITEMS-MISSING`/`E-ABS-IN-DEF`/`E-ITEMS-PARSE`）。
+     **被拦时只做两件事：①逐条转告清单；②停止等待用户**。修复（补技能/文件/
+     改定义）一律由用户完成并明确指示后再重新 create。**严禁自行在工作区搜索、
+     猜测或替换技能/输入文件**——同名≠正确，可能引用错误甚至恶意文件（安全红线，
+     响应中的 `hint` 字段即此约束）。创建成功返回 `instanceId`、
+     `warnings`（W 级：`W-REF-MISMATCH` 拼写疑义 / `W-ITEMS-INPUT-DUP` 重复声明，
+     须转告用户）与 `validation` 摘要。**Iter-27a**：workflowPath 为预置模板
      子目录时整目录 1:1 复制进实例（返回 `presetCopy={copied,failed}`，
      failed 非空须转告用户）。
+   - `workflow_validate`（**Iter-27b 新增，只读**）：随时体检——传 `instanceId`
+     （重读该实例 instance.yaml 实时校验）或 `workflowPath`/`workflowText`
+     （+可选 `params`，定义语境）。返回 `{ok, errors, warnings, context}`，
+     不改任何状态。用户要"检查这个定义/实例有没有问题"时用本工具。
    - `workflow_adopt`：**采用**池中 `sessionId==null`（UNBOUND）的实例并绑定到
      本会话（1:1）。**start 前须先 adopt**（若实例未绑定本会话）。
    - `workflow_start`：启动**已绑定本会话**的实例（若 UNBOUND 先 `adopt`；读
      实例 `instance.yaml` → 解析展开 → `engine.start()` → RUNNING），返回
      `tasks`+`runnable`（编排循环起点）；RUNNING 拒、STOPPED 拒（用 resume）、
-     COMPLETED/FAILED 拒（用 reset）。
+     COMPLETED/FAILED 拒（用 reset）。**Iter-27b 实时闸门**：启动前实时重新校验
+     （不信任创建时快照，防"创建后退化"——技能被删/静态文件缺失等）；被拦时
+     **只转告 `errors` 清单并停止**，等待用户补齐技能/文件并明确指示后再 start，
+     严禁自行搜索/替换技能或输入文件（`hint` 字段同款约束）。
    - `workflow_stop`：`engine.stop()` → 置 `stage=STOPPED`（保进度）并落盘。
    - `workflow_resume`：仅 STOPPED → `engine.resume()` 续跑（保 DONE 进度）。
+     **Iter-27b**：续跑前同样实时校验（同 start 闸门）；被拦时同款：转告清单
+     即停止，不自行找替代文件。
    - `workflow_reset`：仅 STOPPED/COMPLETED/FAILED；先写 `_reset_<state>` 归档
      备份 → `engine.reset()` → 全新 PENDING，返回新 `runnable` 后按普通流程继续编排。
+     **Iter-27b**：返回附 `validation`（**回传不拦**）；`ok=false` 时转告用户
+     "实例定义存在 N 项校验错误，建议修复后重新 create"。
    - 约束：`stage=STOPPED` 的实例不得继续执行；续跑用 `workflow_resume`，重跑用
      `workflow_reset`（勿对 STOPPED 直接 start）。
    - **控制指令：面板注入 + 人工输入统一（Iter-21 定模式，Iter-22 S4 扩展）**：以下消息无论来自
@@ -169,6 +191,10 @@
 
 通用约束：
 
+- **校验被拦（create/begin/start/resume）＝只转告+停止（Iter-27b 验收修正，
+  安全红线）**：把 `errors` 清单原样转告用户后停下等待；修复责任在用户。
+  **严禁**自行在工作区搜索、猜测或替换技能/输入文件——同名旧文件不保证正确，
+  可能造成错误引用甚至恶意文件注入。
 - 绝不跳过 depends-on 未完成的 Task 提前执行后继。
 - 每个 Task/Gate 都是独立 subagent 会话；中间产物只通过工作区文件传递，
   不把前一会话的对话内容塞给下一个。

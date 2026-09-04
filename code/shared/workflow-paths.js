@@ -16,6 +16,9 @@
 //   - presetTemplateDirOf：sourcePath 位于 <predefinedRoot>/templates/<子目录>/<file>
 //     时返回子目录绝对路径（预置工作流判定；create 1:1 复制与 defDir 锚点共用）。
 //     平铺 legacy（templates/<file>.yaml）与外部路径返回 null。
+//   - deferDisposition（Iter-27b 自 tools-preset.shouldDeferExpansion 前移）：延迟展开
+//     判定单一事实源——expandDefinition 与语义校验共用。true=延迟（items 运行期由
+//     上游产出，校验跳过 items 存在性）；显式 deferred:false → false（校验同报）。
 // ============================================================================
 
 function isAbsoluteishPath(p) {
@@ -76,6 +79,28 @@ function presetTemplateDirOf(sourcePath, predefinedRoot) {
   return prefix + rest.slice(0, idx)
 }
 
+// Iter-27b 前移（原 tools-preset.shouldDeferExpansion，D1 混合方案）：
+// 1. deferred=true 显式声明 → 延迟；deferred=false → 不延迟（校验同报 E-ITEMS-MISSING）
+// 2. deferred=null（未声明）→ 自动检测：是否有上游任务 outputs 包含该路径
+// 匹配精度：itemsRel（解析前注入值，与 outputs 同为相对形态）精确匹配优先；
+// basename 兜底（一侧经 resolveRefPath 加了 workspaceRoot 前缀 / 用户混写绝对相对的场景）。
+// Iter-27b 双形态：expandDefinition 传展开后任务（itemsRel/outputs 优先，行为不变）；
+// 校验传 raw parsed 任务（回退 itemsFromRaw/outputsRaw，同为相对形态对称比较）。
+function deferDisposition(task, allTasks) {
+  if (task.deferred === true) return true
+  if (task.deferred === false) return false
+  const rel = task.itemsRel || task.itemsFrom || task.itemsFromRaw
+  if (!rel) return false
+  const base = String(rel).split('/').pop()
+  for (const t of (allTasks || [])) {
+    const outputs = t.outputs || t.outputsRaw || []
+    for (const o of outputs) {
+      if (o === rel || o.split('/').pop() === base) return true
+    }
+  }
+  return false
+}
+
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { isAbsoluteishPath, isVariablePath, resolveStaticPath, presetTemplateDirOf }
+  module.exports = { isAbsoluteishPath, isVariablePath, resolveStaticPath, presetTemplateDirOf, deferDisposition }
 }

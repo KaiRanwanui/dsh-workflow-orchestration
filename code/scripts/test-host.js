@@ -74,6 +74,10 @@ async function runCase9() {
   registerWorkflowToolsPreset(mkCtx(registered), null, null, registry)
 
   const exec = { agent: { session: { header: { id: 'sess-t9', cwd: '/ws/t9' } } } }
+  // Iter-27b：E-SKILL-MISSING 生效——夹具补三份技能文件（绝对直通探针命中，create 放行）
+  files.set('/x/skills/a/SKILL.md', 'skill a')
+  files.set('/x/skills/b/SKILL.md', 'skill b')
+  files.set('/x/skills/c/SKILL.md', 'skill c')
   const WF9 = `
 name: t9demo
 version: "1.0"
@@ -182,17 +186,19 @@ async function runCase10() {
   process.env.DSH_HOME = savedDsh
 
   // create：workflowText 成功路径
+  files.set('/x/a/SKILL.md', 'skill a') // Iter-27b：E-SKILL-MISSING 探针命中（/wf/create 同款关口）
   const WF13 = 'name: t13demo\nversion: "1.0"\ndescription: d\nmax-concurrency: 2\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/t13/output/a.md"]\n    depends-on: []\n'
   r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: WF13, params: { output_dir: 'out' } })
   const iid = r.body.instanceId
   check('create: 200 + CREATED + id 形态', r.code === 200 && r.body.phase === 'CREATED' && /^t13demo-[0-9a-f]{8}$/.test(iid), JSON.stringify(r.body).slice(0, 140))
   check('create: 快照目录五件套落盘', files.has('/ws/t13/.workflow-agent/instances/' + iid + '/instance.yaml') && files.has('/ws/t13/.workflow-agent/instances/' + iid + '/output/.gitkeep'))
   check('create: params 记入 metadata', JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).params.output_dir === 'out')
-  check('create: warnings 数组在（完好定义为空，Iter-25 D4）', Array.isArray(r.body.warnings) && r.body.warnings.length === 0, JSON.stringify(r.body.warnings))
+  check('create: warnings 数组在（完好定义为空，27b validate 出口）', Array.isArray(r.body.warnings) && r.body.warnings.length === 0, JSON.stringify(r.body.warnings))
+  check('create(27b): 200 附 validation 摘要 + metadata 落盘快照', r.body.validation && r.body.validation.ok === true && JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).validation.ok === true, JSON.stringify(r.body.validation))
 
-  // create：缺 processor 定义 → CREATED + warnings（创建关口校验警告，不拦截）
+  // create：缺 processor 定义 → 400 结构化拒（Iter-27b 拍板①=B 硬拦截）
   r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: 'name: wp\nversion: "1"\ntasks:\n  - id: a\n    outputs: ["output/a.md"]\n' })
-  check('create: 缺 processor → CREATED + warnings', r.code === 200 && r.body.phase === 'CREATED' && r.body.warnings.some(w => w.includes('processor')), JSON.stringify(r.body.warnings))
+  check('create: 缺 processor → 400 + errors 清单（硬拦）+ hint 只转告约束', r.code === 400 && Array.isArray(r.body.errors) && r.body.errors.some(e => e.code === 'E-PROCESSOR-MISSING') && r.body.workflowBeginErrors.some(w => w.includes('E-PROCESSOR-MISSING')) && !!r.body.hint, JSON.stringify(r.body).slice(0, 160))
 
   // create：非法定义 → 400 + workflowBeginErrors
   r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t13', workflowText: 'tasks: []\n' })
@@ -386,6 +392,7 @@ async function runCase13() {
   registerWorkflowToolsPreset(ctx(registered), null, null, registry)
 
   const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c13' } } } }
+  files.set('/x/a/SKILL.md', 'skill a') // Iter-27b：E-SKILL-MISSING 探针命中
   const WF = `name: c13demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c13/output/a.md"]\n    depends-on: []\n`
   const statePath = (id) => '/ws/c13/.workflow-agent/instances/' + id + '/state.json'
 
@@ -468,6 +475,7 @@ async function runCase14() {
   const registry = createInstanceRegistry(ctx(registered), deps)
   registerWorkflowToolsPreset(ctx(registered), null, null, registry)
   const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c14' } } } }
+  files.set('/x/a/SKILL.md', 'skill a') // Iter-27b：E-SKILL-MISSING 探针命中
   const WF = `name: c14demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c14/output/a.md"]\n    depends-on: []\n`
 
   // 1) workflow_begin → RUNNING（执行期=RUNNING）+ 绑定 sess-a
@@ -668,7 +676,7 @@ async function runCase15() {
 async function runCase16() {
   console.log('［用例 16］主从聚合控制 — P1 子会话聚合守卫 / P2 stopReason / P3 stop 级联 / 探针降级')
   const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
-  const { fs: mockFs } = makeMockFs()
+  const { files, fs: mockFs } = makeMockFs()
   const runningAgents = new Set(['sess-a'])
   const pendingAgents = new Set()
   const childrenBySession = { 'sess-a': ['child-1', 'child-2'] } // 预置子会话
@@ -702,6 +710,7 @@ async function runCase16() {
   const registry = createInstanceRegistry(ctxF(registered), deps)
   registerWorkflowToolsPreset(ctxF(registered), null, null, registry)
   const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c16' } } } }
+  files.set('/x/a/SKILL.md', 'skill a') // Iter-27b：E-SKILL-MISSING 探针命中
   const WF = `name: c16demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c16/output/a.md"]\n    depends-on: []\n`
 
   // 1) P1：主 idle + 子在跑 → 聚合守卫，保持 RUNNING（后台 task subagent 等待非误停）
@@ -852,7 +861,7 @@ async function runCase19() {
 async function runCase17() {
   console.log('［用例 17］方向 A — A1 aborted(user) 判定矩阵 / A2 轮询兜底 / 权威停止语义')
   const { registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
-  const { fs: mockFs } = makeMockFs()
+  const { files, fs: mockFs } = makeMockFs()
 
   // 1) A1 判定纯函数矩阵（探针实证事件形态：payload 在 data 包装下）
   check('c17 A1: turn/end+aborted+user → true', isUserAbortTurnEnd({ type: 'turn/end', data: { turn: 3, reason: { kind: 'aborted', reason: { kind: 'user' } } } }) === true)
@@ -902,6 +911,7 @@ async function runCase17() {
   const registry = createInstanceRegistry(ctxF(registered), deps)
   registerWorkflowToolsPreset(ctxF(registered), null, null, registry)
   const exec = { agent: { session: { header: { id: 'sess-a', cwd: '/ws/c17' } } } }
+  files.set('/x/a/SKILL.md', 'skill a') // Iter-27b：E-SKILL-MISSING 探针命中
   const WF = `name: c17demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/ws/c17/output/a.md"]\n    depends-on: []\n`
   const r = await registered.workflow_begin.execute({ workflowText: WF }, exec)
   check('c17 A1: begin → RUNNING', r.stage === 'RUNNING', r.stage)
@@ -1014,13 +1024,17 @@ async function runCase20() {
   console.log('［用例 20］数据流显性化 — 目录变量注入 + inputs/outputs 绝对化 + 落盘 + create 警告')
   const { expandDefinition, finalizeDataflow, injectParams, registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
   const { parseWorkflow } = require('../shared/workflow-parser')
+  const { validateWorkflow } = require('../shared/workflow-validate')
 
-  // 1) parser（D4）：processor 缺省 error→warning；gate 无 checker → warning
+  // 1) parser（27b）：warnings 通道恒空——processor 缺省/缺 checker 升错误级归 validate
   const missWf = 'name: m\nversion: "1"\ntasks:\n  - id: a\n    name: A\n    outputs: ["output/a.md"]\n  - id: g\n    name: G\n    processor: /x/SKILL.md\n    quality-gate:\n      on-failure: retry\n      max-retries: 1\n'
   const missParsed = parseWorkflow(missWf)
-  check('c20 parser: 缺 processor 无 error（创建态可存）', missParsed.errors.length === 0, missParsed.errors)
-  check('c20 parser: 任务 a 缺 processor 产生 warning', missParsed.warnings.some(w => w.includes('a') && w.includes('processor')), missParsed.warnings)
-  check('c20 parser: 任务 g gate 缺 checker 产生 warning', missParsed.warnings.some(w => w.includes('g') && w.includes('checker')), missParsed.warnings)
+  check('c20 parser: 缺 processor 无 error（结构层不拦）', missParsed.errors.length === 0, missParsed.errors)
+  check('c20 parser: warnings 通道恒空（27b 升错误级归 validate）', missParsed.warnings.length === 0, missParsed.warnings)
+  const mv = await validateWorkflow({ parsed: missParsed, context: 'definition', fs: null })
+  check('c20 validate: 缺 processor → E-PROCESSOR-MISSING（task a）', mv.errors.some(e => e.code === 'E-PROCESSOR-MISSING' && e.task === 'a'), JSON.stringify(mv.errors))
+  check('c20 validate: gate 缺 checker → E-GATE-CHECKER-MISSING（task g）', mv.errors.some(e => e.code === 'E-GATE-CHECKER-MISSING' && e.task === 'g'), JSON.stringify(mv.errors))
+  check('c20 validate: fs 缺失降级不误报（无 E-SKILL/E-INPUT）', !mv.errors.some(e => e.code === 'E-SKILL-MISSING' || e.code === 'E-INPUT-MISSING'), JSON.stringify(mv.errors))
   const okParsed = parseWorkflow('name: o\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/SKILL.md\n')
   check('c20 parser: 完好定义零警告', okParsed.warnings.length === 0, okParsed.warnings)
 
@@ -1084,6 +1098,7 @@ async function runCase20() {
   let r = await registered20.workflow_begin.execute({ workflowText: WF20 }, exec20)
   const iid20 = r.instanceId
   const wfDir20 = '/ws/c20/.workflow-agent/instances/' + iid20
+  check('c20 begin(27b): 附 validation 摘要（通过）', r.validation && r.validation.ok === true && Array.isArray(r.validation.warnings), JSON.stringify(r.validation))
   const integ = r.tasks.find(t => t.id === 'integrate')
   check('c20 begin: integrate.inputs.analysis 绝对路径（缺口#4 修复）', integ && integ.inputs.analysis === wfDir20 + '/output/analysis.md', integ && integ.inputs.analysis)
   check('c20 begin: integrate.inputs.spec 绝对路径', integ.inputs.spec === wfDir20 + '/output/spec.md')
@@ -1111,15 +1126,17 @@ async function runCase20() {
   r = await registered20.workflow_reset.execute({}, exec20)
   const integ3 = r.tasks.find(t => t.id === 'integrate')
   check('c20 reset: 重新展开后 inputs 仍绝对路径', integ3.inputs.analysis === wfDir20 + '/output/analysis.md', integ3.inputs)
+  check('c20 reset(27b): 附 validation 且 ok（回传不拦）', r.validation && r.validation.ok === true, JSON.stringify(r.validation))
 
-  // 8) workflow_create 返回 warnings + 缺 processor 实例可 start（D4 不拦）
+  // 8) Iter-27b（拍板①=B）：create 语义硬拦——缺 processor/gate checker → errors
+  // 结构化清单，不建实例目录；start 因无活跃实例报「实例不存在」
   // （1:1 守卫：sess-c20 已绑 c20demo，改用第二会话创建自己的实例）
   const exec20b = { agent: { session: { header: { id: 'sess-c20-2', cwd: '/ws/c20' } } } }
   r = await registered20.workflow_create.execute({ workflowText: missWf }, exec20b)
-  check('c20 create: CREATED + warnings 携带', r.phase === 'CREATED' && Array.isArray(r.warnings) && r.warnings.length >= 2, JSON.stringify(r.warnings || r.error))
-  r = await registered20.workflow_start.execute({}, exec20b) // start 该会话活跃实例
-  check('c20 D4: 缺 processor 实例 start 不拦（RUNNING）', r.stage === 'RUNNING', r.stage + '/' + (r.error || ''))
-  check('c20 D4: 缺 processor 任务 processor=null 且 inputs/outputs 字段在', r.tasks[0].processor === null && Array.isArray(r.tasks[0].outputs))
+  check('c20 create(27b): 缺 processor/gate checker 被拦', !!r.error && Array.isArray(r.errors) && r.errors.some(e => e.code === 'E-PROCESSOR-MISSING') && r.errors.some(e => e.code === 'E-GATE-CHECKER-MISSING'), JSON.stringify(r.errors || r).slice(0, 200))
+  check('c20 create(27b): 拒绝未建实例', r.instanceId === undefined && r.phase === undefined, JSON.stringify(r).slice(0, 80))
+  r = await registered20.workflow_start.execute({}, exec20b) // create 被拦 → 无活跃实例
+  check('c20 start(27b): 无活跃实例可启（create 被拦的连带）', !!r.error && String(r.error).indexOf('实例不存在') !== -1, r.error)
 
   // 9) loop 迭代：${item} 注入 + 阶段2 绝对化
   mockFs.writeText({ path: '/ws/loop/config/mods.txt' }, 'login\norder\n')
@@ -1251,6 +1268,7 @@ async function runCase21() {
     const reg = createInstanceRegistry(mkCtx(), { createWorkflowEngine, createWorkflowStorage })
     tp.registerWorkflowToolsPreset(mkCtx(), null, null, reg)
     const exec = { agent: { session: { header: { id: 's21', cwd: '/ws/c21' } } } }
+    files.set('/x/SKILL.md', 'skill x') // Iter-27b：E-SKILL-MISSING 探针命中
     const WF = [
       'name: c21wf', 'version: "1"', 'tasks:',
       '  - id: batch', '    type: concurrent', '    processor: /x/SKILL.md',
@@ -1273,6 +1291,10 @@ async function runCase21() {
       const mk = makeMockFs()
       const mf2 = mk.fs
       await mf2.writeText({ path: '/ws/c21-pre/workflow-agent/samples/items/x.json' }, '[{"slug":"sx"}]')
+      // Iter-27b：create 定义语境需技能与静态 input 在 create 时刻可解析
+      //（output/prev.md 预置 workspace 副本过 create；实例预放副本仍保 start 优先命中语义）
+      await mf2.writeText({ path: '/x/SKILL.md' }, 'skill x')
+      await mf2.writeText({ path: '/ws/c21b/output/prev.md' }, 'prev-ws')
       const bag2 = {}
       const mkCtx2 = () => ({ tools: { register(t) { bag2[t.name] = t } }, get(n) { return n === 'fs' ? mf2 : undefined } })
       const reg2 = createInstanceRegistry(mkCtx2(), { createWorkflowEngine, createWorkflowStorage })
@@ -1615,6 +1637,8 @@ tasks:
       const registryE2e = createInstanceRegistry(ctxE2e, { createWorkflowEngine, createWorkflowStorage })
       registerFn(ctxE2e, null, null, registryE2e)
       const execE2e = { agent: { session: { header: { id: 'sess-t22', cwd: '/ws/t22' } } } }
+      mfE2e.files.set('/skills/collect/SKILL.md', 'collect') // Iter-27b：E-SKILL-MISSING 探针命中
+      mfE2e.files.set('/skills/analyze/SKILL.md', 'analyze')
       const WF22 = `
 name: t22-runtime
 version: "1.0"
@@ -1743,6 +1767,7 @@ async function runCase23() {
   // 6) workflow_create 工具级：预置 workflowPath → 实例目录 1:1 复制 + presetCopy 回传
   const { fs: fsC, files: filesC } = makeMockFs()
   process.env.DSH_HOME = '/ws/t23-pre'
+  fsC.writeText({ path: '/x/SKILL.md' }, 'skill x') // Iter-27b：E-SKILL-MISSING 探针命中
   fsC.writeText({ path: '/ws/t23-pre/workflow-agent/templates/demo/demo.yaml' }, 'name: demo\nversion: "1"\ntasks:\n  - id: a\n    name: A\n    processor: /x/SKILL.md\n    outputs: ["output/a.md"]\n')
   fsC.writeText({ path: '/ws/t23-pre/workflow-agent/templates/demo/inputs/items/x.md' }, '- alpha\n')
   const registered = {}
@@ -1798,6 +1823,243 @@ async function runCase23() {
   check('c23 扫描: 同名去重子目录赢', !!byName['dup'] && byName['dup'].path.endsWith('/dup/dup.yaml') && byName['dup'].yaml.includes('from-subdir'), JSON.stringify(byName['dup'] || {}))
   check('c23 扫描: 子目录非 YAML 文件不混入', rt.body.predefined.every((x) => !/inputs/.test(x.path)))
   process.env.DSH_HOME = undefined
+}
+
+// ── 用例 24：语义校验（Iter-27b：校验引擎 + 双语境 + 关口硬拦 + workflow_validate）──
+async function runCase24() {
+  console.log('［用例 24］语义校验 — 引擎错误码 + create/begin/start/resume/reset 关口 + workflow_validate 工具')
+  const { validateWorkflow, expandRef, detectDepCycles } = require('../shared/workflow-validate.js')
+  const { deferDisposition } = require('../shared/workflow-paths.js')
+  const { registerWorkflowToolsPreset, injectParams } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { parseWorkflow } = require('../shared/workflow-parser')
+  const { createInstanceRegistry } = require('../plugins/workflow-host/instance-store.js')
+  const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
+  const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
+
+  // ── A. 引擎纯静态（fs=null 降级：存在性探测全跳过，不误报）──────────────
+  const pA = parseWorkflow('name: a\nversion: "1"\ntasks:\n  - id: t1\n    name: T1\n    outputs: ["output/a.md"]\n')
+  const rA = await validateWorkflow({ parsed: pA, context: 'definition', fs: null })
+  check('c24 引擎: 缺 processor → E-PROCESSOR-MISSING（task/field 结构化）', rA.errors.some(e => e.code === 'E-PROCESSOR-MISSING' && e.task === 't1' && e.field === 'processor'), JSON.stringify(rA.errors))
+  check('c24 引擎: fs 缺失降级不误报存在性（仅 processor 一条）', rA.errors.length === 1 && rA.ok === false, JSON.stringify(rA.errors))
+
+  const pG = parseWorkflow('name: g\nversion: "1"\ntasks:\n  - id: t1\n    processor: /x/s.md\n    quality-gate:\n      on-failure: retry\n')
+  const rG = await validateWorkflow({ parsed: pG, context: 'definition', fs: null })
+  check('c24 引擎: gate 无 checker → E-GATE-CHECKER-MISSING', rG.errors.some(e => e.code === 'E-GATE-CHECKER-MISSING' && e.task === 't1'), JSON.stringify(rG.errors))
+  const pG2 = parseWorkflow('name: g2\nversion: "1"\ntasks:\n  - id: t1\n    processor: /x/s.md\n    quality-gate:\n      checker: /x/c.md\n')
+  check('c24 引擎: 有 checker 不报', !(await validateWorkflow({ parsed: pG2, context: 'definition', fs: null })).errors.some(e => e.code === 'E-GATE-CHECKER-MISSING'))
+
+  const pL = parseWorkflow('name: l\nversion: "1"\ntasks:\n  - id: lp\n    type: loop\n    items-from: i.md\n    item-var: m\n  - id: cc\n    type: concurrent\n    items-from: i.md\n    item-var: m\n')
+  const rL = await validateWorkflow({ parsed: pL, context: 'definition', fs: null })
+  check('c24 引擎: loop/concurrent 缺 processor 各报一条', rL.errors.filter(e => e.code === 'E-PROCESSOR-MISSING').length === 2, JSON.stringify(rL.errors))
+
+  const pCyc = parseWorkflow('name: c\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/s.md\n    depends-on: [b]\n  - id: b\n    processor: /x/s.md\n    depends-on: [a]\n')
+  const rCyc = await validateWorkflow({ parsed: pCyc, context: 'definition', fs: null })
+  check('c24 引擎: 双节点环 → E-DEP-CYCLE 一条（同环去重）', rCyc.errors.filter(e => e.code === 'E-DEP-CYCLE').length === 1, JSON.stringify(rCyc.errors))
+  check('c24 引擎: 环路径可读（a→b→a）', detectDepCycles(pCyc.tasks)[0].join('>') === 'a>b>a', JSON.stringify(detectDepCycles(pCyc.tasks)))
+  const pSelf = parseWorkflow('name: s\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/s.md\n    depends-on: [a]\n')
+  check('c24 引擎: 自依赖 → E-DEP-CYCLE', (await validateWorkflow({ parsed: pSelf, context: 'definition', fs: null })).errors.some(e => e.code === 'E-DEP-CYCLE'))
+  const pChain = parseWorkflow('name: ch\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/s.md\n  - id: b\n    processor: /x/s.md\n    depends-on: [a]\n')
+  check('c24 引擎: 正常链零错误', (await validateWorkflow({ parsed: pChain, context: 'definition', fs: null })).errors.length === 0)
+
+  // ── B. fs 探针语境（mock fs）────────────────────────────────────────────
+  const { files, fs: mockFs } = makeMockFs()
+  files.set('/ws/skills/a/SKILL.md', 'a')
+  files.set('/pre/skills/b/SKILL.md', 'b')
+  files.set('/abs-sk/SKILL.md', 'abs')
+  files.set('/tpl/inputs/exists.md', 'data')
+  files.set('/ws/inputs/ws-only.md', 'ws')
+  files.set('/ws/items/ok.md', '- a\n- b\n')
+  files.set('/ws/items/bad.json', '{broken')
+  files.set('/ws/items/empty.md', '')
+  files.set('/inst/inputs/copy.md', 'copy')
+  files.set('/inst/inputs/abs.md', 'abs-file')
+  files.set('/data/in.md', 'v')
+  const BCTX = { workspaceRoot: '/ws', predefinedRoot: '/pre', fs: mockFs }
+
+  // B1 技能两级链四情形
+  const pSk = parseWorkflow([
+    'name: sk', 'version: "1"', 'tasks:',
+    '  - id: ws-hit', '    processor: skills/a/SKILL.md',
+    '  - id: pre-hit', '    processor: skills/b/SKILL.md',
+    '  - id: abs-hit', '    processor: /abs-sk/SKILL.md',
+    '  - id: miss', '    processor: nope/SKILL.md',
+  ].join('\n'))
+  const rSk = await validateWorkflow({ parsed: pSk, context: 'definition', ...BCTX })
+  check('c24 技能: 两级链 workspace 命中不报', !rSk.errors.some(e => e.task === 'ws-hit'), JSON.stringify(rSk.errors))
+  check('c24 技能: 预定义端命中不报', !rSk.errors.some(e => e.task === 'pre-hit'))
+  check('c24 技能: 绝对直通命中不报', !rSk.errors.some(e => e.task === 'abs-hit'))
+  check('c24 技能: 双 miss → E-SKILL-MISSING', rSk.errors.some(e => e.code === 'E-SKILL-MISSING' && e.task === 'miss'))
+
+  // B2 inputs：上游精确 / basename 兜底+警告 / 文件存在 / 双 miss / ${item} / 未知变量
+  const pIn = parseWorkflow([
+    'name: ins', 'version: "1"', 'tasks:',
+    '  - id: up', '    processor: /abs-sk/SKILL.md', '    outputs: ["output/exact.md"]',
+    '  - id: t-exact', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "output/exact.md"',
+    '  - id: t-base', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "ws/output/exact.md"',
+    '  - id: t-file', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "inputs/ws-only.md"',
+    '  - id: t-miss', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "inputs/nope.md"',
+    '  - id: t-item', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "output/${mod}/x.md"',
+    '  - id: t-var', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "${unk}/x.md"',
+  ].join('\n'))
+  const rIn = await validateWorkflow({ parsed: pIn, context: 'definition', ...BCTX })
+  check('c24 input: 上游精确命中 ok', !rIn.errors.some(e => e.task === 't-exact'), JSON.stringify(rIn.errors))
+  check('c24 input: basename 兜底成立 + W-REF-MISMATCH', !rIn.errors.some(e => e.task === 't-base') && rIn.warnings.some(w => w.code === 'W-REF-MISMATCH' && w.task === 't-base'), JSON.stringify(rIn.warnings))
+  check('c24 input: 文件存在（两级链）ok', !rIn.errors.some(e => e.task === 't-file'))
+  check('c24 input: 双 miss → E-INPUT-MISSING', rIn.errors.some(e => e.code === 'E-INPUT-MISSING' && e.task === 't-miss' && e.field === 'inputs.d'))
+  check('c24 input: ${item...} 迭代期跳过', !rIn.errors.some(e => e.task === 't-item'))
+  check('c24 input: 未知 ${param} 跳过', !rIn.errors.some(e => e.task === 't-var'))
+
+  // B3 items 六情形
+  const pIt = parseWorkflow([
+    'name: its', 'version: "1"', 'tasks:',
+    '  - id: i-ok', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: items/ok.md', '    item-var: m',
+    '  - id: i-bad', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: items/bad.json', '    item-var: m',
+    '  - id: i-empty', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: items/empty.md', '    item-var: m',
+    '  - id: i-miss', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: items/nope.md', '    item-var: m',
+    '  - id: i-defer', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: output/up.md', '    item-var: m',
+    '  - id: i-false', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: output/up.md', '    item-var: m', '    deferred: false',
+    '  - id: up', '    processor: /abs-sk/SKILL.md', '    outputs: ["output/up.md"]',
+  ].join('\n'))
+  const rIt = await validateWorkflow({ parsed: pIt, context: 'definition', ...BCTX })
+  check('c24 items: 存在+可解析 ok', !rIt.errors.some(e => e.task === 'i-ok'), JSON.stringify(rIt.errors))
+  check('c24 items: 坏 JSON → E-ITEMS-PARSE', rIt.errors.some(e => e.code === 'E-ITEMS-PARSE' && e.task === 'i-bad'))
+  check('c24 items: 空提取不报（26R Q1-b 占位迭代合法）', !rIt.errors.some(e => e.task === 'i-empty'))
+  check('c24 items: 缺失非延迟 → E-ITEMS-MISSING', rIt.errors.some(e => e.code === 'E-ITEMS-MISSING' && e.task === 'i-miss'))
+  check('c24 items: 上游匹配延迟组跳过（26R 零误报）', !rIt.errors.some(e => e.task === 'i-defer'))
+  check('c24 items: 显式 deferred:false 同报 E-ITEMS-MISSING', rIt.errors.some(e => e.code === 'E-ITEMS-MISSING' && e.task === 'i-false'))
+
+  // B4 preset 定义语境：子目录锚点 + 禁字面绝对（E-ABS-IN-DEF，拍板②/四点①）
+  const pPr = parseWorkflow([
+    'name: pr', 'version: "1"', 'tasks:',
+    '  - id: a-hit', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "inputs/exists.md"',
+    '  - id: a-ws', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "inputs/ws-only.md"',
+    '  - id: a-abs', '    processor: /abs-sk/SKILL.md', '    inputs:', '      d: "/etc/passwd"',
+    '  - id: a-items', '    type: loop', '    processor: /abs-sk/SKILL.md', '    items-from: "~/x.md"', '    item-var: m',
+  ].join('\n'))
+  const rPr = await validateWorkflow({ parsed: pPr, context: 'definition-preset', defDir: '/tpl', ...BCTX })
+  check('c24 preset: 子目录锚点命中 ok', !rPr.errors.some(e => e.task === 'a-hit'), JSON.stringify(rPr.errors))
+  check('c24 preset: 锚点 miss 不走两级链（workspace 有也不可达）→ E-INPUT-MISSING', rPr.errors.some(e => e.code === 'E-INPUT-MISSING' && e.task === 'a-ws'))
+  check('c24 preset: input 字面绝对 → E-ABS-IN-DEF（不重复报 INPUT-MISS）', rPr.errors.some(e => e.code === 'E-ABS-IN-DEF' && e.task === 'a-abs') && !rPr.errors.some(e => e.code === 'E-INPUT-MISSING' && e.task === 'a-abs'))
+  check('c24 preset: items-from 伪绝对 ~ → E-ABS-IN-DEF', rPr.errors.some(e => e.code === 'E-ABS-IN-DEF' && e.task === 'a-items' && e.field === 'items-from'))
+
+  const pPv = parseWorkflow('name: pv\nversion: "1"\ntasks:\n  - id: a\n    processor: /abs-sk/SKILL.md\n    inputs:\n      d: "${data_root}/in.md"\n')
+  const rPv = await validateWorkflow({ parsed: pPv, params: { data_root: '/data' }, context: 'definition-preset', defDir: '/tpl', ...BCTX })
+  check('c24 preset: params 注入绝对=合法入口（四点④，不报 E-ABS-IN-DEF）', !rPv.errors.some(e => e.task === 'a'), JSON.stringify(rPv.errors))
+  const rPv2 = await validateWorkflow({ parsed: pPv, context: 'definition-preset', defDir: '/tpl', ...BCTX })
+  check('c24 preset: 变量路径 params 未知 → 跳过', !rPv2.errors.some(e => e.task === 'a'), JSON.stringify(rPv2.errors))
+
+  // B5 实例语境：实例目录 1:1 副本优先 + 绝对直通
+  const pIs = parseWorkflow('name: is\nversion: "1"\ntasks:\n  - id: u\n    processor: /abs-sk/SKILL.md\n    outputs: ["output/u.md"]\n  - id: a\n    processor: /abs-sk/SKILL.md\n    inputs:\n      copy: "inputs/copy.md"\n      abs: "/inst/inputs/abs.md"\n      gone: "/inst/inputs/gone.md"\n      up: "output/u.md"\n')
+  const rIs = await validateWorkflow({ parsed: pIs, context: 'instance', wfDir: '/inst', ...BCTX })
+  check('c24 实例: 1:1 副本优先命中 ok', !rIs.errors.some(e => e.field === 'inputs.copy'), JSON.stringify(rIs.errors))
+  check('c24 实例: 绝对直通命中 ok', !rIs.errors.some(e => e.field === 'inputs.abs'))
+  check('c24 实例: 绝对缺失 → E-INPUT-MISSING', rIs.errors.some(e => e.code === 'E-INPUT-MISSING' && e.field === 'inputs.gone'))
+  check('c24 实例: 上游精确 ok', !rIs.errors.some(e => e.field === 'inputs.up'))
+
+  // B6 W-ITEMS-INPUT-DUP（27a 补丁拍板：互斥约定，警告级）
+  const pDup = parseWorkflow('name: d\nversion: "1"\ntasks:\n  - id: a\n    type: loop\n    processor: /abs-sk/SKILL.md\n    items-from: items/ok.md\n    item-var: m\n    inputs:\n      d: "items/ok.md"\n')
+  const rDup = await validateWorkflow({ parsed: pDup, context: 'definition', ...BCTX })
+  check('c24 互斥: items-from 与 inputs 同文件 → W-ITEMS-INPUT-DUP（不误报 INPUT-MISS）', rDup.warnings.some(w => w.code === 'W-ITEMS-INPUT-DUP' && w.task === 'a') && !rDup.errors.some(e => e.code === 'E-INPUT-MISSING'), JSON.stringify({ e: rDup.errors, w: rDup.warnings }))
+
+  // B7 deferDisposition 单一事实源（raw/expanded 双形态 + 显式 false 不豁免）
+  check('c24 单源: raw/expanded 双形态一致', deferDisposition({ itemsFromRaw: 'output/up.md' }, [{ outputsRaw: ['output/up.md'] }]) === true && deferDisposition({ itemsRel: 'output/up.md' }, [{ outputs: ['output/up.md'] }]) === true)
+  check('c24 单源: 显式 deferred=false 不豁免', deferDisposition({ deferred: false, itemsFromRaw: 'x' }, [{ outputsRaw: ['x'] }]) === false)
+
+  // B8 expandRef ≡ injectParams 一致性（非迭代分支同语义）
+  const parityCases = [
+    ['${p}/x', { p: 'v' }, {}],
+    ['${workspace}/x', { workspace: 'P' }, { workspace: '/ws' }],
+    ['${a.b}/x', {}, {}],
+    ['${unk}/x', {}, {}],
+    ['plain/x', {}, {}],
+  ]
+  check('c24 注入一致性: expandRef ≡ injectParams（非迭代分支）', parityCases.every(([v, p, vars]) => expandRef(v, p, vars) === injectParams(v, p, vars)), JSON.stringify(parityCases.map(([v, p, vars]) => [expandRef(v, p, vars), injectParams(v, p, vars)])))
+
+  // ── C. 工具级关口（create/begin/start/resume/reset + workflow_validate）──
+  const { files: filesC24, fs: mockFs24 } = makeMockFs()
+  const registered = {}
+  const mkCtx = (bag) => ({
+    tools: { register(t) { bag[t.name] = t } },
+    get(n) { if (n === 'fs') return mockFs24; if (n === 'tools') return { register(t) { bag[t.name] = t } }; return undefined },
+  })
+  const registry = createInstanceRegistry(mkCtx(registered), { createWorkflowEngine, createWorkflowStorage })
+  registerWorkflowToolsPreset(mkCtx(registered), null, null, registry)
+  const exec = { agent: { session: { header: { id: 'sess-c24', cwd: '/ws/c24' } } } }
+  const exec2 = { agent: { session: { header: { id: 'sess-c24-2', cwd: '/ws/c24' } } } }
+  const SKILL24 = '/ws/c24/skills/s1/SKILL.md'
+  filesC24.set(SKILL24, 's1')
+  filesC24.set('/abs-sk/SKILL.md', 'abs')
+
+  const WF_OK24 = 'name: c24ok\nversion: "1"\ntasks:\n  - id: gen\n    processor: skills/s1/SKILL.md\n    outputs: ["output/data.md"]\n  - id: use\n    processor: skills/s1/SKILL.md\n    inputs:\n      d: "output/data.md"\n    outputs: ["output/final.md"]\n    depends-on: [gen]\n'
+  const WF_CYCLE = 'name: c24cyc\nversion: "1"\ntasks:\n  - id: a\n    processor: skills/s1/SKILL.md\n    depends-on: [b]\n  - id: b\n    processor: skills/s1/SKILL.md\n    depends-on: [a]\n'
+  const WF_NOPROC = 'name: c24np\nversion: "1"\ntasks:\n  - id: x\n    outputs: ["output/x.md"]\n'
+  const instCount = () => Array.from(filesC24.keys()).filter((k) => k.startsWith('/ws/c24/.workflow-agent/instances/') && k.endsWith('/metadata.json')).length
+
+  // C1/C2 create 硬拦（拍板①=B：拒绝零副作用）
+  let r = await registered.workflow_create.execute({ workflowText: WF_CYCLE }, exec)
+  check('c24 create: 造环被拦（E-DEP-CYCLE + errors 清单 + hint）', !!r.error && Array.isArray(r.errors) && r.errors.some(e => e.code === 'E-DEP-CYCLE') && r.instanceId === undefined && !!r.hint, JSON.stringify(r.errors || r).slice(0, 140))
+  r = await registered.workflow_create.execute({ workflowText: WF_NOPROC }, exec)
+  check('c24 create: 缺 processor 被拦（E-PROCESSOR-MISSING）', !!r.error && Array.isArray(r.errors) && r.errors.some(e => e.code === 'E-PROCESSOR-MISSING'), JSON.stringify(r.errors || r).slice(0, 140))
+  check('c24 create: 两次拒绝均未建实例目录', instCount() === 0)
+
+  // C3/C4 create 通过 + validation 快照落盘
+  r = await registered.workflow_create.execute({ workflowText: WF_OK24 }, exec)
+  const iid24 = r.instanceId
+  check('c24 create: 完好定义 CREATED + validation.ok', r.phase === 'CREATED' && r.validation && r.validation.ok === true && Array.isArray(r.warnings), JSON.stringify({ p: r.phase, v: r.validation && r.validation.ok, e: r.error }))
+  const meta24 = JSON.parse(filesC24.get('/ws/c24/.workflow-agent/instances/' + iid24 + '/metadata.json'))
+  check('c24 create: metadata 落盘 validation 快照（errors+validatedAt）', meta24.validation && meta24.validation.ok === true && Array.isArray(meta24.validation.errors) && !!meta24.validation.validatedAt, JSON.stringify(meta24.validation || null))
+
+  // C5 start 实时闸门（创建后退化）
+  filesC24.delete(SKILL24)
+  r = await registered.workflow_start.execute({}, exec)
+  check('c24 start: 删技能后退化被拦（E-SKILL-MISSING + hint）', !!r.error && Array.isArray(r.errors) && r.errors.some(e => e.code === 'E-SKILL-MISSING') && !!r.hint, JSON.stringify(r.errors || r).slice(0, 140))
+  filesC24.set(SKILL24, 's1')
+  r = await registered.workflow_start.execute({}, exec)
+  check('c24 start: 恢复后放行 RUNNING', r.stage === 'RUNNING', r.stage + '/' + (r.error || ''))
+
+  // C6 resume 闸门（STOPPED 续跑前把关）
+  await registered.workflow_stop.execute({}, exec)
+  filesC24.delete(SKILL24)
+  r = await registered.workflow_resume.execute({}, exec)
+  check('c24 resume: 技能缺失被拒（沿用 start 闸门）', !!r.error && Array.isArray(r.errors) && r.errors.some(e => e.code === 'E-SKILL-MISSING'), JSON.stringify(r.errors || r).slice(0, 120))
+  filesC24.set(SKILL24, 's1')
+  r = await registered.workflow_resume.execute({}, exec)
+  check('c24 resume: 恢复后续跑 RUNNING', r.stage === 'RUNNING', r.stage + '/' + (r.error || ''))
+
+  // C7 reset 回传不拦 + status 附摘要
+  await registered.workflow_stop.execute({}, exec)
+  r = await registered.workflow_reset.execute({}, exec)
+  check('c24 reset: 校验回传不拦（PENDING + validation.ok）', r.stage === 'PENDING' && r.validation && r.validation.ok === true, JSON.stringify({ s: r.stage, v: r.validation && r.validation.ok, e: r.error }))
+  r = await registered.workflow_status.execute({}, exec)
+  check('c24 status: 附 validation 摘要（metadata 快照）', r.validation && r.validation.ok === true && !!r.validation.validatedAt, JSON.stringify(r.validation || null))
+
+  // C8 begin 整体拒（校验先于 createBind，不建实例；复用活跃实例引擎）
+  const beforeCount = instCount()
+  r = await registered.workflow_create.execute({ workflowText: WF_OK24 }, exec2)
+  check('c24 begin 前置: exec2 create 成功', r.phase === 'CREATED', JSON.stringify(r).slice(0, 80))
+  r = await registered.workflow_begin.execute({ workflowText: WF_NOPROC }, exec2)
+  check('c24 begin: 语义错误整体拒（workflowBeginErrors 可读清单）', Array.isArray(r.workflowBeginErrors) && r.workflowBeginErrors.length >= 1 && r.workflowBeginErrors[0].includes('E-PROCESSOR-MISSING'), JSON.stringify(r.workflowBeginErrors || r).slice(0, 140))
+  check('c24 begin: 附结构化 validation.ok=false', r.validation && r.validation.ok === false && r.validation.errors.some(e => e.code === 'E-PROCESSOR-MISSING'), JSON.stringify(r.validation || null))
+  check('c24 begin: 拒绝未新建实例目录', instCount() === beforeCount + 1, 'instCount=' + instCount())
+
+  // C9 workflow_validate 工具（两形态 + preset 锚定 + 实例退化 + parse 错误）
+  r = await registered.workflow_validate.execute({ workflowText: WF_OK24 }, exec)
+  check('c24 validate: 定义形态 ok（context=definition）', r.ok === true && r.context === 'definition' && Array.isArray(r.errors) && r.errors.length === 0, JSON.stringify(r).slice(0, 120))
+  const savedDsh24 = process.env.DSH_HOME
+  process.env.DSH_HOME = '/ws/t24-pre'
+  const TPL24_YAML = '/ws/t24-pre/workflow-agent/templates/t24/t24.yaml'
+  filesC24.set(TPL24_YAML, 'name: t24\nversion: "1"\ntasks:\n  - id: a\n    processor: /abs-sk/SKILL.md\n    inputs:\n      d: "/etc/passwd"\n')
+  r = await registered.workflow_validate.execute({ workflowPath: TPL24_YAML }, exec)
+  check('c24 validate: preset 形态自动锚定（definition-preset + E-ABS-IN-DEF）', r.context === 'definition-preset' && r.errors.some(e => e.code === 'E-ABS-IN-DEF'), JSON.stringify(r).slice(0, 140))
+  process.env.DSH_HOME = savedDsh24
+  r = await registered.workflow_validate.execute({}, exec)
+  check('c24 validate: 实例形态 ok（context=instance）', r.ok === true && r.context === 'instance' && r.instanceId === iid24, JSON.stringify(r).slice(0, 120))
+  filesC24.delete(SKILL24)
+  r = await registered.workflow_validate.execute({}, exec)
+  check('c24 validate: 实例形态检出退化（E-SKILL-MISSING）', r.ok === false && r.errors.some(e => e.code === 'E-SKILL-MISSING'), JSON.stringify(r).slice(0, 140))
+  filesC24.set(SKILL24, 's1')
+  r = await registered.workflow_validate.execute({ workflowText: 'tasks: []' }, exec)
+  check('c24 validate: parse 错误如实回传 parseErrors', r.ok === false && Array.isArray(r.parseErrors) && r.parseErrors.length >= 2, JSON.stringify(r).slice(0, 120))
 }
 
 // ── 用例 1：合法串行工作流（llm-task + loop + quality-gate） ───────────────
@@ -2138,6 +2400,7 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     await runCase22()
     // ── 用例 23：预定义目录结构与实例化（Iter-27a）──
     await runCase23()
+    await runCase24()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
