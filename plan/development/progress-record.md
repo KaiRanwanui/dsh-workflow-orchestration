@@ -89,6 +89,24 @@
 
 ## 已完成工作
 
+### 22. Iter-27b: 语义校验——错误级清单+关口硬拦+workflow_validate（2026-09-04，✅ 完成关闭）
+
+**迭代报告**：`plan/development/iter27b-report.md`（设计=`iter27-design.md` 拆分版 §5 错误码表/§7 边界；主体实施方案以用户流程叙述版过审）
+
+**交付**（host v0.18.0）：
+- 共享校验引擎 `workflow-validate.js`（第 10 个同步 section）：8 错误码（E-DEP-CYCLE/E-PROCESSOR-MISSING/E-SKILL-MISSING/E-GATE-CHECKER-MISSING/E-INPUT-MISSING/E-ITEMS-MISSING/E-ABS-IN-DEF/E-ITEMS-PARSE）+2 警告（W-REF-MISMATCH/W-ITEMS-INPUT-DUP）；raw 字面禁绝对（params 注入=合法入口四点④）与展开值存在性双轨；fs 缺失降级纯静态不误报
+- 关口接线：create/begin **硬拦截**（校验先于 createBind，拒绝零副作用不建实例目录）→ start/resume **实时闸门**（重读 instance.yaml 防创建后退化）→ reset 回传不拦 → status 附 metadata validation 快照（legacy hydrate=ok 兼容）
+- 新工具 `workflow_validate`（只读：instanceId 实例实时校验 / workflowPath·Text 定义语境+preset 锚定）；`/wf/create` 同款关口（400 errors+hint / 200 validation 摘要）
+- **验收修正（安全红线，用户实测后提出）**：被拦后 LLM 只许转告清单+停止，**严禁自行搜索/替换技能或输入文件**（曾自行拿工作区同名旧技能顶替执行）——所有拒绝响应统一 `hint` 权威提示 + persona 契约硬规则
+- deferDisposition 前移 workflow-paths 单一事实源（raw/expanded 双形态）；parser 两处 warning 下线升错误级
+- 查找次序记档（用户确认）：技能两级链工作区→预定义；同名替代（工作区优先）当前可接受，路径固化留作可选加固
+
+**验证**：单测 421→485 全绿（用例 24 新增 59 项；修 2 个 mjs 内联作用域重声明冲突=wv/wvE_ 前缀）；GUI 验收（用户）=缺 processor 拦/修复放行/删技能 start 拦停（含修正复验）/延迟组与完好定义零误报 全通过。
+
+**提交**：`585c5b1`（主体）+ 本收尾提交（文档），已推 origin/main。
+
+---
+
 ### 21. Iter-27a: 预定义目录结构与实例化 + items-from/inputs 互斥后补丁（2026-09-03，✅ 完成关闭）
 
 **迭代报告**：`plan/development/iter27a-report.md`（设计=`iter27-design.md` 拆分版，四轮拍板落档；自 Iter-27 拆分，27b 语义校验待启动）

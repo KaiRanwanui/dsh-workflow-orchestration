@@ -32,7 +32,8 @@
 已完成: …（同上）… → Iter-24 ✅ → **Iter-25 ✅（2026-09-02 关闭：数据流显性化——begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选（D4 创建关口校验不拦截），host v0.14.0/client v0.6.1，286 单测，用户 GUI 验证通过（数据流传递+运行时护栏），git 53f022d 已推送，总结 iter25-report.md；遗留=warnings 面板展示→Iter-28、缺 processor 错误级校验→Iter-27）**
 已完成: …（同上）… → Iter-26 ✅ → **Iter-26R ✅（2026-09-03 关闭：运行时 items 展开，host v0.16.0，387 单测，GUI 验收通过；报告 iter26r-report.md，设计 iter26r-design.md）**
 已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移）+后补丁 items-from/inputs 互斥（条目值经 _loopItem 随派发传入、新建 item-processor 技能、模板 7 处重复 inputs 清零），host v0.17.1，421 单测，用户 GUI 验收通过（四内建模板开箱即用+补丁复验），git 300923d→dd48ff0 已推送，报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
- 当前:   **Iter-27b 语义校验（设计已确认 iter27-design.md，待启动）**。后续=28 实例编辑前台 /29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+已完成: …（同上）… → Iter-27a ✅ → **Iter-27b ✅（2026-09-04 关闭：语义校验——workflow-validate.js 校验引擎（8 错误码+2 警告：依赖环/缺 processor/缺 gate checker/技能或输入文件缺失/items 缺失或解析失败/preset 禁字面绝对+重复声明警告），create/begin 硬拦截（拒绝零副作用不建实例）、start/resume 实时闸门（重读 instance.yaml 防创建后退化）、reset 回传不拦、workflow_validate 只读工具（实例/定义两形态+preset 锚定）、/wf/create 同款关口、拒绝响应 hint=验收修正安全红线（被拦后 LLM 只许转告清单+停止，严禁自行搜索/替换技能或输入文件），host v0.18.0，485 单测，用户 GUI 验收通过（拦错/修复放行/删技能拦停含修正复验/零误报），git 585c5b1 已推送，报告 iter27b-report.md）**
+ 当前:   **Iter-28 实例编辑前台**。后续=29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -717,7 +718,7 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-### Iter-27b: 语义校验（块1，R8/R12）
+### Iter-27b ✅: 语义校验（块1，R8/R12，2026-09-04 关闭）
 
 > **设计已确认（2026-09-03，iter27-design.md 拆分版四轮拍板）**：缺 processor / gate 缺 checker 升**错误级**结构化清单；**拍板①=create 硬拦截**（begin 同拒；start/resume 闸门保留防创建后退化+legacy；reset 回传不拦；R11 流程变化=Iter-28 前补全=修定义/补技能后重新 create）；**拍板②=items 双语境**（preset 定义语境=模板子目录锚点+禁字面绝对路径 E-ABS-IN-DEF；实例语境=实例目录 1:1 副本优先→绝对直通）。
 
@@ -727,6 +728,8 @@ workflow_list → 列出所有实例 + 状态
 3. 校验结果**结构化返回**（错误清单：任务/字段/原因），供编辑界面与面板展示。
 
 **验收要点**：default-demo 破坏性用例（删技能/删上游输出/造环/缺 processor）逐项报出可读错误；完好定义零误报。
+
+**关闭（2026-09-04）**：host v0.18.0，485 单测全绿（用例 24 新增 59 项）。校验引擎 `workflow-validate.js`（第 10 同步 section；fs 缺失降级不误报；raw 禁绝对/展开值存在性双轨）+ create/begin 硬拦（零副作用）+ start/resume 实时闸门 + reset 回传 + `workflow_validate` 只读工具 + `/wf/create` 同款关口 + 拒绝响应 `hint`（**验收修正安全红线**：被拦后 LLM 只许转告清单+停止，严禁自行搜索/替换技能或输入文件——首次复验曾自行拿同名旧技能顶替）。GUI 验收通过。查找次序记档：技能两级链工作区→预定义，同名替代（工作区优先）用户拍板当前可接受、路径固化留作可选加固。遗留→Iter-28：warnings 面板展示、编辑保存触发校验。**总结**：`iter27b-report.md`。
 
 ---
 
