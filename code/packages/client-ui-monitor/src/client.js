@@ -29,6 +29,341 @@ export function register(ctx) {
   // Iter-21(R3)：稳定组件类型——session 更新（subagent 创建等）会频繁触发 factory 重渲染，
   // 若 WorkflowView 每次重定义会 remount（闪烁 + 局部状态丢失）。用模块级缓存一次。
   let WfComponent = null
+  // Iter-28：编辑前台组件同款防 remount 缓存（KeyValueEditor / EditorPanel 均定义一次）
+  let KvComponent = null
+  let EditorComponent = null
+
+  // ── Iter-28：key-value 行编辑器（创建弹窗 params 预填 / 编辑器 inputs 复用）──
+  // entries=[{key,value}]；readOnly 隐藏增删改；onAdd 空 key 占位新增行。
+  function getKeyValueComponent() {
+    if (KvComponent) return KvComponent
+    KvComponent = function KeyValueEditor(props) {
+      const { entries, onChange, readOnly, keyPlaceholder, valuePlaceholder } = props
+      const inputStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 5, padding: '3px 7px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, minWidth: 0, flex: 1 }
+      const delStyle = { border: 'none', background: 'transparent', color: '#f87171', cursor: readOnly ? 'default' : 'pointer', fontSize: 13, padding: '0 4px', lineHeight: '20px' }
+      const upd = (i, field, v) => {
+        if (readOnly) return
+        const next = entries.map((e, j) => j === i ? Object.assign({}, e, { [field]: v }) : e)
+        onChange(next)
+      }
+      const rows = entries.map((e, i) => React.createElement('div', { key: i, style: { display: 'flex', gap: 4, alignItems: 'center' } }, [
+        React.createElement('input', { key: 'k', value: e.key, placeholder: keyPlaceholder || '键', onChange: (ev) => upd(i, 'key', ev.target.value), readOnly: !!readOnly, style: Object.assign({}, inputStyle, { flex: '0 0 34%' }) }),
+        React.createElement('input', { key: 'v', value: e.value, placeholder: valuePlaceholder || '值', onChange: (ev) => upd(i, 'value', ev.target.value), readOnly: !!readOnly, style: inputStyle }),
+        readOnly ? null : React.createElement('button', { key: 'd', title: '删除此行', onClick: () => onChange(entries.filter((_, j) => j !== i)), style: delStyle }, '\u00d7'),
+      ]))
+      return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+        rows.length ? rows : React.createElement('div', { style: { color: '#9ca3af', fontSize: 12 } }, '（无）'),
+        readOnly ? null : React.createElement('button', {
+          onClick: () => onChange(entries.concat([{ key: '', value: '' }])),
+          style: { alignSelf: 'flex-start', border: '1px dashed rgba(148,163,184,0.5)', background: 'transparent', color: '#9ca3af', borderRadius: 5, padding: '1px 8px', fontSize: 11, cursor: 'pointer' }
+        }, '+ 添加')
+      )
+    }
+    return KvComponent
+  }
+
+  // ── Iter-28：实例编辑前台（DAG 下方折叠编辑器）──────────────────────────
+  // 双栏：左任务列表（类型/状态）、右选中任务属性表单；顶部实例级（name 只读、
+  // maxConcurrency 可改、params 只读）。保存走 /wf/validate-instance → /wf/instance-yaml
+  // 服务端闸门（Iter-27b 校验，errors 非空不落盘）；权限矩阵由服务端 editable 驱动。
+  function getEditorComponent() {
+    if (EditorComponent) return EditorComponent
+    EditorComponent = function EditorPanel(props) {
+      const { workspaceRoot, instanceId, stage: stageProp, onClose, onSaved } = props
+      const [data, setData] = React.useState(null)
+      const [skills, setSkills] = React.useState([])
+      const [selId, setSelId] = React.useState('')
+      const [draft, setDraft] = React.useState({ maxConcurrency: undefined, tasks: {} })
+      const [valRes, setValRes] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [err, setErr] = React.useState('')
+
+      const load = React.useCallback(() => {
+        if (!workspaceRoot || !instanceId) return
+        fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(workspaceRoot) + '&instanceId=' + encodeURIComponent(instanceId))
+          .then(r => r.json())
+          .then(r => {
+            if (r && r.error && !r.tasks) { setErr(r.error); return }
+            setErr('')
+            setData(r)
+            if (!r.tasks || !r.tasks.some(t => t.id === selId)) setSelId(r.tasks && r.tasks.length ? r.tasks[0].id : '')
+          })
+          .catch(e => setErr(e && e.message ? e.message : String(e)))
+      }, [workspaceRoot, instanceId, selId])
+
+      // Iter-28 修正3：外部 stage（面板 2s 轮询权威值）与编辑器内数据不一致 → 重拉。
+      // 场景：编辑器展开期间实例启动（CREATED→RUNNING），权限须即时转禁用，
+      // 而不是等用户点保存才被服务端拦。
+      React.useEffect(() => {
+        if (!stageProp || !workspaceRoot || !instanceId) return
+        if (data && data.stage && data.stage !== stageProp) load()
+      }, [stageProp, data, load])
+
+      React.useEffect(() => {
+        let stop = false
+        setData(null); setSkills([]); setSelId(''); setDraft({ maxConcurrency: undefined, tasks: {} }); setValRes(null); setErr('')
+        if (!workspaceRoot || !instanceId) return () => { stop = true }
+        fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(workspaceRoot) + '&instanceId=' + encodeURIComponent(instanceId))
+          .then(r => r.json())
+          .then(r => {
+            if (stop) return
+            if (r && r.error && !r.tasks) { setErr(r.error); return }
+            setData(r)
+            setSelId(r.tasks && r.tasks.length ? r.tasks[0].id : '')
+          })
+          .catch(e => { if (!stop) setErr(e && e.message ? e.message : String(e)) })
+        fetch('/wf/skills?workspaceRoot=' + encodeURIComponent(workspaceRoot))
+          .then(r => r.json())
+          .then(r => { if (!stop) setSkills((r && r.skills) || []) })
+          .catch(() => {})
+        return () => { stop = true }
+      }, [workspaceRoot, instanceId])
+
+      const editable = (data && data.editable) || { stage: '', definition: false, runtime: false, readonlyAll: true }
+      const tasks = (data && data.tasks) || []
+      const inst = (data && data.instance) || { name: '', params: {} }
+      const selTask = tasks.find(t => t.id === selId) || null
+
+      // draft 访问器：draft 值优先，回落原值
+      const td = selId ? (draft.tasks[selId] || {}) : {}
+      const getF = (field, orig) => (td[field] !== undefined ? td[field] : orig)
+      const setF = (field, value) => {
+        setDraft(prev => {
+          const t = Object.assign({}, (prev.tasks[selId] || {}))
+          t[field] = value
+          return { maxConcurrency: prev.maxConcurrency, tasks: Object.assign({}, prev.tasks, { [selId]: t }) }
+        })
+        setValRes(null)
+      }
+
+      const dirty = draft.maxConcurrency !== undefined || Object.keys(draft.tasks).some(id => Object.keys(draft.tasks[id]).length > 0)
+
+      const buildPatch = () => {
+        const patch = {}
+        if (draft.maxConcurrency !== undefined) patch.maxConcurrency = draft.maxConcurrency
+        const tp = {}
+        for (const id of Object.keys(draft.tasks)) {
+          const t = draft.tasks[id]
+          if (!Object.keys(t).length) continue
+          const out = {}
+          for (const f of Object.keys(t)) {
+            if (f === 'inputsEntries') {
+              // Iter-28 修正1：entries → 对象转换推迟到此（空 key 行过滤=未完成行不发送；
+              // 原值为数组形态的键按逗号拆回）
+              const orig = ((tasks.find(x => x.id === id) || {}).inputs) || {}
+              const obj = {}
+              for (const e of t[f]) {
+                const k = String(e.key || '').trim()
+                if (!k) continue
+                obj[k] = Array.isArray(orig[k]) ? String(e.value).split(',').map(s => s.trim()).filter(Boolean) : String(e.value)
+              }
+              out.inputs = obj
+            } else out[f] = t[f]
+          }
+          tp[id] = out
+        }
+        if (Object.keys(tp).length) patch.tasks = tp
+        return patch
+      }
+
+      const doAction = async (thenSave) => {
+        if (!dirty || busy) return
+        setBusy(true); setErr(''); setValRes(null)
+        try {
+          const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
+          const resp = await fetch(url, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
+          })
+          const r = await resp.json()
+          if (!resp.ok) {
+            const editErrors = (r && r.editErrors) || []
+            setValRes({
+              ok: false, kind: thenSave ? 'save' : 'validate',
+              // 校验错误（workflowBeginErrors=服务端 formatValidationItem 格式化）或原始 error
+              lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
+              // 禁改/非法值错误（workflow-edit 自有格式）
+              editLines: editErrors.map(e2 => '[' + e2.code + '] 任务 "' + (e2.task || '-') + '" ' + (e2.field || '') + ': ' + e2.message),
+            })
+            return
+          }
+          setValRes({ ok: true, kind: thenSave ? 'save' : 'validate', warnings: (r && r.warnings) || [] })
+          if (thenSave) {
+            setDraft({ maxConcurrency: undefined, tasks: {} })
+            load()
+            if (typeof onSaved === 'function') onSaved()
+          }
+        } catch (e) {
+          setErr(e && e.message ? e.message : String(e))
+        } finally { setBusy(false) }
+      }
+
+      const inputStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 5, padding: '3px 7px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
+      const btnStyle2 = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
+      const labelStyle = { display: 'inline-block', minWidth: 86, color: '#9ca3af', fontSize: 11 }
+      const rowStyle = { display: 'flex', alignItems: 'center', gap: 6 }
+      const dis = (allowed) => busy || !allowed || editable.readonlyAll
+
+      // 技能下拉（value=相对形态 relPath；当前值不在列表时保留显示为警示项）
+      const mkSkillSelect = (value, onChange, disabled, emptyLabel) => {
+        const opts = []
+        if (emptyLabel) opts.push({ v: '', label: emptyLabel })
+        if (value && !skills.some(s => s.relPath === value)) opts.push({ v: value, label: '⚠ ' + value + '（当前值，不在技能列表）' })
+        skills.forEach(s => opts.push({
+          v: s.relPath,
+          label: (s.name || s.id) + (s.version ? ' (v' + s.version + ')' : '') + (s.source === 'workspace' ? ' · 工作区' : '') + (s.predefinedShadowed ? '（顶替预定义同名）' : ''),
+        }))
+        return React.createElement('select', { value: value == null ? '' : value, onChange, disabled, style: inputStyle },
+          opts.map(o => React.createElement('option', { key: o.v || '__e', value: o.v }, o.label)))
+      }
+
+      const KvEditor = getKeyValueComponent()
+
+      // inputs 编辑形态（Iter-28 修正1：draft 直接存 entries 数组——空 key 行是合法中间态，
+      // "+ 添加" 立即可见可编辑；对象转换推迟到 buildPatch）
+      const inputsOrig = (selTask && selTask.inputs) || {}
+      const inputsDraftEntries = getF('inputsEntries', null)
+      const inputsEntries = (inputsDraftEntries !== null && inputsDraftEntries !== undefined)
+        ? inputsDraftEntries
+        : Object.keys(inputsOrig).map(k => ({ key: k, value: Array.isArray(inputsOrig[k]) ? inputsOrig[k].join(', ') : String(inputsOrig[k]) }))
+      const onInputsChange = (entries) => setF('inputsEntries', entries)
+
+      // outputs 行编辑器（string[]）
+      const outputsVal = getF('outputs', (selTask && selTask.outputs) || [])
+      const onOutputsChange = (arr) => setF('outputs', arr.map(s => String(s)))
+
+      // params 只读展示（instance.meta.params）
+      const paramEntries = Object.keys(inst.params || {}).map(k => ({ key: k, value: inst.params[k] === null || inst.params[k] === undefined ? '' : String(inst.params[k]) }))
+
+      const stageColor = { CREATED: '#9ca3af', PENDING: '#9ca3af', RUNNING: '#3b82f6', STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
+      const typeLabel = { 'llm-task': 'LLM', 'loop': '↻ loop', 'concurrent': '⚡ conc', 'human-decision': '人审', 'external-agent': '外部' }
+      const stC = { PENDING: '#9ca3af', RUNNING: '#3b82f6', DONE: '#22c55e', FAILED: '#ef4444', SKIPPED: '#f59e0b' }
+
+      const taskListEl = React.createElement('div', {
+        style: { flex: '0 0 180px', borderRight: '1px solid rgba(148,163,184,0.25)', overflowY: 'auto', maxHeight: 230, display: 'flex', flexDirection: 'column', gap: 2, paddingRight: 4 }
+      },
+        tasks.length === 0 ? React.createElement('div', { style: { color: '#9ca3af', fontSize: 12 } }, '（无任务）') :
+        tasks.map(t => React.createElement('button', {
+          key: t.id,
+          onClick: () => setSelId(t.id),
+          style: {
+            textAlign: 'left', border: selId === t.id ? '1px solid rgba(59,130,246,0.7)' : '1px solid rgba(148,163,184,0.25)',
+            background: selId === t.id ? 'rgba(59,130,246,0.12)' : 'transparent',
+            color: 'inherit', borderRadius: 6, padding: '4px 8px', fontSize: 12, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }
+        }, [
+          React.createElement('span', { key: 'd', style: { width: 8, height: 8, borderRadius: 4, background: stC[t.status] || '#9ca3af', flexShrink: 0 } }),
+          React.createElement('span', { key: 'n', style: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, title: t.id }, t.name || t.id),
+          React.createElement('span', { key: 't', style: { color: '#9ca3af', fontSize: 10, flexShrink: 0 } }, typeLabel[t.type] || t.type),
+        ]))
+      )
+
+      const taskFormEl = !selTask ? React.createElement('div', { style: { color: '#9ca3af', fontSize: 12, padding: 8 } }, '← 选择左侧任务查看属性') : React.createElement('div', {
+        style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0, overflowY: 'auto', maxHeight: 230, paddingRight: 4 }
+      }, [
+        React.createElement('div', { key: 'tt', style: { fontWeight: 600 } }, (selTask.name || selTask.id) + '  ', React.createElement('span', { style: { color: '#9ca3af', fontWeight: 400, fontSize: 11 } }, selTask.id + ' · ' + (typeLabel[selTask.type] || selTask.type))),
+        React.createElement('div', { key: 'p', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'processor'),
+          mkSkillSelect(getF('processor', selTask.processor), (e) => setF('processor', e.target.value), dis(editable.definition), null),
+        ]),
+        React.createElement('div', { key: 'g', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'gateChecker'),
+          mkSkillSelect(getF('gateChecker', selTask.gateChecker), (e) => setF('gateChecker', e.target.value), dis(editable.definition), '（无门禁）'),
+        ]),
+        React.createElement('div', { key: 'i', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'inputs'),
+          React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0 } },
+            React.createElement(KvEditor, { entries: inputsEntries, onChange: onInputsChange, readOnly: dis(editable.definition), keyPlaceholder: '输入名', valuePlaceholder: '路径（多值逗号分隔）' })),
+        ]),
+        React.createElement('div', { key: 'o', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'outputs'),
+          React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 } }, [
+            ...outputsVal.map((o, i) => React.createElement('div', { key: 'or' + i, style: { display: 'flex', gap: 4, alignItems: 'center' } }, [
+              React.createElement('input', { key: 'in', value: o, onChange: (e) => onOutputsChange(outputsVal.map((x, j) => j === i ? e.target.value : x)), disabled: dis(editable.definition), placeholder: '输出路径', style: inputStyle }),
+              dis(editable.definition) ? null : React.createElement('button', { key: 'd', title: '删除', onClick: () => onOutputsChange(outputsVal.filter((_, j) => j !== i)), style: { border: 'none', background: 'transparent', color: '#f87171', cursor: 'pointer', fontSize: 13 } }, '\u00d7'),
+            ])),
+            dis(editable.definition) ? null : React.createElement('button', { key: 'oa', onClick: () => onOutputsChange(outputsVal.concat([''])), style: { alignSelf: 'flex-start', border: '1px dashed rgba(148,163,184,0.5)', background: 'transparent', color: '#9ca3af', borderRadius: 5, padding: '1px 8px', fontSize: 11, cursor: 'pointer' } }, '+ 添加'),
+          ]),
+        ]),
+        React.createElement('div', { key: 'r', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'retries'),
+          React.createElement('input', {
+            key: 'in', type: 'number', min: 0, disabled: dis(editable.runtime),
+            value: getF('retries', selTask.retries) === null || getF('retries', selTask.retries) === undefined ? 0 : getF('retries', selTask.retries),
+            onChange: (e) => setF('retries', e.target.value === '' ? 0 : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }) }),
+          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '门禁失败重试次数（保存后对下一次 reset/启动生效）'),
+        ]),
+        React.createElement('div', { key: 'c', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'concurrency'),
+          React.createElement('input', {
+            key: 'in', type: 'number', min: 1, disabled: dis(editable.runtime),
+            value: getF('concurrency', selTask.concurrency) === null || getF('concurrency', selTask.concurrency) === undefined ? '' : getF('concurrency', selTask.concurrency),
+            onChange: (e) => setF('concurrency', e.target.value === '' ? null : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }),
+            placeholder: '默认' }),
+          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '任务级并发上限（仅 loop/concurrent 组有意义）'),
+        ]),
+      ])
+
+      const valResEl = !valRes ? null : (
+        valRes.ok
+          ? React.createElement('div', { key: 'vok', style: { border: '1px solid rgba(34,197,94,0.45)', background: 'rgba(34,197,94,0.08)', color: '#22c55e', borderRadius: 6, padding: '6px 9px', fontSize: 12 } },
+              (valRes.kind === 'save' ? '✓ 已保存' : '✓ 校验通过') + (valRes.warnings && valRes.warnings.length ? ('；' + valRes.warnings.length + ' 项警告（不阻断）：' + valRes.warnings.join('；')) : '，无警告'))
+          : React.createElement('div', { key: 'verr', style: { border: '1px solid rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.08)', color: '#f87171', borderRadius: 6, padding: '6px 9px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 140, overflowY: 'auto' } }, [
+              React.createElement('div', { key: 't', style: { fontWeight: 600 } }, '✗ ' + (valRes.kind === 'save' ? '保存被拦（校验未通过，未落盘）' : '校验未通过')),
+              ...(valRes.editLines || []).map((l, i) => React.createElement('div', { key: 'el' + i }, '· ' + l)),
+              ...(valRes.lines || []).map((l, i) => React.createElement('div', { key: 'wl' + i }, '· ' + l)),
+            ])
+      )
+
+      return React.createElement('div', {
+        style: { margin: '6px 12px 12px', border: '1px solid rgba(148,163,184,0.35)', borderRadius: 8, padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 7, background: 'rgba(148,163,184,0.04)' }
+      }, [
+        React.createElement('div', { key: 'hd', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+          React.createElement('span', { key: 't', style: { fontWeight: 600, fontSize: 13 } }, '✎ 实例编辑'),
+          React.createElement('span', { key: 's', style: { fontSize: 11, color: stageColor[editable.stage] || '#9ca3af', border: '1px solid ' + (stageColor[editable.stage] || '#9ca3af') + '66', borderRadius: 5, padding: '0 6px' } }, editable.stage || '…'),
+          editable.readonlyAll ? React.createElement('span', { key: 'ro', style: { color: '#f59e0b', fontSize: 11 } }, '运行中不可编辑（停止后可改并发/重试；定义字段仅 CREATED 可改）') : null,
+          !editable.definition && !editable.readonlyAll ? React.createElement('span', { key: 'pd', style: { color: '#9ca3af', fontSize: 11 } }, '已启动：processor/gateChecker/inputs/outputs 只读（重定义请 reset 后经编辑器或重新 create）') : null,
+          React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+          React.createElement('button', { key: 'x', onClick: onClose, style: btnStyle2 }, '收起'),
+        ]),
+        err ? React.createElement('div', { key: 'err', style: { color: '#f87171', fontSize: 12 } }, err) : null,
+        !data ? React.createElement('div', { key: 'ld', style: { color: '#9ca3af', fontSize: 12 } }, '加载中…') : [
+          React.createElement('div', { key: 'ins', style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-start', borderBottom: '1px solid rgba(148,163,184,0.2)', paddingBottom: 7 } }, [
+            React.createElement('div', { key: 'n', style: rowStyle }, [
+              React.createElement('span', { key: 'l', style: labelStyle }, 'name'),
+              React.createElement('span', { key: 'v', style: { fontSize: 12 } }, inst.name || '-'),
+            ]),
+            React.createElement('div', { key: 'mc', style: rowStyle }, [
+              React.createElement('span', { key: 'l', style: labelStyle }, 'maxConcurrency'),
+              React.createElement('input', {
+                key: 'in', type: 'number', min: 1, disabled: dis(editable.runtime),
+                value: draft.maxConcurrency !== undefined ? draft.maxConcurrency : (inst.maxConcurrency || 1),
+                onChange: (e) => { setDraft(prev => ({ maxConcurrency: e.target.value === '' ? 1 : Number(e.target.value), tasks: prev.tasks })); setValRes(null) },
+                style: Object.assign({}, inputStyle, { width: 80 }) }),
+              React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '全局并发上限'),
+            ]),
+            React.createElement('div', { key: 'pp', style: Object.assign({}, rowStyle, { flex: '1 1 260px', minWidth: 0 }) }, [
+              React.createElement('span', { key: 'l', style: labelStyle }, 'params'),
+              React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0, opacity: 0.75 } },
+                React.createElement(KvEditor, { entries: paramEntries, readOnly: true })),
+            ]),
+          ]),
+          React.createElement('div', { key: 'cols', style: { display: 'flex', gap: 10 } }, [taskListEl, taskFormEl]),
+          valResEl,
+          React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
+            dirty && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '有未保存修改') : null,
+            React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: !dirty || busy, style: Object.assign({}, btnStyle2, { opacity: !dirty || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
+            React.createElement('button', {
+              key: 's', onClick: () => doAction(true), disabled: !dirty || busy || editable.readonlyAll,
+              style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: !dirty || busy || editable.readonlyAll ? 0.5 : 1 })
+            }, busy ? '处理中…' : '保存（校验通过才落盘）'),
+          ]),
+        ],
+      ])
+    }
+    return EditorComponent
+  }
 
   function fingerprint(state) {
     if (!state || !state.tasks) return ''
@@ -642,11 +977,16 @@ export function register(ctx) {
           // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
           const [formOpen, setFormOpen] = React.useState(false)
           const [adoptOpen, setAdoptOpen] = React.useState(false) // Iter-20：采用未绑定实例
+          // Iter-28：实例编辑器折叠开关（hooks 区声明；渲染条件在 hasData 分支内）
+          const [editorOpen, setEditorOpen] = React.useState(false)
           const [tplOpts, setTplOpts] = React.useState([])
           const [tplSel, setTplSel] = React.useState('custom')
           const [yamlText, setYamlText] = React.useState('')
           const [pathText, setPathText] = React.useState('')
-          const [paramsText, setParamsText] = React.useState('{}')
+          // Iter-28：params 由 JSON textarea 改为 key-value 编辑器（模板默认值预填）
+          const [paramsEntries, setParamsEntries] = React.useState([])
+          // Iter-28：创建成功结果视图（warnings 非空/解绑冲突时展示，承接 Iter-25 遗留面板展示）
+          const [createResult, setCreateResult] = React.useState(null)
           const [busy, setBusy] = React.useState(false)
           const [formErr, setFormErr] = React.useState('')
 
@@ -666,23 +1006,45 @@ export function register(ctx) {
                 }
                 ;(r.predefined || []).forEach(p => opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + (descOf(p) || p.name) + (p.fallback ? '（内建兜底）' : ''), t: p }))
                 setTplOpts(opts)
-                if (opts.length > 1) { setTplSel(opts[1].v); setYamlText(opts[1].t ? opts[1].t.yaml : '') }
+                if (opts.length > 1) {
+                  setTplSel(opts[1].v); setYamlText(opts[1].t ? opts[1].t.yaml : '')
+                  // Iter-28：默认模板 params 默认值预填（{key: default 原值} → 行编辑器形态）
+                  const pv = opts[1].t && opts[1].t.params ? opts[1].t.params : {}
+                  setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
+                }
               })
               .catch(() => {})
             return () => { stop = true }
           }, [formOpen, activeRoot])
 
-          const openForm = () => { setFormErr(''); setFormOpen(true) }
+          const openForm = () => { setFormErr(''); setCreateResult(null); setFormOpen(true) }
           const pickTpl = (v) => {
             setTplSel(v)
             const opt = tplOpts.find(o => o.v === v)
             setYamlText(opt && opt.t ? opt.t.yaml : '')
+            // Iter-28：切模板重置 params 预填
+            const pv = opt && opt.t && opt.t.params ? opt.t.params : {}
+            setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
+          }
+          // Iter-28：key-value 行 → params 对象（空 key 跳过；数字/布尔解析与旧 JSON 输入等价）
+          const entriesToParams = (entries) => {
+            const out = {}
+            const seenDup = new Set()
+            for (const e of entries) {
+              const k = String(e.key || '').trim()
+              if (!k) continue
+              if (seenDup.has(k)) throw new Error('params 存在重复键: ' + k)
+              seenDup.add(k)
+              let v = String(e.value)
+              try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
+              out[k] = v
+            }
+            return out
           }
           const submitCreate = async () => {
             setFormErr(''); setBusy(true)
             try {
-              let params = {}
-              try { params = paramsText.trim() ? JSON.parse(paramsText) : {} } catch (e) { throw new Error('params 不是合法 JSON') }
+              const params = entriesToParams(paramsEntries)
               const payload = { workspaceRoot: activeRoot, params, sessionId } // Iter-19：面板创建即绑定当前 sessionId
               if (tplSel === 'custom') {
                 if (!pathText.trim()) throw new Error('请填写 workflowPath')
@@ -695,11 +1057,15 @@ export function register(ctx) {
               const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
               const r = await resp.json()
               if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
-              setFormOpen(false)
               if (typeof wfListLoader === 'function') wfListLoader()
-              // Iter-19：CONFLICT 自愈告知——新建时自动解绑了冲突旧实例
-              if (r && Array.isArray(r.recoveredConflict) && r.recoveredConflict.length > 0) {
-                alert('检测到工作区存在实例绑定冲突（同一会话被多实例占用）。已自动解绑冲突实例 [' + r.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。如非预期请在实例列表查看。')
+              // Iter-28：创建成功 → 结果视图（warnings 面板展示，承接 Iter-25 遗留；
+              // recoveredConflict 一并展示替代旧 alert）。warnings 为空且无冲突 → 直接关弹窗。
+              const warns = r && Array.isArray(r.warnings) ? r.warnings : []
+              const conflicts = r && Array.isArray(r.recoveredConflict) ? r.recoveredConflict : []
+              if (warns.length > 0 || conflicts.length > 0) {
+                setCreateResult({ warnings: warns, recoveredConflict: conflicts, instanceId: r.instanceId })
+              } else {
+                setFormOpen(false)
               }
             } catch (e) {
               setFormErr(e && e.message ? e.message : String(e))
@@ -862,6 +1228,28 @@ export function register(ctx) {
 
           // Iter-19：创建按钮仅当会话 UNBOUND（无绑定实例）时显示
           const canCreate = !wfSessionState || wfSessionState.state === 'UNBOUND'
+          // Iter-28：编辑器折叠开关（已绑定实例且有定义数据时可见）；
+          // editorOpen state 声明在条件 return 之前的 hooks 区（见 formOpen 旁）。
+          // 修正2：RUNNING 时按钮灰色禁用（运行中不可编辑，避免展开空编辑器）
+          const EditorPanel = getEditorComponent()
+          const stageNow = (stateData && stateData.stage) || ''
+          const editBtn = (!canCreate && hasData && currentInstanceId)
+            ? React.createElement('button', {
+                key: 'edit',
+                title: stageNow === 'RUNNING' ? '运行中不可编辑（停止后可改并发/重试）' : '展开/收起实例编辑器（保存触发 Iter-27b 校验）',
+                disabled: stageNow === 'RUNNING',
+                onClick: () => setEditorOpen(o => !o),
+                style: {
+                  border: editorOpen ? '1px solid rgba(59,130,246,0.7)' : '1px solid rgba(148,163,184,0.35)',
+                  background: editorOpen ? 'rgba(59,130,246,0.15)' : 'transparent',
+                  color: editorOpen ? '#60a5fa' : 'inherit',
+                  borderRadius: 6, padding: '1px 9px', fontSize: 12,
+                  cursor: stageNow === 'RUNNING' ? 'default' : 'pointer',
+                  opacity: stageNow === 'RUNNING' ? 0.45 : 1,
+                  lineHeight: '18px',
+                }
+              }, '✎ 编辑')
+            : null
           const plusBtn = canCreate ? React.createElement('button', {
             key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
             style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
@@ -871,18 +1259,32 @@ export function register(ctx) {
             key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => { if (activeRoot) startListPolling(); setAdoptOpen(true) }, // Iter-21：打开即刷新列表，避免采用池空/延迟;孤儿可采纳(需 S3 recoverOrphan)属 Iter-22
             style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
           }, '采用') : null
-          // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮
+          // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮（+ Iter-28 编辑入口）
           const toolbar = React.createElement('div', {
             key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, canCreate ? [plusBtn, adoptBtn] : controlBtns)
+          }, canCreate ? [plusBtn, adoptBtn] : (editBtn ? controlBtns.concat([editBtn]) : controlBtns))
 
+          const KvEditor = getKeyValueComponent()
           const formOverlay = !formOpen ? null : React.createElement('div', {
             style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
             onClick: () => setFormOpen(false)
           }, React.createElement('div', {
             style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 460, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
             onClick: (e) => e.stopPropagation()
-          }, [
+          }, createResult ? [
+            // Iter-28：创建成功结果视图（warnings / 解绑冲突清单展示）
+            React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#22c55e' } }, '✓ 创建成功（' + (createResult.instanceId || '') + '）'),
+            createResult.recoveredConflict.length > 0 ? React.createElement('div', {
+              key: 'cf', style: { border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', borderRadius: 6, padding: '6px 9px', whiteSpace: 'pre-wrap' }
+            }, '检测到实例绑定冲突：已自动解绑 [' + createResult.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。') : null,
+            React.createElement('div', { key: 'wl', style: { fontWeight: 600 } }, createResult.warnings.length > 0 ? '⚠ 校验警告（' + createResult.warnings.length + ' 项，不阻断创建）' : '校验通过，无警告'),
+            createResult.warnings.length > 0 ? React.createElement('div', {
+              key: 'ws', style: { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b', borderRadius: 6, padding: '6px 9px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }
+            }, createResult.warnings.map((w, i) => React.createElement('div', { key: i }, '· ' + w))) : null,
+            React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end' } }, [
+              React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, '关闭'),
+            ]),
+          ] : [
             React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
             React.createElement('label', { key: 'l1' }, '模板 / 来源'),
             React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
@@ -890,8 +1292,8 @@ export function register(ctx) {
             ),
             tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
             tplSel.indexOf('tpl:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
-            React.createElement('label', { key: 'l2' }, 'params（JSON，可选）'),
-            React.createElement('textarea', { key: 'pj', value: paramsText, onChange: e => setParamsText(e.target.value), rows: 3, style: monoStyle, spellCheck: false }),
+            React.createElement('label', { key: 'l2' }, 'params（键值对；模板默认值已预填，可增删改）'),
+            React.createElement(KvEditor, { key: 'pj', entries: paramsEntries, onChange: setParamsEntries, keyPlaceholder: '参数名', valuePlaceholder: '值' }),
             formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
             React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
               React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
@@ -1009,6 +1411,17 @@ export function register(ctx) {
               retries: stateData.retries || 0,
               error: stateData.error || null,
             }),
+            // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
+            // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
+            editorOpen && currentInstanceId && activeRoot
+              ? React.createElement(EditorPanel, {
+                  workspaceRoot: activeRoot,
+                  instanceId: currentInstanceId,
+                  stage: stateData ? stateData.stage : '',
+                  onClose: () => setEditorOpen(false),
+                  onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+                })
+              : null,
             formOverlay,
             adoptOverlay
           )

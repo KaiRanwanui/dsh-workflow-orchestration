@@ -889,6 +889,11 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (b.entry) {
           const mv = b.entry.meta && b.entry.meta.validation
           snap.validation = mv || { ok: true, errors: [], warnings: [], legacy: true }
+          // Iter-28 验收修正：附实例 params（meta.params 用户实参；engine state 不存值——
+          // 定义声明与注入后原值分离）。编排 Agent 派发 prompt 据此告知子会话参数上下文。
+          if (b.entry.meta && b.entry.meta.params && Object.keys(b.entry.meta.params).length) {
+            snap.params = b.entry.meta.params
+          }
         }
         return withInstanceId(snap, b)
       } catch (error) {

@@ -2357,6 +2357,211 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   concR = eConc.snapshot().runnable
   check('concurrent: login DONE 后释放槽位启下一个', concR.length === 1 && concR[0].id === 'batch/payment', concR.map(t => t.id).join(','))
 
+// ── 用例 25：实例编辑前台（Iter-28：workflow-edit 纯逻辑 + /wf/skills + instance-yaml + validate-instance）──
+async function runCase25() {
+  console.log('［用例 25］实例编辑前台 — workflow-edit / skills / instance-yaml / validate-instance')
+  const { serializeWorkflowYaml, instanceEditPermissions, applyInstancePatch, simplifyParams, parseSkillFrontmatter } = require('../shared/workflow-edit.js')
+  const { parseYaml } = require('../shared/workflow-parser.js')
+
+  // 递归键排序规范化（序列化往返深比较；JSON.stringify 键序敏感）
+  const norm = (v) => Array.isArray(v) ? v.map(norm)
+    : (v && typeof v === 'object') ? Object.keys(v).sort().reduce((o, k) => { o[k] = norm(v[k]); return o }, {})
+    : v
+
+  // ── A. 序列化往返（顶层键重排不影响语义；version "1.0"→number 1 为既有 parse 往返损耗）──
+  const WF25 = [
+    'name: t25demo', 'version: "1.0"', 'description: "编辑测试"', 'max-concurrency: 2',
+    'params:', '  topic: AI',
+    'tasks:',
+    '  - id: a', '    name: "任务A"', '    processor: skills/a/SKILL.md',
+    '    inputs:', '      src: input/a.txt', '    outputs: ["output/a.md"]', '    depends-on: []',
+    '    quality-gate:', '      checker: skills/c/SKILL.md', '      on-failure: retry', '      max-retries: 1',
+    '  - id: grp', '    type: concurrent', '    items-from: items.txt', '    item-var: it',
+    '    max-concurrency: 3', '    processor: skills/b/SKILL.md', '    outputs: ["output/g.md"]',
+  ].join('\n') + '\n'
+  const raw1 = parseYaml(WF25)
+  const ser1 = serializeWorkflowYaml(raw1)
+  const raw2 = parseYaml(ser1)
+  check('edit 序列化往返: 语义等价（键序规范化深比较）', JSON.stringify(norm(raw1)) === JSON.stringify(norm(raw2)), ser1.slice(0, 200))
+  check('edit 序列化往返: 再序列化幂等', serializeWorkflowYaml(raw2) === ser1, '')
+
+  // ── B. 权限矩阵（拍板：定义字段仅 CREATED；RUNNING 全禁；PENDING 视同已运行）──
+  const pC = instanceEditPermissions('CREATED')
+  const pP = instanceEditPermissions('PENDING')
+  const pR = instanceEditPermissions('RUNNING')
+  const pS = instanceEditPermissions('STOPPED')
+  check('edit 权限: CREATED 全开', pC.definition === true && pC.runtime === true && pC.readonlyAll === false)
+  check('edit 权限: PENDING 定义关/运行参数开', pP.definition === false && pP.runtime === true)
+  check('edit 权限: RUNNING 全禁', pR.definition === false && pR.runtime === false && pR.readonlyAll === true)
+  check('edit 权限: STOPPED 定义关/运行参数开', pS.definition === false && pS.runtime === true)
+
+  // ── C. applyInstancePatch（白名单合并 + 禁改拒绝 + 非法值）──
+  const mkRaw = () => parseYaml(WF25)
+  const pDef = instanceEditPermissions('CREATED')
+
+  let rr = applyInstancePatch(mkRaw(), { maxConcurrency: 5, tasks: { a: { processor: 'skills/z/SKILL.md', gateChecker: 'skills/g/SKILL.md', inputs: { src: 'input/b.txt', extra: 'x.txt' }, outputs: ['output/new.md'], retries: 2, concurrency: 4 } } }, pDef)
+  check('edit patch: CREATED 全字段通过', rr.ok === true, JSON.stringify(rr.errors))
+  const rawPatched = parseYaml(WF25)
+  applyInstancePatch(rawPatched, { maxConcurrency: 5, tasks: { a: { processor: 'skills/z/SKILL.md', gateChecker: 'skills/g/SKILL.md', inputs: { src: 'input/b.txt' }, outputs: ['output/new.md'], retries: 2 }, grp: { concurrency: 4 } } }, pDef)
+  check('edit patch: processor/inputs/outputs 落到 raw', rawPatched.tasks[0].processor === 'skills/z/SKILL.md' && rawPatched.tasks[0].inputs.src === 'input/b.txt' && rawPatched.tasks[0].outputs[0] === 'output/new.md', JSON.stringify(rawPatched.tasks[0]))
+  check('edit patch: gateChecker 替换 + retries 落 gate', rawPatched.tasks[0]['quality-gate'].checker === 'skills/g/SKILL.md' && rawPatched.tasks[0]['quality-gate']['max-retries'] === 2, JSON.stringify(rawPatched.tasks[0]['quality-gate']))
+  check('edit patch: 实例级/任务级 max-concurrency 落值', rawPatched['max-concurrency'] === 5 && rawPatched.tasks[1]['max-concurrency'] === 4)
+
+  // gateChecker 空串 → 删 checker（gate 壳保留）；无 gate 壳设置 → 创建壳
+  const rawGc = parseYaml(WF25)
+  applyInstancePatch(rawGc, { tasks: { a: { gateChecker: '' } } }, pDef)
+  check('edit patch: gateChecker 空串删 checker 保留壳', rawGc.tasks[0]['quality-gate'].checker === undefined && rawGc.tasks[0]['quality-gate']['on-failure'] === 'retry', JSON.stringify(rawGc.tasks[0]['quality-gate']))
+  const rawGc2 = parseYaml(WF25)
+  applyInstancePatch(rawGc2, { tasks: { grp: { gateChecker: 'skills/newc/SKILL.md' } } }, pDef)
+  check('edit patch: 无 gate 壳设置 checker 创建壳(block)', rawGc2.tasks[1]['quality-gate'].checker === 'skills/newc/SKILL.md' && rawGc2.tasks[1]['quality-gate']['on-failure'] === 'block', JSON.stringify(rawGc2.tasks[1]['quality-gate']))
+
+  // 禁改 + 未知任务 + 非法值
+  const pStop = instanceEditPermissions('STOPPED')
+  let rr2 = applyInstancePatch(parseYaml(WF25), { tasks: { a: { processor: 'skills/z/SKILL.md' } } }, pStop)
+  check('edit patch: STOPPED 改 processor 被拒(E-EDIT-DENIED)', rr2.ok === false && rr2.errors.some(e => e.code === 'E-EDIT-DENIED' && e.task === 'a' && e.field === 'processor'))
+  const rawStop = parseYaml(WF25)
+  let rr3 = applyInstancePatch(rawStop, { tasks: { a: { retries: 3 } } }, pStop)
+  check('edit patch: STOPPED 改 retries 放行', rr3.ok === true && rawStop.tasks[0]['quality-gate']['max-retries'] === 3)
+  let rr4 = applyInstancePatch(parseYaml(WF25), { tasks: { ghost: { retries: 1 } } }, pDef)
+  check('edit patch: 未知任务 E-EDIT-NOTASK', rr4.ok === false && rr4.errors.some(e => e.code === 'E-EDIT-NOTASK' && e.task === 'ghost'))
+  let rr5 = applyInstancePatch(parseYaml(WF25), { maxConcurrency: 0 }, pDef)
+  check('edit patch: maxConcurrency 0 非法 E-EDIT-VALUE', rr5.ok === false && rr5.errors.some(e => e.code === 'E-EDIT-VALUE' && e.field === 'max-concurrency'))
+  let rr6 = applyInstancePatch(parseYaml(WF25), { tasks: { a: { outputs: ['ok.md', ''] } } }, pDef)
+  check('edit patch: outputs 空串元素拒绝', rr6.ok === false && rr6.errors.some(e => e.code === 'E-EDIT-VALUE' && e.field === 'outputs'))
+  const pRun = instanceEditPermissions('RUNNING')
+  let rr7 = applyInstancePatch(parseYaml(WF25), { maxConcurrency: 3 }, pRun)
+  check('edit patch: RUNNING 改 maxConcurrency 被拒', rr7.ok === false && rr7.errors.some(e => e.code === 'E-EDIT-DENIED'))
+  // concurrency null → 删任务级 max-concurrency
+  const rawCc = parseYaml(WF25)
+  applyInstancePatch(rawCc, { tasks: { grp: { concurrency: null } } }, pDef)
+  check('edit patch: concurrency null 删除任务级上限', rawCc.tasks[1]['max-concurrency'] === undefined)
+
+  // ── D/E. simplifyParams + parseSkillFrontmatter ──
+  const sp = simplifyParams({ a: { type: 'string', default: 'x' }, b: { type: 'number' } })
+  check('edit simplifyParams: default 提取 + 缺省空串', sp.a === 'x' && sp.b === '', JSON.stringify(sp))
+  const fm1 = parseSkillFrontmatter('---\nname: xx\nversion: 2.1\n---\n# body', 'dir')
+  check('edit frontmatter: name+version', fm1.name === 'xx' && fm1.version === '2.1', JSON.stringify(fm1))
+  const fm2 = parseSkillFrontmatter('# body only', 'mydir')
+  check('edit frontmatter: 无块回退目录名', fm2.name === 'mydir' && fm2.version === null, JSON.stringify(fm2))
+
+  // ── F. 路由（import mjs + mock fs/webServer）──
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const { files, fs: mockFs } = makeMockFs()
+  let routeHandler = null
+  const ctx = {
+    get(name) {
+      if (name === 'webServer') return { register(def) { routeHandler = def.handler } }
+      if (name === 'fs') return mockFs
+      return undefined
+    },
+  }
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage })
+  mjs.registerWebRoutes(ctx, registry)
+  const call = (method, url, body) => new Promise((resolve, reject) => {
+    const res = {
+      code: 0, headers: null, payload: '',
+      writeHead(c, h) { this.code = c; this.headers = h },
+      end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } },
+    }
+    const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+    if (method === 'POST') {
+      const chunks = [JSON.stringify(body)]
+      req.on = (ev, fn) => {
+        if (ev === 'data') chunks.forEach(c => fn(c))
+        if (ev === 'end') Promise.resolve().then(() => fn())
+      }
+    }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+
+  // 技能目录 mock：预定义(pa, shared) + 工作区(shared 同名, ws-only, not-a-skill 无 SKILL.md)
+  const savedDsh25 = process.env.DSH_HOME
+  process.env.DSH_HOME = '/ws/t25-pre'
+  files.set('/ws/t25-pre/workflow-agent/skills/pa/SKILL.md', '---\nname: pre-a\nversion: 1.2\n---\nA')
+  files.set('/ws/t25-pre/workflow-agent/skills/shared/SKILL.md', '---\nname: shared\n---\npre')
+  files.set('/ws/t25/skills/shared/SKILL.md', '---\nname: shared\nversion: 9.9\n---\nws')
+  files.set('/ws/t25/skills/ws-only/SKILL.md', '---\nname: ws-only\n---\nW')
+  files.set('/ws/t25/skills/not-a-skill/readme.txt', 'x')
+
+  let r = await call('GET', '/wf/skills?workspaceRoot=/ws/t25')
+  const sk = r.body.skills || []
+  check('skills: 预定义+工作区合并 3 项（无 SKILL.md 目录跳过）', sk.length === 3, JSON.stringify(sk.map(s => s.id + ':' + s.source)))
+  const skShared = sk.find(s => s.id === 'shared')
+  check('skills: 同名工作区优先顶替+标记', skShared && skShared.source === 'workspace' && skShared.predefinedShadowed === true && skShared.version === '9.9', JSON.stringify(skShared))
+  const skPa = sk.find(s => s.id === 'pa')
+  check('skills: frontmatter name/version 解析（relPath 相对形态）', skPa && skPa.name === 'pre-a' && skPa.version === '1.2' && skPa.relPath === 'skills/pa/SKILL.md', JSON.stringify(skPa))
+
+  // templates：params 字段（简化形态）
+  r = await call('GET', '/wf/templates?workspaceRoot=/ws/t25')
+  check('templates(28): 每项带 params 对象', (r.body.predefined || []).every(t => t.params && typeof t.params === 'object'), JSON.stringify((r.body.predefined || [])[0] && Object.keys(r.body.predefined[0])))
+
+  // 创建 CREATED 实例 A（绝对路径技能直通校验）
+  files.set('/ws/t25/x/a/SKILL.md', 'skill a')
+  files.set('/ws/t25/x/c/SKILL.md', 'skill c')
+  files.set('/ws/t25/x/g/SKILL.md', 'skill g')
+  const WF25A = 'name: t25edit\nversion: "1"\ndescription: d\nmax-concurrency: 2\ntasks:\n  - id: a\n    name: A\n    processor: /ws/t25/x/a/SKILL.md\n    outputs: ["/ws/t25/output/a.md"]\n    depends-on: []\n    quality-gate:\n      checker: /ws/t25/x/c/SKILL.md\n      on-failure: retry\n      max-retries: 1\n'
+  r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t25', workflowText: WF25A, params: { topic: 'T' }, sessionId: 'sess-t25' })
+  const iidA = r.body.instanceId
+  check('edit create: CREATED 实例就绪', r.code === 200 && !!iidA, JSON.stringify(r.body).slice(0, 120))
+  const yamlA = '/ws/t25/.workflow-agent/instances/' + iidA + '/instance.yaml'
+
+  // GET instance-yaml：结构 + 权限
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
+  check('edit GET: CREATED 权限 definition=true', r.code === 200 && r.body.stage === 'CREATED' && r.body.editable.definition === true && r.body.editable.runtime === true, JSON.stringify(r.body.editable))
+  check('edit GET: 任务 raw 字段（processor/gateChecker/retries/outputs）', r.body.tasks.length === 1 && r.body.tasks[0].processor === '/ws/t25/x/a/SKILL.md' && r.body.tasks[0].gateChecker === '/ws/t25/x/c/SKILL.md' && r.body.tasks[0].retries === 1 && r.body.tasks[0].outputs[0] === '/ws/t25/output/a.md', JSON.stringify(r.body.tasks[0]))
+  check('edit GET: 实例级 name/params/maxConcurrency', r.body.instance.name === 't25edit' && r.body.instance.params.topic === 'T' && r.body.instance.maxConcurrency === 2, JSON.stringify(r.body.instance))
+
+  // POST 保存：合法 patch → 200 + 落盘（header 保留 + 新值 + serialize 形态）
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { maxConcurrency: 3, tasks: { a: { processor: '/ws/t25/x/g/SKILL.md', retries: 2 } } } })
+  check('edit save: 200 saved + warnings 通道', r.code === 200 && r.body.saved === true && Array.isArray(r.body.warnings), JSON.stringify(r.body).slice(0, 160))
+  const savedText = files.get(yamlA)
+  check('edit save: 注释头保留', String(savedText).startsWith('# workflow 实例定义快照'), String(savedText).slice(0, 80))
+  const savedRaw = parseYaml(String(savedText).replace(/^#[^\n]*\n/gm, ''))
+  check('edit save: processor/retries/max-concurrency 落盘', savedRaw.tasks[0].processor === '/ws/t25/x/g/SKILL.md' && savedRaw.tasks[0]['quality-gate']['max-retries'] === 2 && savedRaw['max-concurrency'] === 3, JSON.stringify(savedRaw.tasks[0]))
+  // 保存后再 GET：draft 原值已更新
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
+  check('edit save: 再 GET 反映新值', r.body.tasks[0].processor === '/ws/t25/x/g/SKILL.md' && r.body.tasks[0].retries === 2 && r.body.instance.maxConcurrency === 3)
+
+  // validate-instance dryRun：合法 patch → 200；磁盘不变
+  const beforeDisk = files.get(yamlA)
+  r = await call('POST', '/wf/validate-instance', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { retries: 5 } } } })
+  check('edit dryRun: 200 ok 不落盘', r.code === 200 && r.body.dryRun === true && r.body.ok === true && files.get(yamlA) === beforeDisk, JSON.stringify(r.body).slice(0, 120))
+
+  // 校验闸门：patch processor 指向不存在技能 → 400 E-SKILL-MISSING + 磁盘未变
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { processor: '/ws/t25/x/ghost/SKILL.md' } } } })
+  check('edit save: 语义闸门 400 E-SKILL-MISSING + hint', r.code === 400 && r.body.errors.some(e => e.code === 'E-SKILL-MISSING') && !!r.body.hint, JSON.stringify(r.body).slice(0, 160))
+  check('edit save: 被拦后磁盘未变', files.get(yamlA) === beforeDisk)
+
+  // ── 手工构造 STOPPED / RUNNING 实例（绕开 create 内存缓存：目录从未 loadEntry）──
+  const mkManual = async (iid, stage, taskStatus) => {
+    const dir = '/ws/t25/.workflow-agent/instances/' + iid
+    files.set(dir + '/metadata.json', JSON.stringify({ instanceId: iid, workflowName: 't25m', sessionId: null, sessionCwd: '/ws/t25', sourcePath: '(inline workflowText)', params: {}, createdAt: '2026-09-05T00:00:00Z' }))
+    files.set(dir + '/instance.yaml', '# workflow 实例定义快照（参数化副本；源定义文件保持只读）\n# source: (inline workflowText)\n# instanceId: ' + iid + '\n# createdAt: 2026-09-05T00:00:00Z\n# params: {}\n\n' + WF25A.replace('t25edit', 't25m'))
+    files.set(dir + '/state.json', JSON.stringify({ workflow: 't25m', stage, tasks: [{ id: 'a', name: 'A', type: 'llm-task', status: taskStatus, dependsOn: [] }], maxConcurrency: 2 }))
+  }
+  await mkManual('t25m-stop-00000001', 'STOPPED', 'DONE')
+  await mkManual('t25m-run-00000002', 'RUNNING', 'RUNNING')
+
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=t25m-stop-00000001')
+  check('edit STOPPED: definition=false/runtime=true + 任务状态对齐(DONE)', r.code === 200 && r.body.stage === 'STOPPED' && r.body.editable.definition === false && r.body.editable.runtime === true && r.body.tasks[0].status === 'DONE', JSON.stringify(r.body.editable) + r.body.tasks[0].status)
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: 't25m-stop-00000001', patch: { tasks: { a: { processor: '/ws/t25/x/g/SKILL.md' } } } })
+  check('edit STOPPED: 改 processor 400 E-EDIT-DENIED + editErrors', r.code === 400 && Array.isArray(r.body.editErrors) && r.body.editErrors.some(e => e.code === 'E-EDIT-DENIED'), JSON.stringify(r.body).slice(0, 160))
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: 't25m-stop-00000001', patch: { tasks: { a: { retries: 3 } } } })
+  check('edit STOPPED: 改 retries 放行', r.code === 200 && r.body.saved === true, JSON.stringify(r.body).slice(0, 120))
+
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=t25m-run-00000002')
+  check('edit RUNNING: readonlyAll + editable 全 false', r.code === 200 && r.body.editable.readonlyAll === true && r.body.editable.definition === false && r.body.editable.runtime === false)
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: 't25m-run-00000002', patch: { maxConcurrency: 4 } })
+  check('edit RUNNING: 改 maxConcurrency 400', r.code === 400 && r.body.editErrors.some(e => e.code === 'E-EDIT-DENIED'), JSON.stringify(r.body).slice(0, 120))
+
+  // 参数缺失 400
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25')
+  check('edit GET: 缺 instanceId 400', r.code === 400)
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=no-such')
+  check('edit GET: 未知实例 404', r.code === 404)
+
+  process.env.DSH_HOME = savedDsh25
+}
   // 验证 expandConcurrentTasks 展开（无依赖 + 元数据）
   const concTask = {
     id: 'batch', name: '批量', type: 'concurrent', dependsOn: [], timeout: 600,
@@ -2401,6 +2606,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
     // ── 用例 23：预定义目录结构与实例化（Iter-27a）──
     await runCase23()
     await runCase24()
+    // ── 用例 25：实例编辑前台（Iter-28）──
+    await runCase25()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
