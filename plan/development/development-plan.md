@@ -33,7 +33,8 @@
 已完成: …（同上）… → Iter-26 ✅ → **Iter-26R ✅（2026-09-03 关闭：运行时 items 展开，host v0.16.0，387 单测，GUI 验收通过；报告 iter26r-report.md，设计 iter26r-design.md）**
 已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移）+后补丁 items-from/inputs 互斥（条目值经 _loopItem 随派发传入、新建 item-processor 技能、模板 7 处重复 inputs 清零），host v0.17.1，421 单测，用户 GUI 验收通过（四内建模板开箱即用+补丁复验），git 300923d→dd48ff0 已推送，报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
 已完成: …（同上）… → Iter-27a ✅ → **Iter-27b ✅（2026-09-04 关闭：语义校验——workflow-validate.js 校验引擎（8 错误码+2 警告：依赖环/缺 processor/缺 gate checker/技能或输入文件缺失/items 缺失或解析失败/preset 禁字面绝对+重复声明警告），create/begin 硬拦截（拒绝零副作用不建实例）、start/resume 实时闸门（重读 instance.yaml 防创建后退化）、reset 回传不拦、workflow_validate 只读工具（实例/定义两形态+preset 锚定）、/wf/create 同款关口、拒绝响应 hint=验收修正安全红线（被拦后 LLM 只许转告清单+停止，严禁自行搜索/替换技能或输入文件），host v0.18.0，485 单测，用户 GUI 验收通过（拦错/修复放行/删技能拦停含修正复验/零误报），git 585c5b1 已推送，报告 iter27b-report.md）**
- 当前:   **Iter-28 实例编辑前台**。后续=29 实例管理子页签+归档下载删除（独立可提前）/30 DAG 美化。
+已完成: …（同上）… → Iter-27b ✅ → **Iter-28 ✅（2026-09-04 关闭：实例编辑前台——DAG 下方可折叠双栏编辑器（任务列表+表单：技能下拉预定义/工作区合并同名顶替、inputs/outputs、重试/并发）+实例级 name/maxConcurrency/params 只读区、workflow-edit.js 共享模块（稳定序列化/权限矩阵/白名单补丁）+ /wf/skills·instance-yaml·validate-instance 路由（保存=Iter-27b 校验先于落盘+注释头保留）、创建对话框 params 键值行+成功呈现视图+warnings 面板（25 遗留清）、RUNNING 全禁用+外部 stage 即时刷新，host v0.19.0/client v0.7.0，529 单测，两轮 GUI 验收修正（inputs 添加态/workflow_status 挂 params/persona 内联双写踩坑→**persona 单源化 A 方案**：system-prompt.md 唯一源+sync-persona.js 构建期注入，rc2 内联限制记档 architecture-decisions §8），params 进 subagent 首条消息复验通过，git bc54fdf 已推送，报告 iter28-report.md）**
+ 当前:   **Iter-29 实例管理子页签+归档/下载/删除（块4，独立可提前）**。后续=Iter-30 DAG 美化。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -743,6 +744,8 @@ workflow_list → 列出所有实例 + 状态
 5. 创建弹窗展示 create warnings（承接 Iter-25 遗留）；模板下拉源=预定义目录（与 24 联动收尾）。
 
 **验收要点**：新建实例→补全缺 processor 的任务→保存校验通过→启动跑通（R11 主链路）；编辑不污染预定义目录文件（R5）。
+
+**关闭（2026-09-04）**：host v0.19.0 / client v0.7.0，529 单测全绿（用例 25 新增 44 项）。`workflow-edit.js`（第 11 同步 section：稳定序列化/权限矩阵/applyInstancePatch 白名单）+ /wf/skills·instance-yaml·validate-instance·instance-yaml 路由（保存=校验先于落盘，注释头保留）+ EditorPanel 双栏编辑器与创建对话框 params 键值行/warnings 面板（Iter-25 遗留清）。两轮验收修正：inputs「+添加」entries 中间态、RUNNING 编辑按钮灰禁+编辑器外部 stage 即时刷新、**params 传递**（workflow_status 快照挂 meta.params + persona 派发模板加 `params = <JSON>` 行——首修踩坑：persona 实际生效 agent.cordis.yml 内联 text，只改 md 无效）→ **persona 单源化 A 方案**（system-prompt.md 唯一源+sync-persona.js 注入，md 修 v1 串行残留→v2 并发；rc2 dsh-persona 内联限制记档 architecture-decisions.md §8 含 DSH 升级检查项）。GUI 验收通过（含 params 进 subagent 首条消息复验）。**总结**：`iter28-report.md`。遗留→Iter-29（实例管理子页签+归档/下载/删除，独立可提前）。
 
 ---
 

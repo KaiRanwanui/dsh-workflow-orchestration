@@ -234,6 +234,37 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 2. 会话删除检测（主动 stop+解绑；无事件则惰性孤儿清理）。
 3. 会话存活判定（`sessions.list`）。
 
+## 8. Persona 提示词：rc2 内联限制与构建期单源生成（Iter-28）
+
+### 决策
+`system-prompt.md` 为编排 persona 的**单一源**；`agent.cordis.yml` 的 persona 行
+`text` literal block 为**生成物**（构建期由 `code/scripts/sync-persona.js` 注入，
+勿手编）；`sync-persona.js --check` 供部署链/CI 校验一致性。
+
+### 系统限制（rc2 无法解耦）
+`@deepseek-ai/dsh-persona@0.1.1-rc.2` 的 Config 仅两个字段：`text: string`（persona
+全文唯一载体）与 `complete`/`includeRuntimeContext` 开关——**不支持 file/path 引用**。
+这是 DSH 的刻意设计（"Composition-authored"：composition 即配置源），因此 persona
+文本必须内联在 agent.cordis.yml 里，与可读的 md 源文档形成双写。Iter-28 验收曾因
+只改 md 未同步内联 text 导致 params 派发指示未生效（GUI 实证），即此耦合的直接代价。
+
+### 缓解（构建期单源生成）
+- `code/agent-presets/workflow-orchestrator/system-prompt.md`：唯一手编源。
+- `code/scripts/sync-persona.js`：读 md → 校验无 `{{` 模板插值符 → 以 literal
+  block（`text: |`）注入 yml 的 persona row；幂等；`--check` 模式只比对（不一致
+  exit 1）。兼容首次从旧 `text: >-` 折叠形态的 bootstrap 转换。
+- 部署链在此环节变为：改 md → `sync-persona.js` → `cp agent.cordis.yml
+  system-prompt.md → ~/.dsh/.agent-presets/workflow-orchestrator/` → 重启 dsh.service。
+- 语义一致性由 roundtrip 断言保障：js-yaml 解析 yml 的 `config.text` 与 md 逐字节
+  相等（含尾换行归一）。
+
+### 后续 DSH 版本升级检查项
+1. `dsh-persona` 是否新增 `file`/`path` 类 Config 字段（读 `lib/types/index.d.ts`）。
+2. 若支持文件引用：persona 行改为 file 引用，删除 `sync-persona.js` 与生成块，
+   本节限制解除。
+3. 若 prompt registry 开放 preset 自挂载（agent preset 能直接注册 prompt section），
+   同样可解除。
+
 ## 总结
 
 ### 架构层次

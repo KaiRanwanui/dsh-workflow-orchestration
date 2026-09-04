@@ -107,6 +107,24 @@
 
 ---
 
+### 23. Iter-28: 实例编辑前台 + persona 单源化（2026-09-04，✅ 完成关闭）
+
+**迭代报告**：`plan/development/iter28-report.md`（rc2 persona 内联限制与单源化决策=`plan/architecture/architecture-decisions.md` §8）
+
+**交付**（host v0.19.0 / client v0.7.0）：
+- `workflow-edit.js`（第 11 个同步 section）：`serializeWorkflowYaml` 稳定键序序列化（引用不保真已接受）、`instanceEditPermissions` 权限矩阵（CREATED=定义可编辑/RUNNING=readonlyAll）、`applyInstancePatch` 白名单补丁（E-EDIT-* 拒绝码；gateChecker='' 删 checker 保 shell；concurrency=null 删）、`simplifyParams`/`parseSkillFrontmatter`
+- 路由：`GET /wf/skills`（预定义+工作区合并，同名工作区顶替+predefinedShadowed 标注）、`GET /wf/instance-yaml`（stage 权限+任务 raw 字段+组状态聚合）、`POST /wf/validate-instance`（dryRun）与 `/wf/instance-yaml`（保存）——`editInstancePipeline` 统一：patch→注释头保留→稳定序列化→**Iter-27b validateWorkflow 实例语境**→错误 400 `{errors, workflowBeginErrors, hint}` 零写入
+- Client：创建对话框 params **键值行**+成功呈现视图（✓/conflict/警告黄列表，Iter-25 遗留 warnings 面板清账）；EditorPanel 双栏编辑器（DAG 下方可折叠默认收起；技能下拉版本+来源后缀；inputs Kv 多值逗号；页脚仅校验+保存）
+- 权限拍板落地：name/params 只读；maxConcurrency 实例级、concurrency/retries 任务级可改（非 RUNNING）；processor/gateChecker/inputs/outputs 仅创建时
+- **验收修正 5 项**（两轮 GUI 实测）：①inputs「+添加」draft 改 entries 中间态（空 key 行=合法编辑态，对象转换推迟 buildPatch）②RUNNING「✎ 编辑」灰禁 ③EditorPanel 接外部 stage 不一致即重拉（展开期间启动即时转禁用）④**params 传递**：workflow_status 快照挂 meta.params（engine state 从不存用户实参）+persona 派发模板加 `params = <JSON 原样>` 行 ⑤首修踩坑：**persona 实际生效的是 agent.cordis.yml 内联 text（dsh-persona row config.text），只改 system-prompt.md 无效**
+- **persona 单源化（A 方案，用户拍板）**：rc2 `dsh-persona` Config 仅内联 text 无 file 引用=系统限制（DSH 升级检查项记档 architecture-decisions §8）；`system-prompt.md` 唯一源（先修 3 处 v1 串行残留→v2 并发+节号重排）+ `sync-persona.js` 构建期注入（幂等/`--check`/`{{` 插值拦截，roundtrip 逐字节断言）；**部署链变化：改 persona=改 md→sync-persona→cp 两份→重启**
+
+**验证**：单测 485→529 全绿（用例 25 新增 44 项：序列化往返/权限矩阵/patch 白名单/技能合并/保存链注释头保留/dryRun 零写入/门控 400/手动 STOPPED+RUNNING 实例）；GUI 验收（用户）=编辑器全功能/params 键值行+warnings/RUNNING 全禁用/params 进 subagent 首条消息（单源化后复验）全通过。
+
+**提交**：`bc54fdf`（主体+验收修正+单源化）+ 本收尾提交（文档），已推 origin/master。
+
+---
+
 ### 21. Iter-27a: 预定义目录结构与实例化 + items-from/inputs 互斥后补丁（2026-09-03，✅ 完成关闭）
 
 **迭代报告**：`plan/development/iter27a-report.md`（设计=`iter27-design.md` 拆分版，四轮拍板落档；自 Iter-27 拆分，27b 语义校验待启动）
