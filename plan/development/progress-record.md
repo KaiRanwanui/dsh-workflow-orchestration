@@ -1,574 +1,73 @@
 # 工作进展记录
 
-| 日期 | 阶段 | 状态 |
-|------|------|------|
-| 今日 | 项目启动 + 需求对齐 + Schema 定稿 | ✅ 完成 |
-| 今日 | **Iter-1 Host 插件 — 引擎基础** | ✅ 完成 |
-| 今日 | **v1.1 Schema 增强 — 命名式 inputs** | ✅ 完成 |
-| 今日 | **Iter-2 Agent Preset — 串行编排** | ✅ 完成 |
-| 今日 | **Iter-3 Client 监控面板** | ✅ 完成 |
-| 今日 | **Flicker 修复 — 模块级状态** | ✅ 完成 (`wff-9/pkg-14`) |
+> **职责**：已完成各迭代的**一句话总结**与报告索引。详情一律读对应迭代报告；
+> 迭代队列/验收标准见 `development-plan.md`；架构决策见
+> `../architecture/architecture-decisions.md`。
+
+## 当前状态（截至 2026-09-04）
+
+- 最新关闭：**Iter-28 实例编辑前台 + persona 单源化**（host v0.19.0 / client v0.7.0，529 单测，git `534992d`）
+- 下一迭代：**Iter-29** 实例管理子页签+归档/下载/删除（独立可提前）；Iter-30 DAG 美化排队
+- 基线：DSH `0.1.1-rc.2`（WSL2，web 3080 + headless profile；版本迁移见文末备注）
 
 ---
 
-| 今日 | **Iter-4 循环 + 循环展开** | ✅ 完成 |
+## 一、基础引擎与编排可视化（Iter-1~8，2026-08-26 ~ 08-27）
+
+- **前置**：项目启动+需求对齐+Schema 定稿；v1.1 Schema 增强（命名式 inputs）。
+- **Iter-1 Host 插件—引擎基础**（08-26）：Cordis npm 形态 Host 插件，YAML 解析+引擎核心。报告 `iter1-report.md`。
+- **Iter-2 Agent Preset—串行编排**（08-26）：workflow-orchestrator preset（persona+workflow_begin/status 工具+subagent 委托）。报告 `iter2-report.md`。
+- **Iter-3 Client 监控面板**（08-26）：动态插件 DAG SVG 轮询面板（`wff-9/pkg-14`）。报告 `iter3-report.md`。
+- **Flicker 修复**（08-26，Iter-3 补丁）：组件 state 提升模块级变量，根治 remount 闪烁——此后成为 client.js 固定纪律。见 `iter3-report.md` §4.4。
+- **Iter-4 循环+循环展开**（08-26）：`expandLoopTasks` begin 期展开 N 迭代（唯一 ID/串行依赖链/独立 gate）+ 循环组 DAG 可视化；41 单测。无独立报告（交付并入 development-plan 记录）。
+- **架构调整**：Host 插件迁移 desktop（Windows Electron）profile；Client RPC 链路方案定稿=HTTP 轮询（决策 `../architecture/architecture-decisions.md` §5）。
+- **Iter-5 Host/Client 架构调整**（08-27）：webServer 路由 `/wf/*` + Client fetch 轮询替代 RPC。报告 `iter5-report.md`。
+- **WSL2 迁移**（08-27）：web(3080)+headless profile、link: 依赖接入；修硬编码路径+lossless JSON。见 `iter6-report.md` 前记录。
+- **Iter-6 循环错误处理**（08-27）：`_onError` break/continue+hydrate 循环元数据；50 单测。报告 `iter6-report.md`。
+- **Iter-7 并发引擎**（08-27）：`getRunnableTasks`+工作流级 max-concurrency+DAG 并发组；59 单测。报告 `iter7-report.md`。
+- **Iter-8 concurrent 节点**（08-27）：组级并发最严格语义+concurrent 展开（迭代无依赖）+DAG ⚡ 节点；65 单测。报告 `iter8-report.md`。
+
+## 二、多实例与生命周期（Iter-9~20，2026-08-28 ~ 08-31）
+
+- **Iter-9 多实例技术验证**（08-28~29）：12 项 DSH Session 探针全过（动态插件用后 undefine），确认实例=会话 cwd 下 `.workflow-agent/instances/` 布局可行。报告 `iter9-report.md`（探针数据 `iter9-probe-results.json`）。
+- **Iter-10 实例目录与存储**（08-29）：instance-store 注册表+实例目录布局+惰性恢复；79 单测，host v0.4.0。报告 `iter10-report.md`。
+- **Iter-11 实例操控工具**（08-29）：workflow_list/create/start/stop/reset；93 单测，host v0.5.0。报告 `iter11-report.md`。
+- **Iter-12 前台实例界面**（08-29）：DAG 跟随 session cwd+实例切换+/wf/list，client v0.2.0。报告 `iter12-report.md`。
+- **Iter-13 面板创建+模板库 v1**（08-29~30）：POST /wf/create+内置模板+表单 overlay；修 ESM→CommonJS 等部署问题；104 单测，host v0.6.0/client v0.3.0。报告 `iter13-report.md`。
+- **Iter-14 消息注入穿刺**（08-30）：subagents.followup 验证（约束=目标须为 parent 子会话）。报告 `iter14-report.md`。
+- **Iter-15 面板控制 start/stop/reset**（08-30）：控制路由+工具条按钮+sessions.prompt 注入（rpcId+payload 格式确认）；host v0.7.0/client v0.4.0。报告 `iter15-report.md`。
+- **Iter-16 运行状态机**（08-30）：STOPPED 语义+start/stop/resume/reset 引擎动作+非法转移抛错；113 单测，host v0.8.0。报告 `iter16-report.md`。
+- **Iter-17 绑定模型+完整性**（08-30）：工作区骨架物化+create-bind/adopt 1:1 守卫+UNBOUND/BOUND/DONE/BROKEN 派生；125 单测，host v0.9.0。报告 `iter17-report.md`。
+- **Iter-18 流程控制+孤儿回收**（08-30）：workflow_adopt/resume+reset 归档备份+孤儿惰性扫描回收；137 单测，host v0.10.0。报告 `iter18-report.md`。
+- **Iter-19 WebUI↔workflow 联动**（08-30）：create 即绑定+begin 即 RUNNING+Session 启停同步；手测暴露阻塞后追加 createBind CONFLICT 自愈；host v0.11.x/client v0.5.x。报告 `iter19-report.md`（验证 `iter19-verification-report*.md`）。
+- **Iter-20 前后台状态一致**（08-30~31）：R1~R4 修复+forSession 根因修复+预设门控（非编排会话不显示面板）+内置模板可执行化+v4 手测；host v0.11.5/client v0.5.4。验证 `iter20-verification-report-v4.md`（无独立主报告，问题清单归 Iter-21）。
+
+## 三、面板控制定稿与子会话治理（Iter-21 ~ Iter-23，2026-08-30 ~ 09-01）
+
+- **Iter-21 面板控制定稿**（08-30）：v4 手测问题闭环（R1~R5）+Client 稳定组件热修（v0.5.6）+**injectSessionCmd 统一注入**（stop=steer 打断/start/resume=queue）+控制中间态 wfPendingCmd+死锁修复（stop 重置 RUNNING→PENDING）；host v0.11.12/client v0.5.10，160 单测。报告 `iter21-report.md`（验证 `iter21-verification-report*.md`）。
+- **Iter-22 修复轮**（08-31）：S1 idle→stop 守卫+删自动恢复、S3 孤儿自动进采用池、S4 reset 注入"已重置"+**verify-client-bundle 求值级验证纪律**（部署事故产物）、B1 误停根因=回合结束即 idle（止血进 persona，聚合守卫设计转出）；179 单测。报告 `iter22-report.md`（验证 `iter22-verification-report.md`）。
+- **Iter-SUBA 主/子会话控制**（08-31~09-01）：源码侦察+四场景实验摸清 subagents.{list,interrupt,prompt} 全链；实现 P1 聚合守卫/P2 stopReason 定向恢复/P3 Stop 级联停止/P4 迟到回报治理——**闭环不变式"子在跑⇔wf RUNNING→Start 被拒→永不双跑"**；193 单测，host v0.11.17，手测 T1-T7 关闭。报告 `iter-suba-report.md`（验证 `iter-suba-verification-report.md`）。
+- **Iter-23 用户停止权威化（方向 A）**（09-01）：前置探针证实 Case R 可根治/Case I 原理性不可检测（`iter23-probe-report.md`）；session/event tap+log 尾扫双路判定 user-stop→权威停止+级联 interrupt+stopHint 面板提示；220→221 单测，host v0.12.0/client v0.6.0。报告 `iter23-report.md`（验证 `iter23-verification-report.md`）。
+
+## 四、需求定稿与预定义资产（2026-09-02 ~ 09-03）
+
+- **需求澄清+迭代重排**（09-02）：流程定义技术讨论（发现工具返回从未携带 inputs/outputs 的契约漂移）→用户 25 条需求逐条澄清定稿（`../requirements/工作流数据管理需求.md`）→迭代队列重排 **Iter-24~30**（`iteration-replan-draft.md` 批准版）。
+- **Iter-24 预定义目录与安装布局**（09-01~02）：目录=`~/.dsh/workflow-agent/`+启动物化（模板 2+技能 5）+两级解析链 workspace 优先+模板下拉切源；250 单测，host v0.13.0/client v0.6.1；**新纪律=重启 dsh 由用户执行**。报告 `iter24-report.md`（设计 `iter24-design.md`、探针 `iter24-probe-fs.md`）。
+- **Iter-25 数据流显性化**（09-02）：begin/start/status 返回 inputs/outputs 绝对路径+skillDir 并落盘、目录变量两阶段注入、门禁拿 inputs、processor 可选；286 单测，host v0.14.0。报告 `iter25-report.md`。
+- **Iter-26 items 结构化提取**（09-02）：items-from 四格式提取（markdown 表格/列表/JSON/YAML）。报告 `iter26-report.md`。
+- **Iter-26R 运行时 items 展开**（09-03）：items 文件缺省时占位节点+上游完成后引擎自动展开（面板虚线琥珀组框）；387 单测，host v0.16.0。报告 `iter26r-report.md`。
+- **Iter-27a 预定义目录结构与实例化**（09-03）：templates 子目录自包含+create/begin 1:1 复制（presetCopy）+静态 items 解析链实例目录→defDir→两级链+共享模块 workflow-paths.js；后补丁 items-from/inputs 互斥（条目值经 `_loopItem` 随派发传入）；421 单测，host v0.17.1。报告 `iter27a-report.md`（设计 `iter27-design.md` 拆分版）。
+
+## 五、语义校验与编辑前台（Iter-27b ~ Iter-28，2026-09-04）
+
+- **Iter-27b 语义校验**（09-04）：workflow-validate.js 校验引擎（8 错误码+2 警告）+create/begin 硬拦截（零副作用）+start/resume 实时闸门+reset 回传+workflow_validate 只读工具+/wf/create 同款关口；**验收修正安全红线**=被拦后 LLM 只许转告清单+停止（hint 权威提示）；485 单测，host v0.18.0。报告 `iter27b-report.md`。
+- **Iter-28 实例编辑前台**（09-04）：workflow-edit.js（稳定序列化/权限矩阵/白名单补丁）+/wf/skills·instance-yaml·validate-instance 路由（保存=校验先于落盘+注释头保留）+EditorPanel 双栏编辑器（DAG 下方可折叠；RUNNING 全禁用+外部 stage 即时刷新）+创建对话框 params 键值行/warnings 面板（Iter-25 遗留清账）；**验收修正**含 params 进 subagent 派发 prompt（workflow_status 快照挂 meta.params+persona 加行）；**persona 单源化 A 方案**（rc2 dsh-persona 仅内联 text=系统限制记档 `../architecture/architecture-decisions.md` §8；system-prompt.md 唯一源+sync-persona.js 注入）；529 单测，host v0.19.0/client v0.7.0。报告 `iter28-report.md`。
 
 ---
 
-| 今日 | **架构调整 — Host 插件迁移至 desktop profile** | ✅ 完成 |
+## 迭代报告索引
 
----
-
-| 今日 | **Client RPC 链路方案定稿 — HTTP 轮询** | ✅ 完成（决策 + 参考文档） |
-
----
-
-| 今日 | **Iter-5 Host/Client 架构调整 — Client RPC 链路修复** | ✅ 完成（webServer 路由 + fetch 轮询，DAG 验证通过） |
-
----
-
-| 今日 | **WSL2 迁移 — 插件打包/安装/端到端验证** | ✅ 完成（web profile + link 依赖，修复迁移残留 + _loopIndex bug） |
-
----
-
-| 今日 | **Iter-6 循环错误处理 + 日志清理** | ✅ 完成（onError=break/continue，50 单测通过） |
-
----
-
-| 今日 | **Iter-7 并发执行引擎 + DAG 并发组可视化** | ✅ 完成（getRunnableTasks + max-concurrency，59 单测通过） |
-
-| 今日 | **Iter-8 并发语义完善 + concurrent 节点 + DAG 增强** | ✅ 完成（组级/工作流级 max 最严格，65 单测通过） |
-
-| 今日 | **Iter-9 多实例技术验证（DSH Session 探针）** | ✅ 完成（12 项探针全过，方案可行性确认，动态插件已清理） |
-
-| 今日 | **Iter-10 实例目录与存储** | ✅ 完成（实例注册表 + 会话绑定 + 路由实例布局，79 单测通过，v0.4.0 已部署） |
-
-| 今日 | **Iter-11 实例操控工具** | ✅ 完成（workflow_list/create/start/stop/reset + expandDefinition 共用重构，93 单测通过，v0.5.0 待重启部署） |
-
-| 今日 | **Iter-12 前台实例界面** | ✅ 完成（DAG 跟随 session cwd + 实例切换条 + /wf/list，client v0.2.0；已部署验证） |
-
-| 今日 | **Iter-13 面板创建按钮 + 模板库 v1** | ✅ 完成（POST /wf/create + 内置模板×2 + 表单 UI，104 单测通过，host v0.6.0 / client v0.3.0；已部署验证） |
-
-| 今日 | **实例创建语义定稿 v2 + 迭代重排** | ✅ 文档落档（7 步产品流程映射、模板/实例严格区分、面板控制走注入通道；迭代按执行顺序重排：13 创建按钮+模板库v1 → 14 注入穿刺 → 15 面板控制 → 16 编辑器拆分推进；见 plan/design/instance-creation-semantics.md） |
-
-| 今日 | **Iter-14 消息注入技术穿刺** | ✅ 完成（subagents.followup API 验证通过，CONDITIONAL GO；发现权限约束：目标 session 必须是 parent 的子 session） |
-
-| 今日 | **Iter-15 面板控制 start/stop/reset** | ✅ 完成（Host 路由 /wf/start + /wf/stop + /wf/reset；Client 工具条按钮；**消息注入功能实现**：apiProxy.sessions.prompt 调用格式 rpcId+payload；host v0.7.0 / client v0.4.0） |
-
-| 今日 | **Iter-16 运行状态机（Host）** | ✅ 完成（STAGE 补 STOPPED；engine 补 start/stop/resume/reset + setStage(STOPPED) 置 active=false；113 单测通过；host v0.8.0；已重启部署验证 UI 可见部分） |
-
-| 今日 | **Iter-17 绑定模型 + 完整性（Host）** | ✅ 完成（工作区骨架物化 instances/+archive/；create-bind/adopt + 1:1 守卫；派生 UNBOUND/BOUND/DONE/BROKEN；整树完整性判定；125 单测通过；host v0.9.0；已重启部署验证：骨架物化 + sessionId=null + 无回归） |
-
-| 今日 | **Iter-18 流程控制工具 + 路由 + 孤儿回收（Host）** | ✅ 代码完成（workflow_adopt/resume 新增；start/stop/reset 接线 Iter-16 状态机；reset 写 _reset_<state> 归档备份；孤儿惰性扫描识别+回收；BROKEN 拦截；system-prompt adopt→start 同步；137 单测通过；host v0.10.0 待重启部署） |
-
-| 今日 | **Iter-19 WebUI↔workflow 配合调优（前后台联动）** | ✅ 代码完成（create 即绑定 /wf/create 绑 sessionId；执行期=RUNNING workflow_begin 补 start；编排 workflow_start 驱动已绑定实例；Client Start/Stop gating；**Session 启停同步** agent idle→stop、running→resume；143 单测通过；host v0.11.0 + client v0.5.0 待部署。手测发现阻塞后追加修复：/wf/create 与 create/begin 工具改走 createBind(1:1 守卫)+CONFLICT 自愈解绑，Client 创建按钮仅会话 UNBOUND 显示+仅未绑定实例可选+解绑弹窗告知；148 单测；host 0.11.1 + client 0.5.1） |
-
-| 今日 | **Iter-20 前后台状态一致（Iter-19 收尾）** | ✅ 完成（R1 /wf/list 补 sessionState+Client gating、R2 面板 Start 不置 RUNNING、R4 Session 启停同步进 listInstances、R3 移除常驻切换条+空态/创建/采用弹窗；**forSession 根因修复**；157 单测通过；host v0.11.3 + client v0.5.3） |
-| 今日 | **Iter-20 未决项：预设门控 + BROKEN 展示（= Iter-21 S5）** | ✅ 完成（仅 workflow-orchestrator 会话显示面板：非编排会话占位提示+短路轮询；/wf/list sessionState 改用完整 deriveSessionState（含 BROKEN/DONE）；BROKEN 显示"环境异常需新建会话"告警卡、DONE 显示"已归档"提示，均隐藏操作按钮；host v0.11.4 + client v0.5.4；157 单测仍通过） |
-| 今日 | **内置默认模板改为可执行（免改免参）** | ✅ 完成（BUILTIN_TEMPLATES 由 /TODO 占位改为引用工作区已有 skills：default-demo（3 任务并发+汇总+门禁，默认选中）、serial-demo（2 任务串行）；更新 test-host 模板断言；同步更新测试工作区 templates/*.yaml；host v0.11.5；157 单测仍通过；awaiting 部署验证） |
-| 今日 | **Iter-20 v4 手工验证（host v0.11.5 / client v0.5.4）** | 🔄 已填（14 项通过 / 2 项 N/A（C1 归档界面、D5 无法构造前提）/ 5 项问题：A4 CREATED DAG 无任务节点、A6 子会话显示面板、其他#1 会话切换状态残留 + /wf/status 返 null、其他#2 采用池空/无反应、B2 删 metadata 二次不出现 BROKEN（难复现））。其余 S1~S4 中 D3(Resume) 提前并入后续迭代；详见 `plan/development/iter20-verification-report-v4.md` |
-| 今日 | **Iter-21 前后台状态一致·v4 手测问题闭环 + Resume 提前** | ✅ 代码完成（R1~R5；host v0.11.6 + client v0.5.5；157 单测；awaiting 部署验证） |
-| 今日 | **Iter-21 Client 热修（v0.5.6）** | ✅ 完成（**WfComponent 稳定组件**——session 更新/消息流频繁触发 factory 重渲染导致 WorkflowView remount 闪烁+局部状态丢失+按钮无反应，用模块级缓存一次组件类型根治；**R3 会话切换不再重置 wfInstances（工作区级列表，避免采用池空）与 latest（避免 DAG 闪白）**，仅重置 wfSessionState+重拉列表；**publish 去重**修复（fingerprint 取嵌套 state，避免状态未变时每 2s 无谓重渲染）；client v0.5.6；157 单测仍通过；awaiting 部署验证——覆盖验证单 F1/F2(Stop/Resume 无反应)、D1/D2(采用无反应)、B2(DAG 闪烁)） |
-| 今日 | **Iter-21 Client/Host 热修（stop/resume 经 session 注入指令；v0.11.7 + v0.5.7）** | ✅ 完成（**新增 injectSessionCmd 统一消息注入**：/wf/stop /wf/resume 在改实例态后**向 session 注入"请停止/请继续工作流实例 X"指令**（与 /wf/start 一致），使 agent 感知并停驱/续驱——此前只改实例态而 session 不感知→按钮"无效"；client Stop/Resume payload 补 sessionId/parentSessionId；system-prompt 增"面板控制指令"说明；采用按钮打开即刷新列表（缓解"点击无反应/创建后才弹出"，孤儿进池=S3 归 Iter-22）；host v0.11.7 + client v0.5.7；157 单测通过；awaiting 部署验证） |
-| 今日 | **Iter-21 收尾（面板控制定稿，host v0.11.12 / client v0.5.10）** | ✅ 功能收敛（用户复测确认 Stop/Resume/采用/DAG 闪烁/死锁均正常；Resume 会重新建立 subagent 执行，符合预期）。**面板控制定稿**：Start/Resume/Stop 经 session 注入消息（stop 用 mode:'steer' 打断、start/resume 用 'queue'；agent 单一写入，不直接改实例态）；**控制中间态** wfPendingCmd（Starting/Stopping/Resuming，按钮禁用直到 agent 切到目标 stage 或 30s 超时）；**死锁修复** engine.stop() 把未完成 RUNNING 任务重置 PENDING；**子会话重复缓解** system-prompt 指引 agent 在 resume 前查产物（已存在则标记 DONE 不再新建 subagent）。160/160 单测；git 至 3a3df0c。**已知约束**：Resume 无法唤醒已停 DSH session；孤儿进采用池=S3；均归 Iter-22。 |
-| 今日 | **Iter-21 Stop 子会话级联限制 + 新线索（host v0.11.14，git 88d6ba0）** | 🔄 实测：点 Stop 主会话状态符合预期、但正在运行的 subagent 返回后主会话又被触发续跑 → **根因 getRunnableTasks 非 active 仍派发**，已修复（`if(!state.active)return []`，STOPPED 不派发，161/161）。**子会话自身无法立即停止**：one-shot 不可取消（session.cancel 父会话被拒、subagent.interrupt 仅 continuable）、主会话 await 无法被 steer 打断——DSH 层限制。**关键新线索**：**在 subagent 子对话输入"停止/继续"可控制它**（说明任务 subagent 实为 **continuable、可被 prompt/中断**，推翻此前"one-shot 不可控"推断）。**已退出探索规划**：`plan/design/dsh-session-subagent-control-research.md`（现象/已探索结论/探索迭代 Iter-SUBA 规划，排序在 Iter-22 之后）；development-plan 已记录。default-demo 已改延长版（deep-analysis ≥2500字长任务）。 |
-| 今日 | **Iter-22 探针先行 + S1/S3/S4/reset 修复开发（host v0.11.16 / client v0.5.12）** | ✅ 完成（**S1 探针**：ask 等待期间 status=running、hasPending=排队输入信号、中断子会话从注册表移除；**S1** idle→stop 加 `!isAgentPending(sid)` 守卫 + 删除 running→resume 自动恢复（显式"继续"才 resume）；**S3** /wf/list 轮询自动 recoverOrphan 进采用池 + poolNote 标注 + recoveredOrphans 上报；**S4** reset 注入"已重置"消息 + system-prompt 全新运行语义 + 面板注入/人工输入统一控制短语表；**reset 修复** resetWithDefinition 从 instance.yaml 重解析定义，hydrate-only 实例可 reset）。179/179 单测。 |
-| 今日 | **Iter-22 部署事故修复 + 求值级验证纪律** | ✅ 完成（S4 改 client.js 括号少补一个 → bundle 解析失败 → 前台全部插件 "loaded without registering"；src 中间态 node --check 假阴性、产物未验证。修复：补括号 + 新增 `code/scripts/verify-client-bundle.js` 求值级验证（执行 bundle→断言注册→factory 导出），改 client.js 必跑；恢复被排障移除的 profile bundles 条目（dependencies link: + dsh.profile.bundles 两项）。服务端 bundle 与本地 lib md5 一致、/wf/list 新字段实测生效。） |
-| 今日 | **Iter-22 手测闭环 + B 组问题设计转出 Iter-SUBA** | ✅ 完成（手测 33/35 通过。**B1 四条现象同源根因**：误停真源是"agent 回合结束=idle=停 wf"（文本提问/后台 subagent 等待/ASK 跳过均以结束回合收尾），非排队 race。**用户拍板**：idle→stop 语义保留；本迭代只落 system-prompt 止血（提问必用 ask 工具 + 唤醒后推进前查 stage、STOPPED 禁止推进）；**会话树聚合守卫**（`!hasRunningChildren(sid)`）+ **stopReason 定向恢复**（user-stop 不自动恢复 / session-idle 主活跃即自动 resume）设计定稿并写入 development-plan §Iter-SUBA，待探针确认 agents registry child 枚举方式后实现。**D4 修复**：recoverOrphan 以磁盘 state.json 为准 stop+落盘 + listInstances 池内 RUNNING 残留自愈（曾在池中被误标"未启动"）；**D1 修复**：采用池 ID 显示 slice(-8)。详见 iter22-report.md 与 iter22-verification-report.md。） |
-| 今日 | **Iter-22 关闭 + 追加问题登记：同任务双 subAgent 并发冲突** | ✅ 关闭确认（代码已提交推送 git 85b76d6=origin/main；进度已存 progress-record/iter22-report/验证报告 §I；B1/B4 已转 Iter-SUBA、D1/D4 已修复；prompt 止血用户复测"疑问减少"）。**用户新提问题**：Start 派发 subAgent 后 Stop，再 Start/Resume 会新建 subAgent 执行同一任务，旧 subAgent 无法取消仍在跑 → 双 subAgent 读写同一文件冲突/覆盖。**已规划进 Iter-SUBA**（三线并行：①级联停止根治[依赖 interrupt/prompt 探针] ②迟到回报丢弃[依赖 dispatch↔任务映射探针] ③产物 epoch 隔离兜底[output/&lt;task&gt;/&lt;dispatchN&gt;/ 独立子目录，不依赖 DSH 接口，可独立先行交付]）；development-plan §Iter-SUBA 已更新（探索步骤 6、追加问题设计块、验证标准/交付扩充）。 |
-| 今日 | **Iter-SUBA 技术验证完成：主/子会话关系摸清 + 主从状态控制方案定稿** | ✅ 探索收官（源码侦察 deepseek-harness-master 对照部署版 rc.2 .d.ts + 本会话真实派发 subagent 四场景实验。**关键结论**：①apiProxy.subagents.{list,interrupt,prompt,history} rc.2 全量可用，list.activity=官方 agents.get(id).status 重算（聚合守卫现成实现）；②interrupt 毫秒级级联停止（stopReason='aborted'，子 agent 移出 registry，父收空 closing 通知）；③followup 唤醒冷子会话可行（直调必须显式 AbortSignal——工具内 exec.signal 可用）；④任务 subAgent 已配 continuable 全链可控；⑤subagent/start|end 事件 Host 全局可达（响应式同步素材）。**方案定稿**：P1 聚合守卫 / P2 stopReason 定向恢复 / P3 Stop 级联停止 / P4 迟到回报治理 / P5 事件驱动同步——workflow-host 插件内闭环、Host 侧权威、不依赖 DSH 改动。报告 iter-suba-report.md；探针代码存档 code/probes/suba-master-slave-probe.js（动态插件用后 undefine）。**阶段 2 实现（P1-P4 四件套）待用户确认设计后开工**。 |
-| 今日 | **Iter-SUBA 阶段 2 编码完成（P1-P4 四件套，host 0.11.17）** | ✅ 代码+单测+部署就绪（用户确认范围后开工。instance-store：deps 注入 listRunningChildren/interruptChild，syncInstanceState 聚合守卫+stopReason 定向恢复；tools-preset：workflow_stop 级联 interrupt+user-stop 标记+stoppedChildren 回传，resume/reset 清标记；mjs：生产探针实现+路由 reset 清标记+sync-modules 同步；system-prompt：P4 级联停止通知识别。**闭环不变式=子在跑⇔wf RUNNING→Start 被拒→永不双跑**。单测 193 全绿（case16 新增 9 项；case14/15 断言按 P2 语义更新）。preset 三件已部署 ~/.dsh（danger-full-access），host lib 经 link: 生效，**待用户手动重启 dsh.service**；手测清单 iter-suba-verification-report.md（T1-T7）。 |
-| 今日 | **Iter-SUBA 关闭 ✅（T1-T7 全过；"复活"现象立案方向 A）** | ✅ 收官（①T2 补测通过：用户构造 session-idle（启动后不派发即结束回合），"看下进展"触发引擎日志 00:05:04 无调用瞬态 RUNNING→回落 STOPPED，P2 实证；②手测判读全程以 sessions.sqlite 会话记录交叉取证（t_session_events 全 tool/call 可还原按钮动作），曾凭引擎日志误立案"P1 失效"已撤销——方法论教训入报告；③"手工停 DSH 会话后主会话复活"：用户确认真实出现，机制源码定位（cancel 无痕+结算通知唤醒 cancelled agent+P1 保持 wf RUNNING 全程未停），无需复现，**立案方向 A（sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话），建议并入 Iter-23，待用户拍板**）。报告结论已填、development-plan 状态行更新。**下一步：Iter-23 生命周期闭环+归档（含方向 A 决策）**。 |
-| 今日 | **方向 A 拍板并入 Iter-23；计划/进展刷新，今日收工** | ✅ 用户拍板：方向 A（手工停 DSH 会话=权威停止：sync 读 sessions 层停止态→判 user-stop→级联 interrupt 子会话）**并入 Iter-23**，development-plan §Iter-23 已增补交付项与验证标准（含前置探查：sessions 层"已停"信号确认，探不到则降级文档化）；Iter-SUBA 全部收官（探索+实现+手测 T1-T7 关闭，git 14f0454）。**下一迭代：Iter-23（开工前按约定先出设计方案确认）**。今日到此。 |
-| 今日 | **Iter-23 前置探针完成：方向 A 停止信号摸清（一半可根治、一半原理性边界）** | ✅ 探针收官（stopa-6/pkg-6 用后已 undefine，代码存档 `code/probes/stopa-user-stop-signal-probe.js`，报告 `plan/development/iter23-probe-report.md`）。**①停止链路**：UI Stop=client session.cancel→`agent.cancel({kind:'user'},{keepInbox:true})`。**②Case R 停在活动回合=可根治**：持久日志留 `turn/end {reason:{kind:'aborted',reason:{kind:'user'}}}`+`assistant/message interrupted:true`，live `session.log` 与冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致、turn/reason 稳定）。**③Case I 停在空闲=零痕迹**（"复活"实测场景）：cancel 对 idle agent 纯 no-op 且 **RPC 假性返回 accepted:true**，无事件/状态/持久变化——不改 DSH 原理性不可检测。**④停后 prompt 接受且立即唤醒**（Iter-21"已停拒绝 prompt"线索证伪）。**⑤部署版日志事件形态 `{type,seq,time,data:{…}}`——payload 在 data 包装下**，与 master 源码顶层签名不同；`source.kind`（user/plugin/skill-catalog/agent-instructions）可区分真实输入与合成注入；`session/event` 全局实时事件=事件驱动 sync 现成挂点。**设计要点**：aborted 之后新回合会覆盖"末条 turn/end"判定窗口→事件驱动为主（ctx.on('session/event') 捕 aborted(user) 即时处置 user-stop）+轮询兜底；Case I 边界拟用面板 UX 引导（"后台执行中，停止请用面板 Stop"）。**下一步：Iter-23 设计方案交用户确认。** |
-| 今日 | **流程定义技术讨论 + 需求澄清闭环 + 迭代重排批准（2026-09-02）** | ✅ 三段：①**流程定义技术讨论**（问题/解答/全旅程/缺口固化=`plan/design/definition-pipeline-discussion.md`；核心实证：三工具返回从未携带 inputs/outputs——契约漂移、引擎数据流零感知、上轮 inputs.analysis 修复无传递通道）；②**需求澄清**（用户原始需求 25 条 → A-E 五组+2 开放点全部拍板；定稿 `plan/requirements/工作流数据管理需求.md`、过程记录 `工作流数据管理需求澄清.md`；原始文件保留为历史输入）；③**迭代重排**（草案 `iteration-replan-draft.md` → 用户批准 → development-plan §2 队列重写 **Iter-24~30**：24 预定义目录/25 数据流显性化/26 items 提取/27 语义校验/28 编辑前台/29 实例管理+归档下载删除（独立可提前）/30 DAG 美化）。**下一步：Iter-24 设计方案确认后开工。** |
-| 今日 | **Iter-24 设计定稿（两决策点拍板）** | ✅ 用户确认：①预定义目录位置=`~/.dsh/workflow-agent/`；②工作区 templates/ 不再进下拉的迁移影响接受。设计全文固化=`plan/development/iter24-design.md`（含实施顺序：步骤 0 fs 写入探针 → 收编 5 技能 → 实现 host 0.13.0 → 单测+端到端验证）。**明日开工。** |
-| 今日 | **Iter-24 预定义目录与安装布局 — 开发+验证+关闭** | ✅ 完成（探针实证 fs 可写 ~/.dsh 且全盘读写无硬限制、sandboxPolicy 属 opt-in；物化模板2+技能5 幂等；两级解析链 workspace优先→预定义兜底；模板下拉切源+内建兜底合并；250 单测；空白工作区 GUI 全链路 COMPLETED、skills 读自预定义目录。host v0.13.0/client v0.6.1，git 7896bc3→8c65d10。总结=iter24-report.md，探针存档=iter24-probe-fs.md。**新纪律：重启 dsh 由用户执行**） |
-
----
-
-## 已完成工作
-
-### 22. Iter-27b: 语义校验——错误级清单+关口硬拦+workflow_validate（2026-09-04，✅ 完成关闭）
-
-**迭代报告**：`plan/development/iter27b-report.md`（设计=`iter27-design.md` 拆分版 §5 错误码表/§7 边界；主体实施方案以用户流程叙述版过审）
-
-**交付**（host v0.18.0）：
-- 共享校验引擎 `workflow-validate.js`（第 10 个同步 section）：8 错误码（E-DEP-CYCLE/E-PROCESSOR-MISSING/E-SKILL-MISSING/E-GATE-CHECKER-MISSING/E-INPUT-MISSING/E-ITEMS-MISSING/E-ABS-IN-DEF/E-ITEMS-PARSE）+2 警告（W-REF-MISMATCH/W-ITEMS-INPUT-DUP）；raw 字面禁绝对（params 注入=合法入口四点④）与展开值存在性双轨；fs 缺失降级纯静态不误报
-- 关口接线：create/begin **硬拦截**（校验先于 createBind，拒绝零副作用不建实例目录）→ start/resume **实时闸门**（重读 instance.yaml 防创建后退化）→ reset 回传不拦 → status 附 metadata validation 快照（legacy hydrate=ok 兼容）
-- 新工具 `workflow_validate`（只读：instanceId 实例实时校验 / workflowPath·Text 定义语境+preset 锚定）；`/wf/create` 同款关口（400 errors+hint / 200 validation 摘要）
-- **验收修正（安全红线，用户实测后提出）**：被拦后 LLM 只许转告清单+停止，**严禁自行搜索/替换技能或输入文件**（曾自行拿工作区同名旧技能顶替执行）——所有拒绝响应统一 `hint` 权威提示 + persona 契约硬规则
-- deferDisposition 前移 workflow-paths 单一事实源（raw/expanded 双形态）；parser 两处 warning 下线升错误级
-- 查找次序记档（用户确认）：技能两级链工作区→预定义；同名替代（工作区优先）当前可接受，路径固化留作可选加固
-
-**验证**：单测 421→485 全绿（用例 24 新增 59 项；修 2 个 mjs 内联作用域重声明冲突=wv/wvE_ 前缀）；GUI 验收（用户）=缺 processor 拦/修复放行/删技能 start 拦停（含修正复验）/延迟组与完好定义零误报 全通过。
-
-**提交**：`585c5b1`（主体）+ 本收尾提交（文档），已推 origin/main。
-
----
-
-### 23. Iter-28: 实例编辑前台 + persona 单源化（2026-09-04，✅ 完成关闭）
-
-**迭代报告**：`plan/development/iter28-report.md`（rc2 persona 内联限制与单源化决策=`plan/architecture/architecture-decisions.md` §8）
-
-**交付**（host v0.19.0 / client v0.7.0）：
-- `workflow-edit.js`（第 11 个同步 section）：`serializeWorkflowYaml` 稳定键序序列化（引用不保真已接受）、`instanceEditPermissions` 权限矩阵（CREATED=定义可编辑/RUNNING=readonlyAll）、`applyInstancePatch` 白名单补丁（E-EDIT-* 拒绝码；gateChecker='' 删 checker 保 shell；concurrency=null 删）、`simplifyParams`/`parseSkillFrontmatter`
-- 路由：`GET /wf/skills`（预定义+工作区合并，同名工作区顶替+predefinedShadowed 标注）、`GET /wf/instance-yaml`（stage 权限+任务 raw 字段+组状态聚合）、`POST /wf/validate-instance`（dryRun）与 `/wf/instance-yaml`（保存）——`editInstancePipeline` 统一：patch→注释头保留→稳定序列化→**Iter-27b validateWorkflow 实例语境**→错误 400 `{errors, workflowBeginErrors, hint}` 零写入
-- Client：创建对话框 params **键值行**+成功呈现视图（✓/conflict/警告黄列表，Iter-25 遗留 warnings 面板清账）；EditorPanel 双栏编辑器（DAG 下方可折叠默认收起；技能下拉版本+来源后缀；inputs Kv 多值逗号；页脚仅校验+保存）
-- 权限拍板落地：name/params 只读；maxConcurrency 实例级、concurrency/retries 任务级可改（非 RUNNING）；processor/gateChecker/inputs/outputs 仅创建时
-- **验收修正 5 项**（两轮 GUI 实测）：①inputs「+添加」draft 改 entries 中间态（空 key 行=合法编辑态，对象转换推迟 buildPatch）②RUNNING「✎ 编辑」灰禁 ③EditorPanel 接外部 stage 不一致即重拉（展开期间启动即时转禁用）④**params 传递**：workflow_status 快照挂 meta.params（engine state 从不存用户实参）+persona 派发模板加 `params = <JSON 原样>` 行 ⑤首修踩坑：**persona 实际生效的是 agent.cordis.yml 内联 text（dsh-persona row config.text），只改 system-prompt.md 无效**
-- **persona 单源化（A 方案，用户拍板）**：rc2 `dsh-persona` Config 仅内联 text 无 file 引用=系统限制（DSH 升级检查项记档 architecture-decisions §8）；`system-prompt.md` 唯一源（先修 3 处 v1 串行残留→v2 并发+节号重排）+ `sync-persona.js` 构建期注入（幂等/`--check`/`{{` 插值拦截，roundtrip 逐字节断言）；**部署链变化：改 persona=改 md→sync-persona→cp 两份→重启**
-
-**验证**：单测 485→529 全绿（用例 25 新增 44 项：序列化往返/权限矩阵/patch 白名单/技能合并/保存链注释头保留/dryRun 零写入/门控 400/手动 STOPPED+RUNNING 实例）；GUI 验收（用户）=编辑器全功能/params 键值行+warnings/RUNNING 全禁用/params 进 subagent 首条消息（单源化后复验）全通过。
-
-**提交**：`bc54fdf`（主体+验收修正+单源化）+ 本收尾提交（文档），已推 origin/master。
-
----
-
-### 21. Iter-27a: 预定义目录结构与实例化 + items-from/inputs 互斥后补丁（2026-09-03，✅ 完成关闭）
-
-**迭代报告**：`plan/development/iter27a-report.md`（设计=`iter27-design.md` 拆分版，四轮拍板落档；自 Iter-27 拆分，27b 语义校验待启动）
-
-**主体交付**（host v0.17.0）：
-- templates **子目录自包含**：每工作流一子目录（`<名>.yaml`+`inputs/...`）与实例目录同构镜像；samples/ 转纯参考；templates/README.md 迁移说明
-- **create/begin 1:1 复制**：preset 来源整目录复制进实例（定义写 instance.yaml、静态文件原样保结构、文本 only），返回 `presetCopy={copied,failed}`
-- **静态 items 解析链**：实例目录（1:1 副本）→ defDir（模板子目录自愈）→ 两级链；技能恒两级链（R4）
-- 绝对路径=用户指定产物（create params/人工调整），引擎直通不改写
-- `/wf/templates` 扫描下钻子目录+平铺 legacy 兼容（同名**子目录赢**）；共享模块 `workflow-paths.js`（isAbsoluteishPath 前移+resolveStaticPath+presetTemplateDirOf）
-
-**后补丁**（GUI 验收后用户指出定义层问题，host v0.17.1）：
-- **items-from 与 inputs 互斥**（用户拍板）：items-from=专用条目获取输入（仅用于循环/并发控制，条目值经任务快照 `_loopItem` 随派发传入子会话）；inputs=业务内容来源，禁重复声明 items 文件
-- 模板 7 处重复 inputs 声明清零（items-demo×6 v1.3 + runtime-items-demo analyze）；新建专用逐 item 技能 `item-processor`（按派发 item 值处理+empty 空清单占位；integrator 保持 default-demo 两输入汇总不被误伤）
-- persona 派发契约补「迭代任务 prompt 带 `item = <_loopItem>` 行」；27b 校验表记 **W-ITEMS-INPUT-DUP（警告级，用户拍板）**
-
-**验证**：单测 387→419→421 全绿（用例 23 新增 28 项+用例 18/21 断言随迁移/互斥更新；修复 1 真 bug=start 路径 src 缺 predefinedRoot 致预定义端探测丢失）；GUI 验收（用户）=四内建模板开箱即用通过+补丁复验通过。
-
-**提交**：`300923d`（主体）+ `dd48ff0`（后补丁+收尾），已推 origin/main。
-
----
-
-### 18. Iter-23 前置探针 + 设计定稿 + 方向 A 开发（2026-09-02，✅ 完成关闭）
-
-- **前置探针**（stopa-6 动态插件，用后 undefine）：Case R（停在活动回合）✅ 持久留 `turn/end {data:{reason:{kind:'aborted',reason:{kind:'user'}}}}`，live `session.log`/冷 `sessionPersistence.readFrom` 双路可读（seq 不跨源一致，turn/reason 稳定）；Case I（停在空闲）❌ 零痕迹（cancel 纯 no-op，RPC 假性 accepted:true）——Host 侧原理性不可检测。报告 `plan/development/iter23-probe-report.md`，探针存档 `code/probes/stopa-user-stop-signal-probe.js`。
-- **设计定稿**（2026-09-02 用户确认，效果级方案）：队列重排 **Iter-23=方向 A（手工停 DSH 会话=权威停止）→ Iter-24=生命周期闭环+归档（原 23 归档范围）→ Iter-25=编排可视化编辑（原 24）**；development-plan §2/§3 已同步重写。
-- **实现**（host v0.12.0 / client v0.6.0）：
-  - **A1** `workflow-host.mjs` apply 挂 `ctx.on('session/event')` tap（`isUserAbortTurnEnd` 判定）→ `registry.handleSessionUserStop(sid)` 即时权威停止；
-  - **A2** `syncInstanceState` idle 将停分支先查 `detectUserAbort`（live log 尾扫 `detectUserAbortFromLog`），命中走 `applyUserStop`（STOPPED+user-stop+级联 interrupt，权威性高于 P1 守卫），undefined 降级既有 session-idle 语义；
-  - **A3** `/wf/list` 新增 `stopHint`（绑定 RUNNING+主 idle+子会话在跑）+ 面板常驻提示条（client.js，状态触发非点击触发）；
-  - workflow_stop 注释对齐（面板 Stop 与 UI 停止按钮自此同级权威）；system-prompt 无需改（P2/P4 已覆盖停后语义）。
-- **验证**：单测 220 全绿（用例 17 新增 27 条：A1 判定矩阵 parent/hook/disposed/legacy/completed 排除、log 尾扫、A1 处置+幂等、A2 兜底+降级、P1/P2 回归）；`verify-client-bundle.js` 求值级通过；lib/index.js `node --check` 通过。
-- **部署**：预设 mjs 副本已同步（=仓库版本）+ dsh.service 重启生效。
-- **手测**：V1/V2/V3 全过，无缺陷（`iter23-verification-report.md`）。V1-⑤ 记录：STOPPED 面板无 Start 键（仅 Resume）——按面板状态机语义复核通过（Iter-21 R5 设计行为，原表述"Start 被拒"为引擎层措辞不当）。
-- **后续修复（2026-09-02，用户报 default-demo 集成先于深度分析完成）**：根因=**编排定义**缺依赖——default-demo 内建模板 `integrate`（汇总集成）`depends-on` 只含 `[write-spec, prep-data]`，`deep-analysis` 是旁路长任务；引擎 `getRunnableTasks` 严格按 depends-on 阻塞（engine.js:176-177），非状态 bug。已修：integrate 加 `depends-on: [write-spec, prep-data, deep-analysis]` + `inputs.analysis`；test-host 模板断言加防回退项（221 单测全绿）；host 重建 lib/index.js。
-
-### 19. 流程定义技术讨论 + 需求澄清闭环 + 迭代重排（2026-09-02，✅ 完成）
-
-- **技术讨论**：围绕流程定义文件生命周期五问+两确认（目录/指令文档/硬编码/传递/item/state.json/技能读取时机），全旅程与八项缺口固化为 `plan/design/definition-pipeline-discussion.md`；最硬发现=工具返回（begin/start/status 恒为 engine.snapshot()）自首提交起从未携带 inputs/outputs，persona 契约与代码长期不符。
-- **需求澄清**：用户提交 `plan/requirements/工作流数据管理原始需求.md`（25 条四组）→ 五组逐条澄清+2 开放点拍板（技能目录折中方案/实例管理子页签）→ 定稿 `工作流数据管理需求.md`（R1-R25 权威基线+第六节延后 backlog），过程记录 `工作流数据管理需求澄清.md`。
-- **迭代重排**：`iteration-replan-draft.md` 七迭代方案经用户批准（2026-09-02），development-plan §2 队列与全景已重写：24 预定义目录与安装布局 → 25 数据流显性化 → 26 items 结构化提取 → 27 语义校验 → 28 实例编辑前台 → 29 实例管理子页签+归档/下载/删除（独立可提前）→ 30 DAG 美化交互。
-- **产出文件**：definition-pipeline-discussion.md / 工作流数据管理需求.md / 工作流数据管理需求澄清.md / iteration-replan-draft.md / development-plan.md / progress-record.md（本条）。
-
-### 20. Iter-24: 预定义目录与安装布局（2026-09-02，✅ 完成关闭）
-
-- **设计定稿**（用户拍板两决策点）：目录=`~/.dsh/workflow-agent/`（DSH_HOME 优先定位）；工作区 templates/ 退出下拉（迁移影响接受）；物化同名覆盖幂等、失败不阻断；解析链 workspace 优先→预定义兜底；下拉=目录扫描+内建兜底合并。全文=`plan/development/iter24-design.md`。
-- **探针（动态插件 probe-1，用后 undefine）**：步骤 0 实证 Host fs 可写 `~/.dsh/`；追问探针实证**全盘读写无硬限制**（HOME/`.dsh`/`/tmp` 写通、`/etc` 读通），`sandboxPolicy(workspace-write, workspaceRoot=HOME)` 属 opt-in 非强制；勘误"/tmp 被拒"=bwrap tmpfs 观测假象；Client 无直接文件能力（经 Host 路由间接）。存档=`iter24-probe-fs.md`。
-- **交付**：builtin-skills.js（5 技能收编+frontmatter name+detectPredefinedRoot+materializeBuiltinAssets）；启动时物化（journal `[workflow-agent] materialize`）；resolveRel→resolveRefPath 两级解析链（processor/gate.checker/itemsFrom，绝对/~ 直通，双 miss 保报错语义）；`/wf/templates` 新契约 `{builtin, predefined}`+mergeTemplateLists 去重兜底；client 0.6.1 下拉单一 predefined 列表（`tpl:` 统一可编辑 workflowText 提交）。
-- **过程修复**：①sync 单 section 遗漏致调用点缺失（动态探针排除法定位；纪律=改源后全量 sync，测试走源/部署走副本存在结构性盲区）；②fs.stat 真实契约"缺失返回 undefined 不抛错"，原判定误跳过 README 写入（mock 对齐真实语义）。
-- **验证**：250 单测全绿（新增用例 18/19、case 10 改新契约）；三次重启物化幂等（覆盖生效、用户 README 不覆盖）；空白工作区 create 落盘 ✓；**用户 GUI 全链路**：/home/zhaokai/wf-blank-e2e 开 orchestrator 会话跑 default-demo 至 COMPLETED，Session 记录确认 skills 全部读自预定义目录（开箱即用达成）；workflow_test_ws 44 实例回归无损。
-- **新纪律（用户明确要求）**：Agent 不自行 systemctl restart dsh.service（会中断会话）；文件部署后提醒用户重启，等回复再验证。
-- **收尾**：host v0.13.0 / client v0.6.1；git 7896bc3→8c65d10；总结=`iter24-report.md`。**下一迭代=Iter-25 数据流显性化（先设计确认）。**
-
-### 12. Iter-15: 面板控制 start/stop/reset（✅ 完成）
-
-**迭代报告**：`plan/development/iter15-report.md`
-
-**核心交付**：
-- **Host 端**：POST /wf/start + /wf/stop + /wf/reset 路由（直接操作实例状态）
-- **Client 端**：工具条按钮（Start/Stop/Reset）+ 状态联动显示
-- **消息注入**：Start 按钮触发 session 执行工作流（apiProxy.sessions.prompt）
-
-**关键技术发现**：
-- DSH API 调用格式必须包含 `rpcId` 和 `payload` 字段
-- 普通 session：`apiProxy.sessions.prompt({ rpcId, payload: { sessionId, mode: 'queue', content } })`
-- subagent session：`apiProxy.subagents.prompt({ rpcId, payload: { parentSessionId, childSessionId, mode: 'continuable', content } })`
-- `sessionPersistence.append` 只写日志不触发 agent loop
-- DSH 源代码在 `@deepseek-harness-master`，API 调用方式不确定时优先查源码测试用例
-
-**验证**：消息注入成功，session 执行工作流 ✅
-
-**提交**：`62a463b` + `2b75f4d` + `2a4023a`
-
----
-
-### 13. Iter-16: 运行状态机（Host）（✅ 代码完成）
-
-**迭代报告**：`plan/development/iter16-report.md`
-
-**核心交付**：
-- **schema**：STAGE 枚举 `PAUSED` → `STOPPED`（workflow-schema.js + engine 兜底）
-- **engine**：`setStage('STOPPED')` 置 `active=false`；新增运行状态机动作 `start`（仅 PENDING→RUNNING）/ `stop`（仅 RUNNING→STOPPED，保 DONE 进度）/ `resume`（仅 STOPPED→RUNNING，续跑保 DONE）/ `reset`（仅 STOPPED/COMPLETED/FAILED→全新 PENDING；begin 保留 def 供 reset）；非法转移抛错
-- **单测**：用例 11 新增 9 断言（start/stop/resume/reset + STOPPED 不可 start + PENDING 不可 reset）
-
-**验证**：单测 113/113（原 104 + 新增 9）；lib/index.js 构建通过（v0.8.0）；awaiting 部署验证（重启 dsh.service）
-
-**范围**：纯 Host 状态机，未改路由/工具/前端（归 Iter-17/18/20）
-
----
-
-### 14. Iter-17: 绑定模型 + 完整性（Host）（✅ 完成）
-
-**迭代报告**：`plan/development/iter17-report.md`
-
-**核心交付**：
-- **工作区骨架物化**：`<workspace>/.workflow-agent/{instances,archive}`（首次挂接 workflow 会话，幂等，`ensureWorkspaceSkeleton`）
-- **绑定语义（按用户确认）**：`create-bind`（新建实例写 `metadata.sessionId=S`）/ `adopt`（仅采用池中 `sessionId==null` 实例）；1:1 守卫（一会话一实例、一实例一会话、绑定后禁再绑）；仅删会话解绑；adopt 拒绝 RUNNING 实例
-- **派生状态**：`UNBOUND/BOUND/DONE/BROKEN`（不侵入 DSH Session，实时从实例+整树派生；DONE 由 archive 声明，Iter-20 起成立）
-- **整树完整性判定**：不设独立绑定指针；骨架缺场/实例目录损坏/1:1 冲突 → BROKEN
-
-**验证**：单测 125/125（用例 12 新增 12 断言）；lib/index.js 构建通过（v0.9.0）；awaiting 部署验证
-
-**设计确认（孤儿判定基准，源码佐证）**：归档≠死亡；孤儿=绑定会话离开 live store（`sessions.get(id)===undefined`）；孤儿回收挪 Iter-18（见 lifecycle-design §9.1）
-
-**范围**：未改运行状态机（Iter-16）、控制工具/路由（Iter-18）、归档（Iter-20）、Client（Iter-21）
-
----
-
-### 15. Iter-18: 流程控制工具 + 路由 + 孤儿回收（Host）（✅ 完成）
-
-**迭代报告**：`plan/development/iter18-report.md`
-
-**核心交付**：
-- **工具接线到 Iter-16 状态机**：`workflow_adopt`（新）/`workflow_resume`（新）；`workflow_start`（须绑定+adopt 前置+engine.start）/`stop`（engine.stop）/`reset`（_reset_<state> 备份+engine.reset）；`workflow_list` 补派生状态 + orphans
-- **路由**：`POST /wf/start|stop|reset|resume|adopt`；BROKEN 拦截 create/adopt/run；reset 走归档备份
-- **孤儿识别+回收（惰性扫描）**：判定=`sessions.get()===undefined`（归档≠死亡）；回收=RUNNING 先 stop→解绑（sessionId→null）→保留 state.json 回 UNBOUND 池→可被新会话 adopt/resume
-- **system-prompt/agent.cordis.yml**：adopt→start 两步同步
-
-**验证**：单测 137/137（用例 13 新增 11 断言：控制全链路 + reset 备份 + status + 孤儿识别/回收）；lib/index.js 构建通过（v0.10.0）；awaiting 部署验证
-
-**决策（用户拍板）**：孤儿触发=惰性扫描；start 须先 adopt；reset 备份在 Iter-18 写。孤儿判定基准经源码佐证（归档≠死亡，lifecycle-design §9.1）
-
-**范围**：未改归档管理/UI（Iter-20）、Client（Iter-21/22）
-
----
-
-### 6. Iter-5: Host/Client 架构调整 — Client RPC 链路修复（✅ 完成）
-
-**决策**：`plan/architecture/architecture-decisions.md` §5；方案对比 `plan/design/client-host-communication.md`
-
-**背景**：Client UI 迁移到 npm 包后 RPC 链路断裂（`host.call` 是动态插件闭包符号，npm 包无法使用）。
-Iter-5 采用 **HTTP 轮询方案**：Host 注册 webServer 路由，Client 用 fetch 轮询。
-
-**修改清单**：
-
-| 文件 | 改动 |
-|------|------|
-| `code/agent-presets/.../workflow-host.mjs` | 新增 webserver-routes 模块：`registerWebRoutes()` 注册 `/wf/*` 前缀路由（status/skill/config）+ loopback 围栏 + `writeJson` + `loadStateFromFile` |
-| `code/packages/workflow-host/build.js` | inject 改为 `['fs','tools','webServer']` |
-| `code/packages/workflow-host/package.json` | 版本 0.2.0 → **0.3.0** |
-| `code/packages/client-ui-monitor/src/client.js` | `host.call('wf:status')` → `fetch('/wf/status?...')`；`ctx.interval` → `window.setInterval`（npm 包 Client 无 timer 服务，官方 client 插件同用 setInterval） |
-| `code/packages/client-ui-monitor/build.js` | 移除 `require("@deepseek-ai/dsh-client-runtime").host`；inject 改为 `['slots']` |
-| `code/packages/client-ui-monitor/package.json` | 移除 `dsh-cordis-client-runner` peerDependency |
-| `code/agent-presets/.../agent.cordis.yml` | `workflow-rpc.mjs` 行停用（注释掉，由 webServer 路由替代） |
-| `code/scripts/build-and-install-all.ps1` | 说明更新（RPC 已停用） |
-| `code/scripts/install-iter5.ps1` | 新建专用安装脚本 |
-
-**验证结果**：
-
-| 检验项 | 结果 |
-|--------|------|
-| workflow-host 路由单测（/wf/status 200、loopback 403、404、/wf/config、/wf/skill） | ✅ 全部通过 |
-| 构建产物语法/格式 | ✅ |
-| 安装到 desktop profile（0.3.0） | ✅ |
-| Client bundle 进入 boot 图（新 rev ffb8536f9dd7） | ✅ |
-| DAG 图显示（节点颜色绿/红/琥珀） | ✅ |
-| 循环组折叠框 "↻ 逐模块评审 (8)" | ✅ |
-| 状态条（demo-wf / COMPLETED / FAIL） | ✅ |
-
-**踩坑记录**：
-
-| 坑 | 现象 | 解决方案 |
-|----|------|---------|
-| DSH Desktop 外部 HTTP 403 | 所有外部请求返回 403 "forbidden" | 发现是 `x-dsh-desktop-renderer` token 访问控制（`dsh-src/desktop/lib/desktop-browser-access-*.js`），非插件问题；验证走 Electron 渲染进程内 |
-| 部署目录文件被锁 | `~/.dsh/profiles/desktop/node_modules/` 文件无法覆盖 | DSH 加载插件时锁定文件，需完全退出 DSH 后安装（install-iter5.ps1） |
-| preset 部署未同步 | `~/.dsh/.agent-presets/.../agent.cordis.yml` 中 workflow-rpc 仍启用 | 源码已注释，部署目录需 DSH 停止后同步 |
-
-**架构认知（Iter-5 附带发现）**：
-
-- DSH Desktop 内核 = 官方 dsh Host（web-app 组合），43120 是内部 webServer 端口
-- webServer 有 `x-dsh-desktop-renderer` token 访问控制（Electron 渲染进程专属）
-- HTTP 轮询方案在 DSH Desktop 渲染进程内可行（Client fetch 自动带头）
-- 详见 `plan/development/client-rpc-research.md` §7
-
----
-
-### 7. Iter-6: 循环错误处理 + 日志清理（✅ 完成）
-
-**迭代报告**：`plan/development/iter6-report.md`
-
-**核心交付**：
-- `updateTask` 在任务 FAILED 时自动检查 `_onError`：`break` → 同组 PENDING 标记 SKIPPED；`continue` → 继续执行
-- `hydrate` 恢复循环元数据（消除重启后 processBreak 失效的隐患）
-- `getNextRunnableTask()`（跳过 SKIPPED，预留 Iter-7 并发引擎）
-- `begin()` 清空历史日志（避免重新 begin 工作流时日志跨实例残留）
-- DAG 布局（循环组折叠 + SKIPPED 琥珀色）在 Iter-4 已就绪，本轮仅做在线验证
-
-**验证**：单测 50/50（新增用例 5 共 9 断言）；在线验证 order FAILED → payment 自动 SKIPPED（BREAK 日志正确）。
-
-**提交**：`05f85aa`（核心）+ `00285ef`（测试 + 日志清理）
-
----
-
-### 8. WSL2 迁移 — 插件打包/安装/端到端验证（✅ 完成）
-
-**背景**：项目从 Windows dsh-desktop 迁移到 WSL2，迁移后未做打包/安装，需验证 Windows 既有成果被完整继承。
-
-**环境差异**：
-- WSL2 无 desktop profile（Windows Electron 形态），实际是 web(3080) + headless profile，用 pnpm 管理（nodeLinker: hoisted）
-- 插件接入方式：link: 依赖 + `dsh.profile.bundles`（先例 `@yejiming/dsh-data-agent`）
-- DSH 用用户级 systemd 管理（`systemctl --user restart dsh.service` 重启 Host）
-
-**修复的迁移 bug**：
-- 硬编码 Windows 路径 `C:/Users/ranwa/dsh_workspace` → `/home/zhaokai/Projects/dsh_projects`（提交 `659d87e`）
-- `_loopIndex: undefined` 导致 workflow_begin 返回非 lossless JSON（提交 `fa9732f`）
-
-**验证**：打包 + 安装 + compose + 端到端（workflow_begin → DAG 循环组折叠 → HTTP 轮询）全部通过。
-
----
-
-### 9. Iter-7: 并发执行引擎 + DAG 并发组可视化（✅ 完成）
-
-**迭代报告**：`plan/development/iter7-report.md`
-
-**核心交付**：
-- `getRunnableTasks()`：就绪 = 前驱全 DONE/SKIPPED，槽位 = maxConcurrency - 当前 RUNNING；snapshot 输出 `runnable` 列表
-- 工作流级 `max-concurrency` 字段（默认 1=串行，>1 并发）
-- system-prompt 执行模型 v1 串行 → v2 并发（以 `runnable` 为准）
-- DAG 并发组可视化：dependsOn 相同的连续任务垂直并列 + 虚线线框 + 箭头指向后继
-
-**验证**：单测 59/59（用例 6 共 9 断言）；在线验证 concurrent-demo 的 runnable 动态变化 + DAG 并发组显示。
-
-**提交**：`c6b140f` + `ff3a334` + `1b2ece0` + `ec1f0f0`
-
----
-
-### 10. Iter-8: 并发语义完善 + concurrent 节点 + DAG 增强（✅ 完成）
-
-**迭代报告**：`plan/development/iter8-report.md`
-
-**核心交付**：
-- **并发语义**：`getRunnableTasks` 对 concurrent 迭代做组级并发控制（组内 RUNNING + 已列入 < 组级 max），与工作流级 max 取最严格者
-- **concurrent 节点**：`type: concurrent`（同 loop 结构 + 自身 max-concurrency）；`expandConcurrentTasks` 展开 N 个 item 迭代，迭代**无依赖**（可并发）；engine 存 `_concurrentGroup`/`_concurrentMax` 元数据
-- **DAG**：依赖同一前驱节点撤销线框改垂直排列；新增 start（绿实心圆点）/end（红空心圆圈）；concurrent 节点复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开，标注"⚡ 并发"）
-
-**验证**：单测 65/65（用例 7 共 6 断言）；在线验证 demo-concurrent 的组级并发动态 + DAG start/end + concurrent 实线节点。
-
-**提交**：`898ce53` + `8ca2ac0` + `127ec86` + `af7ce10` + `916a2ea` + `d508a15`
-
-**遗留**（用户确认延后修）：① 箭头 x 左右未连接图元边缘 ② 节点内长文字覆盖 ▶/▼ 图标 ③ 图元宽度偏窄——后续增加文字内容时统一调整。
-
----
-
-### 11. Iter-13: 面板创建按钮 + 模板库 v1（✅ 完成）
-
-**迭代报告**：`plan/development/iter13-report.md`
-
-**核心交付**：
-- **Host 端**：POST /wf/create（只 create 不 start）+ GET /wf/templates + 内置模板×2（serial-gate / concurrent-summary）
-- **Client 端**："+"按钮 + 表单 overlay（模板选择/参数配置）+ 实例列表轮询 + 实例切换
-- **修复**：ESM→CommonJS（DSH cordis 不支持 ESM 插件）、loadStateFromFile 处理 CREATED 状态、activeRoot 轮询逻辑
-
-**验证**：单测 104/104（用例 10 共 11 断言）；部署验证通过（面板创建/列表/切换功能正常）。
-
-**提交**：`2b6a874` + `c506820`
-
-**部署修复记录**：
-| 问题 | 原因 | 修复 |
-|------|------|------|
-| DSH 启动失败 `SyntaxError: Unexpected token 'export'` | workflow-host 包使用 ESM 格式 | 改回 CommonJS（`module.exports`） |
-| client-ui-monitor 未加载 | 同上 ESM 问题 | 改回 CommonJS |
-| 插件未在 bundle 中 | `dsh.profile.bundles` 未包含 workflow-host | 添加到 package.json |
-| `/wf/list` 请求未发出 | `activeRoot` 是模块级变量，useEffect 不触发 | 改用模块级函数 `startListPolling()` 显式调用 |
-| `/wf/status` 返回错误 | CREATED 状态无 state.json | `loadStateFromFile` 从 instance.yaml 构建默认状态 |
-| 面板显示 "Waiting for workflow..." | `hasData` 依赖 `/wf/status` 返回 workflow 字段 | 同上，CREATED 状态返回 `{workflow, stage: 'CREATED', ...}` |
-
----
-
-## 待办（下次启动）
-
-### Iter-21~24: 流程控制剩余功能（按功能闭环组织）（计划中）
-
-**迭代计划**：`plan/development/development-plan.md`（Iter-21~24）；技术方案 `plan/design/workflow-lifecycle-design.md`
-
-**目标**：按"一个迭代 = 一个可端到端验证的功能"重组剩余工作——
-- **21 前后台状态一致·v4 手测问题闭环 + Resume 提前**（D3=原 S2 提前）：R1 CREATED 态 DAG 补任务节点(A4)、R2 子会话门控(A6)、R3 会话切换状态一致(其他#1/#2)、R4 BROKEN 加固(B2)、R5 Client Resume 按钮(D3)；
-- **22 前后台状态一致·剩余修复轮**（S1/S3/S4）：去掉自动 idle→stop、孤儿进采用池完整语义、reset 清对话；
-- **23 实例生命周期闭环 + 归档**：Host 归档 + Client 状态机按钮 + 归档 UI，端到端绑定→start→stop→resume→reset→archive；
-- **24 编排可视化编辑**（24.1~24.4）。
-
-**前置条件**：Iter-20 完成 ✅（含 S5/默认模板/v4 手测，问题归 Iter-21）
-
----
-
-### Iter-21: 前后台状态一致·v4 手测问题闭环 + Resume 提前（计划中；下一个启动迭代）
-
-**背景**：Iter-20 已修并过单测，v4 手工验证（`plan/development/iter20-verification-report-v4.md`）暴露 A4/A6/其他#1/#2/B2 问题 + STOPPED 无 Resume（原 S2）。
-
-**交付（R1~R5）**：A4 CREATED 态 DAG 补任务节点；A6 子会话门控（`origin !== 'subagent'`）；其他#1/#2 会话切换状态一致（重置+重拉列表）；B2 BROKEN 加固；D3 加 Client Resume 按钮。详细见 development-plan.md Iter-21。
-
-**验证（端到端）**：A4/A6/#1/#2/B2/D3 逐条，见 v4 报告编号。
-
----
-
-### Iter-11: 实例操控工具（后台）（计划中）
-
-**迭代计划**：`plan/development/development-plan.md`（Iter-11）
-
-**技术方案**：`plan/design/multi-instance-session-design.md`（复用 DSH Session 多实例）
-
-**目标**：`workflow_create` / `workflow_start` / `workflow_stop` / `workflow_reset` / `workflow_list`；system-prompt 实例管理与重置能力提示。
-
-**已就绪基础**：实例注册表 + 实例目录布局 + metadata 映射 + 惰性恢复（Iter-10）；实例 session 受控生命周期用 `prepare+enter+announce` 持 detach（Iter-9 约束）。
-
----
-
-### 12. Iter-10 — 实例目录与存储（✅ 完成）
-
-**迭代报告**：`plan/development/iter10-report.md`
-
-**核心交付**：
-- 目录约束确认：session cwd 即沙箱 workspace-write 边界（dsh-sandbox-policy 源码），实例目录建在会话工作区内拥有完全读写权限
-- 新增 `instance-store.js`：实例注册表（beginInstance / forSession / hydrateLatest）+ 目录布局（instance.yaml/state.json/metadata.json/output/logs）
-- storage 实例目录模式（`setInstanceDir`）；tools 每次调用独立绑定（多会话并行安全）；`workflow_begin` 成功路径自动实例化（id=`workflowName-uuid8`）
-- `/wf/status` 支持 `?instanceId=` 精确读取 + 最新实例选择 + 旧布局回退；**Client 零改动**
-- 修复 tools-preset.js 源文件与 mjs 内联副本的 Iter-8 漂移（脚本化 section 同步）
-
-**验证**：单测 79/79（用例 8 共 14 断言：实例目录/metadata 映射/双实例隔离/惰性恢复）；部署 web profile v0.4.0 后路由验证 4 项全过（config 识别/最新实例/instanceId 精确/旧布局无回归）。
-
----
-
-### 11. Iter-9 — 多实例技术验证（✅ 完成）
-
-**迭代报告**：`plan/development/iter9-report.md`（含探针原始数据 `iter9-probe-results.json`）
-
-**核心交付**：
-- Host-only 动态插件探针（probe-1，验证后已 undefine）执行 12 项探针，全部通过
-- 验证 `sessions` 服务全链路：create（id 唯一 + cwd 绝对路径 guard）/ list/get 并行共存 / append 自定义事件类型 / `prepare+enter+announce+detach` 受控生命周期 / flush 持久化检查点
-- 验证 cwd 定位链路：`session.header.cwd → <cwd>/.workflow-agent/instances/<id>/metadata.json` 写入读回一致
-- 确认持久化布局 `~/.dsh/sessions/<cwd 键控目录>/<sessionId>/`
-
-**关键发现**：
-- ⚠️ 动态插件上下文 `sandboxPolicy.workspaceRoot` = HOME（非 agent 会话工作区）→ 实例存储路径必须从 session cwd 推导
-- `create()` 创建的 session 无 detach 通道（无法插件侧移除）；受控生命周期必须走 `prepare+enter+announce`
-- session 创建自动写 `permission/preset`、`sandbox/mode`、`approval/policy` 3 个 epoch 事件
-
-**验证**：12/12 探针通过（创建/监听/定位/并行/生命周期/持久化），探针执行 ~125ms。
-
----
-
-### 4. Iter-4 — 循环 + 循环展开（✅ 完成）
-
-**设计决策**：循环展开在 `workflow_begin` 时由 tools 层完成，engine 收到的是展开后的平面任务列表。每个迭代有唯一 ID（`{loopId}/{item}`）、串行依赖链（iter-N 依赖 iter-N-1）、独立 quality-gate。
-
-| 组件 | 改动 |
-|------|------|
-| `tools-preset.js` | 新增 `expandLoopTasks` 函数，读取 items-from 文件 → 展开 N 个迭代任务 |
-| `tools.js` | 同步增加同逻辑 + 修复 `PARAM_PATTERN` Node 独立加载兜底 |
-| `test-host.js` | 新增用例 4（9 断言：依赖链/ID/注入/engine 集成）|
-| `engine.js` | 无改动（engine 接收展开后任务，已天然支持）|
-| `workflow-host.mjs` | 重建（988 行），ESM 加载验证通过 |
-| `host-body/bundle/verify` | 全部重建 |
-| `system-prompt.md` | 更新：自动展开，"编排 Agent 无需特殊处理" |
-| `agent.cordis.yml` | 同步更新 persona 文本 |
-| `client-body.txt` | 新增循环组可视化：连续迭代显示背景框 + "↻" 标签 |
-
-**Client 动态插件部署**：
-
-| 版本 | 插件 | 状态 |
-|------|------|------|
-| v3 | `wfd-10/pkg-15` | ❌ 颜色不刷新 + 闪烁复发 |
-| v4 | `wfd-11/pkg-16` | ❌ 文字刷新正常，图形全灰 |
-| v5 | **`wfd-12/pkg-17`** | ✅ 颜色/文字均正常刷新，无闪烁 |
-
-**v5 修复要点**：
-- 指纹函数 `fp(st)` 检查 `st.state.tasks` 而非 `st.tasks`（Host 返回 `{ state: {...} }`）
-- `mRoot`/`mLoaded` 提升到 `apply()` 级模块变量，根治 remount 闪烁
-- 颜色 key 使用全名 `PENDING`/`RUNNING`/`DONE`，匹配 `t.status`
-
-**验证结果**：
-- Node 单元测试 41/41 通过（原 32 + 新增 9）
-- expandLoopTasks 探针 18/18 通过
-- ESM 插件加载验证通过
-- 4-task 模拟执行：PENDING（灰）→ RUNNING（蓝）→ DONE（绿）✅
-- 循环组背景框 "↻ 逐模块评审" 显示正确 ✅
-
-### 1. Iter-3 — Client 监控面板（✅ 完成）
-
-**架构决策**：
-
-| 维度 | Iter-3 |
-|------|--------|
-| 插件形态 | 独立动态 Cordis 插件（Host + Client 半边），需 `harness.handle` / `host.call` RPC 通信 |
-| 状态来源 | Host 通过 `fs` 读取 `.workflow-agent/state.json`，与预设引擎解耦 |
-| 通信机制 | Client → Host：`host.call('wf:status')`，每 1500ms 轮询 |
-| 挂载点 | `conversation.view` slot，id=workflow，order=25，与 Chat 并列 |
-| 闪烁根治 | 模块级数据层：`ctx.effect` 级单例轮询 + `listeners` 发布订阅 + 指纹防抖 |
-| 工作区发现 | 优先 `window.__wfWorkspaceList`，兜底 `wf:config` 验证 |
-
-**交付插件**：
-
-| 属性 | 值 |
-|------|-----|
-| pluginId | `wff-9` |
-| pkg-13 | Host minimal + Client text-only |
-| pkg-14 | Host + Client DAG SVG（当前运行） |
-| 状态 | ✅ running |
-| Host handlers | `wf:status` |
-
-**功能特性**：标签页 "Workflow" | SVG DAG 节点+箭头 | 色（灰/蓝/绿/红/黄）| 状态条 | 指纹防抖 | 工作区自动发现
-
-### 2. 闪烁修复（Iter-3 补丁）
-
-**问题**：LLM thinking 时 `conversation.view` 组件 remount → `useState` 清零 → "Connecting..." 闪烁，DAG 变空白。
-
-**根因**：`workspaceRoot` / `configLoaded` 在组件 `useState` 内，remount 后失效。
-
-**修复**：提升到 `apply()` 级模块变量，组件直读 `latest` 快照。
-
-**踩坑 5 个**（详见 `iter3-report.md` 第 4.4 节）：
-| 坑 | 表现 | 解决方案 |
-|----|------|---------|
-| JSON 参数截断 | `catch`→`catc h`，括号丢失 | 压缩代码到 ~1600 chars |
-| 反斜杠转义 | `/\\/g` 误匹配 `/` | 改用 `new RegExp()` |
-| Slot 回调返回函数 | 有标签无内容 | 返回 `React.createElement(W)` |
-| Host 返回格式 | `{state:data}` 多一层包装 | 直接返回数据 |
-| 工作区发现删除 | Host `fs` 沙箱读取失败 | 恢复 `tryDiscover()` |
-
-**验证**：DAG 图形正常显示 ✅ | 状态平滑变化 ✅ | 无闪烁 / 无 "Connecting..." ✅
-
----
-
-### 迭代报告
-
-| 文档 | 位置 |
-|------|------|
-| Iter-1 报告 | `plan/development/iter1-report.md` |
-| Iter-2 报告 | `plan/development/iter2-report.md` |
-| Iter-3 报告 | `plan/development/iter3-report.md` |
-| Iter-5 报告 | `plan/development/iter5-report.md` |
-| Iter-6 报告 | `plan/development/iter6-report.md` |
-| Iter-7 报告 | `plan/development/iter7-report.md` |
-| Iter-8 报告 | `plan/development/iter8-report.md` |
-| Iter-9 报告 | `plan/development/iter9-report.md` |
-| Iter-10 报告 | `plan/development/iter10-report.md` |
-| Iter-11 报告 | `plan/development/iter11-report.md` |
-| Iter-12 报告 | `plan/development/iter12-report.md` |
-| Iter-13 报告 | `plan/development/iter13-report.md` |
-| Iter-14 报告 | `plan/development/iter14-report.md` |
-| Iter-15 报告 | `plan/development/iter15-report.md` |
-| Iter-21 报告 | `plan/development/iter21-report.md` |
-| Iter-22 报告 | `plan/development/iter22-report.md` |
-| Iter-SUBA 报告 | `plan/development/iter-suba-report.md` |
-| Iter-23 报告 | `plan/development/iter23-report.md` |
+`plan/development/` 下：`iter1/2/3/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/21/22/23/24/25/26/26r/27a/27b/28-report.md` 与 `iter-suba-report.md`；验证报告同名 `*-verification-report*.md`；探针/设计文档在各条目内标注。Iter-4 无独立报告。
 
 ---
 
