@@ -4116,13 +4116,18 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
   const loopDeps = loopTask.dependsOn || []
   let prevId = null
   const list = normalizeItemEntries(items)
+  // Iter-30 修复：延迟展开收到的 loopTask=组哨兵，其名带「（等待 items）」后缀
+  //（buildPlaceholderTask 生成）；迭代名与 _loopGroupName 不应继承该后缀，剥离后用原任务名
+  //（旧实例磁盘 hydrate 的哨兵同样生效；静态展开名无后缀不受影响）。注意改此处后必须
+  // 跑 sync-modules 同步进 mjs 再 build.js——直接改 mjs 会被本 section 源覆盖（本次实证）。
+  const baseName = String(loopTask.name || loopTask.id || '').replace(/（等待 items）$/, '') || loopTask.id
 
   // 空提取 → 占位迭代（Q1-b）：组节点存在、依赖链完整、正常派发，skill 识别空 items
   if (list.length === 0) {
     const emptyCtx = { varName: itemVar, data: null, empty: true }
     expanded.push({
       id: loopTask.id + '/empty',
-      name: (loopTask.name || loopTask.id) + '（items 为空）',
+      name: baseName + '（items 为空）',
       type: 'llm-task',
       dependsOn: loopDeps,
       timeout: loopTask.timeout || 600,
@@ -4136,7 +4141,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
       } : null,
       _onError: loopTask.onError || 'break',
       _loopGroup: loopTask.id,
-      _loopGroupName: loopTask.name || loopTask.id,
+      _loopGroupName: baseName || loopTask.id,
       _loopItem: '（items 为空）',
       _loopIndex: 0,
     })
@@ -4168,7 +4173,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
 
     expanded.push({
       id: iterId,
-      name: (loopTask.name || loopTask.id) + ' - ' + itemStr,
+      name: baseName + ' - ' + itemStr,
       type: 'llm-task',
       dependsOn: prevId ? [prevId] : loopDeps,
       timeout: loopTask.timeout || 600,
@@ -4180,7 +4185,7 @@ async function expandLoopTasks(fs, loopTask, items, itemVar, params, vars) {
       _onError: loopTask.onError || 'break',
       // 循环组元数据（供 Client DAG 分组渲染）
       _loopGroup: loopTask.id,
-      _loopGroupName: loopTask.name || loopTask.id,
+      _loopGroupName: baseName || loopTask.id,
       _loopItem: itemStr,
       _loopIndex: i,
     })
@@ -4197,13 +4202,15 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
   const loopDeps = task.dependsOn || []
   const list = normalizeItemEntries(items)
   const gMax = task.maxConcurrency || Math.max(list.length, 1) // 组级并发（默认 items 数量，全部并发）
+  // Iter-30 修复：同 expandLoopTasks——哨兵名剥离「（等待 items）」后缀再拼迭代名/组名
+  const baseName = String(task.name || task.id || '').replace(/（等待 items）$/, '') || task.id
 
   // 空提取 → 占位迭代（Q1-b）
   if (list.length === 0) {
     const emptyCtx = { varName: itemVar, data: null, empty: true }
     expanded.push({
       id: task.id + '/empty',
-      name: (task.name || task.id) + '（items 为空）',
+      name: baseName + '（items 为空）',
       type: 'llm-task',
       dependsOn: loopDeps,
       timeout: task.timeout || 600,
@@ -4216,7 +4223,7 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
         maxRetries: task.gate.maxRetries,
       } : null,
       _concurrentGroup: task.id,
-      _concurrentGroupName: task.name || task.id,
+      _concurrentGroupName: baseName || task.id,
       _concurrentItem: '（items 为空）',
       _concurrentIndex: 0,
       _concurrentMax: gMax,
@@ -4244,7 +4251,7 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
 
     expanded.push({
       id: iterId,
-      name: (task.name || task.id) + ' - ' + itemStr,
+      name: baseName + ' - ' + itemStr,
       type: 'llm-task',
       dependsOn: loopDeps, // ← 关键：无串行依赖链，都依赖原始前驱 → 可并发
       timeout: task.timeout || 600,
@@ -4254,7 +4261,7 @@ async function expandConcurrentTasks(fs, task, items, itemVar, params, vars) {
       gate: iterGate,
       // 并发组元数据（Client DAG 分组渲染 + engine 组级并发控制）
       _concurrentGroup: task.id,
-      _concurrentGroupName: task.name || task.id,
+      _concurrentGroupName: baseName || task.id,
       _concurrentItem: itemStr,
       _concurrentIndex: i,
       _concurrentMax: gMax,

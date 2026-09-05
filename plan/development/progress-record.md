@@ -6,8 +6,8 @@
 
 ## 当前状态（截至 2026-09-05）
 
-- 最新关闭：**Iter-29 实例管理子页签 + 归档/下载/删除**（host v0.20.0 / client v0.8.0，563 单测）
-- 下一迭代：**Iter-30** DAG 美化与交互（节点详情面板+视觉布局+交互增强）
+- 最新关闭：**Iter-30 DAG 分层布局 + GUI 附加修复**（host v0.20.1 / client v0.9.0，563 单测）
+- 下一迭代：**Iter-31** 节点详情面板 + 交互增强 + 主题适配（规划中）
 - 基线：DSH `0.1.1-rc.2`（WSL2，web 3080 + headless profile；版本迁移见文末备注）
 
 ---
@@ -67,11 +67,15 @@
 
 - **Iter-29 实例管理子页签+归档/下载/删除**（09-05）：「📋 管理」子页签（活动/归档两段表格+归档门控 STOPPED/COMPLETED/FAILED+多选跨段 zip 下载+归档删除二次确认）；**node:fs 直删定案**（用户否决 pendingCleanup 于目录级操作——Session 不越权删 workspace 级数据；三重查证=官方 FileSystem 抽象类无删除 API+npm 包经 cordis-plugin-loader 标准 CJS require 加载（vm 沙箱陷阱仅限动态插件形态）+process.env.HOME 物化实证；操作范围限 .workflow-agent/ 自有目录+sanitizeSegment 白名单）；zip-writer.js 第 12 同步 section（STORE 零依赖+bit11 UTF-8 中文名+CRC32）；5 条新路由（/wf/archives·archive·delete-archive·download·download-artifact 一次性 token）；**单测抓出真实 bug 已修**（DSH fs stat 对不存在返回 undefined 不抛错→try/catch 守卫静默穿透，改 nodeFs.stat 判定）；563 单测，host v0.20.0/client v0.8.0，GUI 验收通过（少量展示/交互小问题留待后续规划）。报告 `iter29-report.md`。
 
+## 七、DAG 分层布局与 GUI 修复（Iter-30，2026-09-05）
+
+- **Iter-30 DAG 分层布局 + GUI 附加修复**（09-05）：**分层布局算法**（最长路径分层+重心排序+非交叉锚点分配+沟道走廊直角路由+合并点正交/分支扇出贝塞尔）；原型 `PoC/dag-layered-prototype.html` 多轮打磨后机械移植进 client.js（算法区逐字符一致，唯一偏离=客户端真实数据的组哨兵过滤）；**附加修复 4 项**（创建弹窗模板路径修复 E-ITEMS-MISSING 误报+校验错误结构化清单/哨兵任务渲染修复 4 行→3 行/延迟展开命名剥离「（等待 items）」后缀/下拉列表配色）；host v0.20.1/client v0.9.0，563 单测，GUI 验收通过。报告 `iter30-report.md`。
+
 ---
 
 ## 迭代报告索引
 
-`plan/development/` 下：`iter1/2/3/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/21/22/23/24/25/26/26r/27a/27b/28/29-report.md` 与 `iter-suba-report.md`；验证报告同名 `*-verification-report*.md`；探针/设计文档在各条目内标注。Iter-4 无独立报告。
+`plan/development/` 下：`iter1/2/3/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/21/22/23/24/25/26/26r/27a/27b/28/29/30-report.md` 与 `iter-suba-report.md`；验证报告同名 `*-verification-report*.md`；探针/设计文档在各条目内标注。Iter-4 无独立报告。
 
 ---
 

@@ -633,406 +633,521 @@ export function register(ctx) {
     SKIPPED: '#f59e0b'
   }
 
-  // ── LoopGroup 节点组件 ─────────────────────────────────────────
-  function LoopGroupNode(props) {
-    const { x, y, gW, gH, group, selectedId, onSelect, isExpanded, onToggle } = props
-    const items = group.items, total = items.length
-    const counts = { PENDING: 0, RUNNING: 0, DONE: 0, FAILED: 0, SKIPPED: 0 }
-    items.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1 })
-    const aggStatus = counts.RUNNING > 0 ? 'RUNNING' : counts.FAILED > 0 ? 'FAILED' : counts.SKIPPED > 0 ? 'SKIPPED' : counts.DONE === total ? 'DONE' : 'PENDING'
-    const mc = C[aggStatus] || C.PENDING
-    const isSel = selectedId === group.key
 
-    const segs = []
-    const segTypes = ['DONE','RUNNING','FAILED','SKIPPED','PENDING']
-    segTypes.forEach(st => { if (counts[st] > 0) segs.push({ c: C[st], n: counts[st] }) })
 
-    const tx = x + 8, ty = y + 16, barY = y + 33, countY = y + 45
-    const barW = gW - 16
-    const els = [
-      React.createElement('rect', {
-        key: 'bg', x, y, width: gW, height: gH, rx: 8,
-        fill: mc, opacity: 0.92,
-        stroke: isSel ? '#fff' : 'transparent',
-        strokeWidth: isSel ? 3 : 0,
-        cursor: 'pointer',
-        onClick: () => onSelect(group.key)
-      }),
-      React.createElement('text', {
-        key: 'tt', x: tx, y: ty, fill: '#fff', fontSize: 11, fontWeight: 600
-      }, (props.label || '\u21BB ') + group.name + ' (' + total + ')'),
-    ]
+function lgRgba(hex, a) {
+  var n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
 
-    // 进度条
-    if (segs.length > 0) {
-      els.push(
-        React.createElement('rect', {
-          key: 'pb', x: tx, y: barY, width: barW, height: 6, rx: 3,
-          fill: 'rgba(0,0,0,0.2)'
-        })
-      )
-      let segX = tx
-      segs.forEach((s, i) => {
-        const segW = Math.max(s.n / total * barW, 8)
-        els.push(React.createElement('rect', {
-          key: 'ps' + i, x: segX, y: barY, width: segW, height: 6, rx: 3, fill: s.c
-        }))
-        segX += segW
-      })
+// ── 文本宽度估算与截断（CJK≈1em，ASCII≈0.55em）────────────────────────────
+function lgCharW(ch) { var c = ch.codePointAt(0); return c > 0x2E7F ? 12 : 6.6; }
+function lgTextW(s) { var w = 0; for (var ch of s) w += lgCharW(ch); return w; }
+function lgTrunc(s, maxW) {
+  if (lgTextW(s) <= maxW) return s;
+  var out = '';
+  for (var ch of s) { if (lgTextW(out + ch + '…') > maxW) break; out += ch; }
+  return out + '…';
+}
+
+// ── 1. 布局图构建：flat 任务表 → 合并节点 + 真实依赖边 ─────────────────────
+// 返回 { nodes, edges, groups }
+//  nodes: [{ key, kind:'task'|'group'|'placeholder', name, status, task?, items?, groupKind? }]
+//  edges: [{ from, to }]（已去重；from/to 均为节点 key）
+function lgBuildGraph(tasks) {
+  var flat = Array.isArray(tasks) ? tasks : [];
+  var nodes = [], nodeByKey = new Map(), groups = new Map();
+
+  for (var t of flat) {
+    var gKey = t._loopGroup || t._concurrentGroup || null;
+    if (gKey) {
+      var g = groups.get(gKey);
+      if (!g) {
+        g = {
+          key: gKey,
+          kind: 'group',
+          groupKind: t._loopGroup ? 'loop' : 'conc',
+          name: t._loopGroupName || t._concurrentGroupName || gKey,
+          items: []
+        };
+        groups.set(gKey, g); nodes.push(g); nodeByKey.set(gKey, g);
+      }
+      // Iter-30 修复（与原型的现实数据差异）：组哨兵（id===组id 且 _pendingItems 非空）
+      // 不计入子任务清单——引擎设计上哨兵永久保留作组锚点（展开后 _expanded=true、永不派发），
+      // 计入会把哨兵渲染成第一行假子任务（runtime-items-demo 实证 4 行）。
+      // 未展开时哨兵在下方回填为唯一成员（占位渲染依赖 items[0]._pendingItems）。
+      if (t.id === gKey && t._pendingItems) { g.sentinel = t; continue; }
+      g.items.push(t);
+    } else {
+      var n = { key: t.id, kind: 'task', name: t.name || t.id, status: t.status || 'PENDING', task: t };
+      nodes.push(n); nodeByKey.set(t.id, n);
     }
-
-    // 计数标签
-    const countStr = ['DONE','RUNNING','FAILED','SKIPPED'].map(st => {
-      const c = counts[st]
-      if (!c) return ''
-      const sym = st === 'DONE' ? '\u2713' : st === 'RUNNING' ? '\u25CF' : st === 'FAILED' ? '\u2717' : '\u23ED'
-      return c + sym
-    }).filter(Boolean).join(' ')
-    els.push(React.createElement('text', {
-      key: 'ct', x: tx, y: countY, fill: 'rgba(255,255,255,0.9)', fontSize: 9
-    }, countStr))
-
-    // 展开/折叠图标
-    els.push(
-      React.createElement('text', {
-        key: 'ex', x: x + gW - 8, y: ty, textAnchor: 'end', fill: '#fff', fontSize: 11, cursor: 'pointer',
-        onClick: (e) => { e.stopPropagation(); onToggle() }
-      }, isExpanded ? '\u25B2' : '\u25B6'),
-    )
-
-    return els
+  }
+  // 未展开占位回填 + 占位组判定（Iter-26R）：单元素 + _pendingItems 未展开
+  for (var g2 of groups.values()) {
+    if (!g2.items.length && g2.sentinel && !g2.sentinel._expanded) g2.items.push(g2.sentinel);
+    // 已展开但 0 迭代（空提取）→ 保持空清单，组框显示 (0)
+    if (g2.items.length === 1 && g2.items[0]._pendingItems && !g2.items[0]._expanded) {
+      g2.kind = 'placeholder';
+    }
   }
 
-  // ── DAG 画布组件 ───────────────────────────────────────────────
-  const DagCanvas = React.memo(function DagCanvas(props) {
-    const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
-    const mc = stage === 'COMPLETED' ? (gateResult === 'FAIL' ? C.FAILED : C.DONE) : stage === 'FAILED' ? C.FAILED : stage === 'RUNNING' ? C.RUNNING : C.PENDING
+  // 依赖字符串 → 节点 key（组id 直取；迭代 id 归并到所属组；未知忽略）
+  function resolveDep(dep) {
+    if (nodeByKey.has(dep)) return dep;
+    var si = dep.indexOf('/');
+    if (si > 0) { var pre = dep.slice(0, si); if (groups.has(pre)) return pre; }
+    return null;
+  }
 
-    // 构建流程节点：start + 普通task / 垂直组(dependsOn相同无框) / loop折叠框 / concurrent折叠框 + end（Iter-8）
-    const flat = Array.isArray(tasks) ? tasks : []
-    const flowNodes = [], loopGroups = [], concGroups = []
-    const depKeyOf = (t) => JSON.stringify((t.dependsOn || []).slice().sort())
+  var edges = [], seen = new Set();
+  function addEdge(a, b) {
+    if (!a || !b || a === b) return;
+    var k = a + '\u0000' + b;
+    if (seen.has(k)) return;
+    seen.add(k); edges.push({ from: a, to: b });
+  }
 
-    // start 节点（流程起点）
-    flowNodes.push({ type: 'start' })
-
-    for (let gi = 0; gi < flat.length;) {
-      const t = flat[gi]
-      if (t._loopGroup) {
-        // loop 折叠框
-        const g = { key: t._loopGroup, name: t._loopGroupName || t._loopGroup, items: [] }
-        while (gi < flat.length && flat[gi]._loopGroup === g.key) { g.items.push(flat[gi]); gi++ }
-        loopGroups.push(g)
-        // Iter-26R：检测占位组框（单元素 + _pendingItems 非空 + !_expanded）
-        const isPlaceholder = g.items.length === 1 && g.items[0]._pendingItems && !g.items[0]._expanded
-        flowNodes.push({ type: 'loop', group: g, isPlaceholder })
-      } else if (t._concurrentGroup) {
-        // Iter-8：concurrent 折叠框（⚡ 并发）
-        const g = { key: t._concurrentGroup, name: t._concurrentGroupName || t._concurrentGroup, items: [] }
-        while (gi < flat.length && flat[gi]._concurrentGroup === g.key) { g.items.push(flat[gi]); gi++ }
-        concGroups.push(g)
-        // Iter-26R：检测占位组框
-        const isPlaceholder = g.items.length === 1 && g.items[0]._pendingItems && !g.items[0]._expanded
-        flowNodes.push({ type: 'concgroup', group: g, isPlaceholder })
-      } else {
-        // 垂直组：连续多个 dependsOn 相同的 task（无线框，垂直排列，可并发）
-        const depKey = depKeyOf(t)
-        let j = gi + 1
-        while (j < flat.length && !flat[j]._loopGroup && !flat[j]._concurrentGroup && depKeyOf(flat[j]) === depKey) j++
-        if (j - gi > 1) {
-          flowNodes.push({ type: 'vertgroup', tasks: flat.slice(gi, j), key: 'vg-' + t.id })
-          gi = j
-        } else {
-          flowNodes.push({ type: 'task', task: t })
-          gi++
+  for (var n2 of nodes) {
+    if (n2.kind === 'task') {
+      for (var d of (n2.task.dependsOn || [])) addEdge(resolveDep(d), n2.key);
+    } else {
+      // 组节点：迭代依赖中"指向组外"的即组的外部上游
+      for (var it of n2.items) {
+        for (var d2 of (it.dependsOn || [])) {
+          var r = resolveDep(d2);
+          if (r && r !== n2.key) addEdge(r, n2.key);
         }
       }
     }
+  }
+  return { nodes: nodes, edges: edges, groups: groups };
+}
 
-    // end 节点（流程终点）
-    flowNodes.push({ type: 'end' })
+// ── 2. 分层（最长路径）：无依赖=0，其余=max(依赖层)+1；环防护 ───────────────
+function lgLayersOf(nodes, edges) {
+  var preds = new Map(), succs = new Map();
+  nodes.forEach(function (n) { preds.set(n.key, []); succs.set(n.key, []); });
+  edges.forEach(function (e) {
+    if (succs.has(e.from) && preds.has(e.to)) { succs.get(e.from).push(e.to); preds.get(e.to).push(e.from); }
+  });
+  var layerOf = new Map(), visiting = new Set();
+  function layer(k) {
+    if (layerOf.has(k)) return layerOf.get(k);
+    if (visiting.has(k)) return 0; // 环防护
+    visiting.add(k);
+    var ps = preds.get(k);
+    var l = ps.length ? 1 + Math.max.apply(null, ps.map(layer)) : 0;
+    visiting.delete(k); layerOf.set(k, l); return l;
+  }
+  nodes.forEach(function (n) { layer(n.key); });
+  return { layerOf: layerOf, preds: preds, succs: succs };
+}
 
-    const gW = 132, gH = 46, gHLoop = 64, gap = 44, pad = 24
-    const gapV = 8, padV = 10 // Iter-7：并发组内垂直间隔 + 组框内 padding
-    let svgX = pad
-    const svgChildren = []
+// ── 3. 层内排序（重心法，减少连线交叉）：自上而下+自下而上各扫 2 轮 ────────
+function lgOrderLayers(nodes, layerOf, preds, succs) {
+  var maxL = 0; nodes.forEach(function (n) { maxL = Math.max(maxL, layerOf.get(n.key)); });
+  var layers = [];
+  for (var i = 0; i <= maxL; i++) layers.push([]);
+  nodes.forEach(function (n) { layers[layerOf.get(n.key)].push(n.key); });
+  var pos = new Map();
+  function refresh() { layers.forEach(function (L) { L.forEach(function (k, j) { pos.set(k, j); }); }); }
+  refresh();
+  function bary(k, nbrs) {
+    if (!nbrs.length) return pos.get(k);
+    var s = 0; for (var x of nbrs) s += (pos.has(x) ? pos.get(x) : 0);
+    return s / nbrs.length;
+  }
+  for (var it = 0; it < 2; it++) {
+    for (var li = 1; li < layers.length; li++) {
+      layers[li].sort(function (a, b) { return bary(a, preds.get(a)) - bary(b, preds.get(b)); });
+      refresh();
+    }
+    for (var lj = layers.length - 2; lj >= 0; lj--) {
+      layers[lj].sort(function (a, b) { return bary(a, succs.get(a)) - bary(b, succs.get(b)); });
+      refresh();
+    }
+  }
+  return layers;
+}
 
-    // 展开状态
+// ── 4. 坐标计算：列=层（左→右），层内竖排居中；start/end 圆点占独立窄列 ────
+// extraHeights: Map key→组展开列表额外高度（UI 态经参数注入，函数保持纯）
+var LGEO = { gW: 132, hTask: 46, hGroup: 64, gapX: 64, gapY: 18, padX: 26, padY: 26, capW: 24, listRowH: 20, listPad: 5 };
+function lgNodeHeight(n, extraH) { return n.kind === 'task' ? LGEO.hTask : LGEO.hGroup + (extraH || 0); }
+function lgListHeight(n, isExpanded) {
+  if (n.kind !== 'group' || !isExpanded || !n.items) return 0;
+  return n.items.length * LGEO.listRowH + LGEO.listPad * 2;
+}
+function lgCoords(nodes, layers, extraHeights) {
+  var byKey = new Map(nodes.map(function (n) { return [n.key, n]; }));
+  var maxL = layers.length - 1;
+  function hBox(k) { return byKey.get(k).kind === 'task' ? LGEO.hTask : LGEO.hGroup; }
+  function hTotal(k) { return lgNodeHeight(byKey.get(k), extraHeights ? (extraHeights.get(k) || 0) : 0); }
+  var colH = layers.map(function (L) {
+    return L.reduce(function (s, k) { return s + hTotal(k); }, 0) + Math.max(0, L.length - 1) * LGEO.gapY;
+  });
+  var totalH = Math.max.apply(null, colH);
+  var canvasH = totalH + LGEO.padY * 2;
+  var pos = new Map(); // key → { x, y, w, h:框高, hTotal:含展开列表, cy }
+  function colX(i) { return LGEO.padX + LGEO.capW + LGEO.gapX + i * (LGEO.gW + LGEO.gapX); }
+  layers.forEach(function (L, li) {
+    var y = LGEO.padY + (totalH - colH[li]) / 2;
+    for (var k of L) {
+      var hb = hBox(k);
+      pos.set(k, { x: colX(li), y: y, w: LGEO.gW, h: hb, hTotal: hTotal(k), cy: y + hb / 2, layer: li });
+      y += hTotal(k) + LGEO.gapY;
+    }
+  });
+  var startCx = LGEO.padX + LGEO.capW / 2;
+  var endCx = colX(maxL) + LGEO.gW + LGEO.gapX + LGEO.capW / 2;
+  pos.set('__wf_start__', { x: startCx - 10, y: canvasH / 2 - 10, w: 20, h: 20, cy: canvasH / 2, cap: true });
+  pos.set('__wf_end__', { x: endCx - 10, y: canvasH / 2 - 10, w: 20, h: 20, cy: canvasH / 2, cap: true });
+  var svgW = endCx + LGEO.capW / 2 + LGEO.padX;
+  return { pos: pos, canvasH: canvasH, svgW: svgW, colX: colX, maxLayer: maxL };
+}
+
+// ── 5. 连线路由（保证不穿图元）────────────────────────────────────────────
+// pos.x 对卡片=左缘、对圆点=包围盒左缘（cx-10），故 x1=t.x 恒锚在图元边缘。
+// 相邻列（tl-sl==1）：贝塞尔曲线活动范围仅在列间空隙，天然不穿图元；
+// 跨层边（tl-sl>=2）：改走「沟道+走廊」圆角直角路由——
+//   垂直段走列间空隙（无图元），水平段走中间列图元之间的空闲水平带。
+function lgClearBands(boxes, canvasH) {
+  var iv = boxes.map(function (b) { return [b.y, b.y + b.h]; }).sort(function (a, b) { return a[0] - b[0]; });
+  var bands = [], cur = LGEO.padY;
+  iv.forEach(function (x) {
+    if (x[0] > cur) bands.push([cur, x[0]]);
+    cur = Math.max(cur, x[1]);
+  });
+  if (cur < canvasH - LGEO.padY) bands.push([cur, canvasH - LGEO.padY]);
+  return bands;
+}
+function lgPickBand(bands, y) {
+  var best = null, bd = Infinity;
+  bands.forEach(function (b) {
+    var d = (y >= b[0] && y <= b[1]) ? 0 : Math.min(Math.abs(y - b[0]), Math.abs(y - b[1]));
+    if (b[1] - b[0] < 12) d += 1000; // 过窄带不优先
+    if (d < bd) { bd = d; best = b; }
+  });
+  return best;
+}
+function lgDedupePts(pts) {
+  var out = [];
+  pts.forEach(function (p) {
+    var q = out[out.length - 1];
+    if (!q || Math.abs(q.x - p.x) > 0.5 || Math.abs(q.y - p.y) > 0.5) out.push(p);
+  });
+  return out;
+}
+// 轴对齐折线 + 圆角（二次贝塞尔过渡）
+function lgOrthPath(pts, r) {
+  pts = lgDedupePts(pts);
+  if (pts.length < 2) return '';
+  var d = 'M ' + pts[0].x + ',' + pts[0].y;
+  for (var i = 1; i < pts.length - 1; i++) {
+    var p = pts[i], prev = pts[i - 1], next = pts[i + 1];
+    var rr = Math.min(r,
+      Math.abs(p.x - prev.x) || Infinity, Math.abs(p.y - prev.y) || Infinity,
+      Math.abs(next.x - p.x) || Infinity, Math.abs(next.y - p.y) || Infinity);
+    rr = Math.min(rr, r);
+    var ax = p.x - Math.sign(p.x - prev.x) * (isFinite(rr) ? rr : 0);
+    var ay = p.y - Math.sign(p.y - prev.y) * (isFinite(rr) ? rr : 0);
+    var bx = p.x + Math.sign(next.x - p.x) * (isFinite(rr) ? rr : 0);
+    var by = p.y + Math.sign(next.y - p.y) * (isFinite(rr) ? rr : 0);
+    d += ' L ' + ax + ',' + ay + ' Q ' + p.x + ',' + p.y + ' ' + bx + ',' + by;
+  }
+  d += ' L ' + pts[pts.length - 1].x + ',' + pts[pts.length - 1].y;
+  return d;
+}
+// ctx: { layerOfKey(key→层号，start=-1/end=maxLayer+1), colX(i), canvasH, colKeys(L→该层节点 key 数组) }
+function lgRouteEdges(edges, pos, ctx) {
+  var list = [];
+  // 锚点侧错层（全部边）：共源/共汇的多条边在盒高内错开 14px——
+  // 扇入箭头在目标左缘排开、扇出曲线从不同高度出发，避免末段/起始段共线贴合
+  var offSrc = new Map(), offTgt = new Map();
+  function groupPush(m, k, v) { if (!m.has(k)) m.set(k, []); m.get(k).push(v); }
+  var bySrc = new Map(), byTgt = new Map();
+  edges.forEach(function (e, i) {
+    groupPush(bySrc, e.from, i); groupPush(byTgt, e.to, i);
+  });
+  function depth(e) { return ctx.layerOfKey.get(e.to) - ctx.layerOfKey.get(e.from); }
+  function plan(idxs, key, isSrc) {
+    if (idxs.length < 2) return;
+    var box = pos.get(key), cy = box.cy, n = idxs.length;
+    // 候选锚点高度（中心向上下按 14px 展开，盒高内钳制）
+    var cands = [];
+    for (var k = 0; k < n; k++) {
+      var dy = (k - (n - 1) / 2) * 14;
+      cands.push(cy + Math.min(Math.max(dy, box.y + 10 - cy), box.y + box.h - 10 - cy));
+    }
+    var used = new Array(n).fill(false);
+    if (!isSrc) {
+      // 目标侧（汇入）：相邻边(depth=1)优先取紧贴自身源高的锚点（贴自然高度直行），
+      // 跨层边取剩余外档锚点并按源 y 定序——避免相邻边沿中线横穿跨层边到达线。
+      var cyOf = function (idx) { return pos.get(edges[idx].from).cy; };
+      var adj = idxs.filter(function (idx) { return depth(edges[idx]) === 1; });
+      var skip = idxs.filter(function (idx) { return depth(edges[idx]) !== 1; });
+      adj.sort(function (a, b) { return Math.abs(cyOf(a) - cy) - Math.abs(cyOf(b) - cy); });
+      adj.forEach(function (idx) {
+        var bi = -1, bd = Infinity;
+        cands.forEach(function (c, j) { if (used[j]) return; var d = Math.abs(c - cyOf(idx)); if (d < bd) { bd = d; bi = j; } });
+        used[bi] = true; offTgt.set(idx, cands[bi] - cy);
+      });
+      skip.sort(function (a, b) { return cyOf(a) - cyOf(b); });
+      var remain = []; cands.forEach(function (c, j) { if (!used[j]) remain.push(c); });
+      skip.forEach(function (idx, kk) { if (kk < remain.length) offTgt.set(idx, remain[kk] - cy); });
+    } else {
+      // 源侧（扇出）：按目标 y 升序（平局列深降序），保持空间顺序不交叉
+      var tyOf = function (idx) { return pos.get(edges[idx].to).cy; };
+      var sorted = idxs.slice().sort(function (a, b) {
+        if (tyOf(a) !== tyOf(b)) return tyOf(a) - tyOf(b);
+        return depth(edges[b]) - depth(edges[a]);
+      });
+      sorted.forEach(function (idx, k) {
+        var dy = (k - (sorted.length - 1) / 2) * 14;
+        dy = Math.min(Math.max(dy, box.y + 10 - cy), box.y + box.h - 10 - cy);
+        offSrc.set(idx, dy);
+      });
+    }
+  }
+  bySrc.forEach(function (idxs, key) { plan(idxs, key, true); });
+  byTgt.forEach(function (idxs, key) { plan(idxs, key, false); });
+
+  // 判定正交边：跨层边 或 汇入节点（入度≥2）→ 走正交楼梯式；
+  // 分支出边与简单相邻边保留贝塞尔（扇出曲线优雅且异步锚点错层本就不交叉）。
+  var inDeg = new Map();
+  edges.forEach(function (e) { inDeg.set(e.to, (inDeg.get(e.to) || 0) + 1); });
+  var orthoIdx = new Set(), ortho = [];
+  edges.forEach(function (e, i) {
+    var sl = ctx.layerOfKey.get(e.from), tl = ctx.layerOfKey.get(e.to);
+    if (tl - sl >= 2 || (inDeg.get(e.to) || 0) >= 2) { orthoIdx.add(i); ortho.push({ i: i, e: e, sl: sl, tl: tl }); }
+  });
+
+  // 同目标（汇入）的正交跨层边：分配到不同走廊带（上源走上带、下源走下带），避免共带扭缠
+  var bandOf = new Map();
+  var tgtGroups = new Map();
+  ortho.forEach(function (o) { if (o.tl - o.sl >= 2) groupPush(tgtGroups, o.e.to, o); });
+  tgtGroups.forEach(function (grp) {
+    if (grp.length < 2) return;
+    var allKeys = [];
+    grp.forEach(function (o) { for (var L = o.sl + 1; L < o.tl; L++) allKeys = allKeys.concat(ctx.colKeys(L)); });
+    var bands = lgClearBands(allKeys.map(function (k) { return pos.get(k); }), ctx.canvasH);
+    if (!bands.length) return;
+    var sorted = grp.slice().sort(function (a, b) {
+      return (pos.get(a.e.from).cy + (offSrc.get(a.i) || 0)) - (pos.get(b.e.from).cy + (offSrc.get(b.i) || 0));
+    });
+    var m = bands.length, n = sorted.length;
+    sorted.forEach(function (o, k) {
+      var bi = m === 1 ? 0 : Math.round(k * (m - 1) / Math.max(1, n - 1));
+      bandOf.set(o.i, bands[bi]);
+    });
+  });
+
+  var gapUse = new Map();
+  ortho.forEach(function (o) {
+    var s = pos.get(o.e.from), t = pos.get(o.e.to);
+    var x0 = s.x + s.w, y0 = s.cy + (offSrc.get(o.i) || 0), x1 = t.x, y1 = t.cy + (offTgt.get(o.i) || 0);
+    if (o.tl - o.sl >= 2) {
+      // 跨层：沟道+走廊直角（c1 源列右沟、c2 目标列左沟）
+      var c1 = (ctx.colX(o.sl) + LGEO.gW + ctx.colX(o.sl + 1)) / 2;
+      var c2 = (ctx.colX(o.tl - 1) + LGEO.gW + ctx.colX(o.tl)) / 2;
+      var u1 = gapUse.get('g' + o.sl) || 0; gapUse.set('g' + o.sl, u1 + 1);
+      var u2 = gapUse.get('g' + o.tl) || 0; gapUse.set('g' + o.tl, u2 + 1);
+      c1 += ((u1 % 3) - 1) * 9; c2 += ((u2 % 3) - 1) * 9;
+      var midKeys = [];
+      for (var L = o.sl + 1; L < o.tl; L++) midKeys = midKeys.concat(ctx.colKeys(L));
+      var bands = lgClearBands(midKeys.map(function (k) { return pos.get(k); }), ctx.canvasH);
+      var band = bandOf.get(o.i) || lgPickBand(bands, (y0 + y1) / 2) || [LGEO.padY, ctx.canvasH - LGEO.padY];
+      var chY = Math.min(Math.max((y0 + y1) / 2, band[0] + 6), band[1] - 6);
+      list.push({ id: 'e' + o.i, d: lgOrthPath([
+        { x: x0, y: y0 }, { x: c1, y: y0 }, { x: c1, y: chY },
+        { x: c2, y: chY }, { x: c2, y: y1 }, { x: x1, y: y1 }
+      ], 9) });
+    } else {
+      // 相邻但汇入（合并点）：单一沟道 L 形（避免与跨层边在目标前乱扭）
+      var xc = (x0 + x1) / 2;
+      list.push({ id: 'e' + o.i, d: lgOrthPath([
+        { x: x0, y: y0 }, { x: xc, y: y0 }, { x: xc, y: y1 }, { x: x1, y: y1 }
+      ], 9) });
+    }
+  });
+
+  // ── 简单相邻边：贝塞尔（活动范围仅在列间空隙，天然不穿图元）──
+  edges.forEach(function (e, i) {
+    if (orthoIdx.has(i)) return;
+    var s = pos.get(e.from), t = pos.get(e.to);
+    var x0 = s.x + s.w, y0 = s.cy + (offSrc.get(i) || 0), x1 = t.x, y1 = t.cy + (offTgt.get(i) || 0);
+    var dx = Math.max(34, (x1 - x0) * 0.42);
+    list.push({
+      id: 'e' + i,
+      d: 'M ' + x0 + ',' + y0 + ' C ' + (x0 + dx) + ',' + y0 + ' ' + (x1 - dx) + ',' + y1 + ' ' + x1 + ',' + y1
+    });
+  });
+  return list;
+}
+
+// ── 组聚合状态（与现网 LoopGroupNode 相同规则）────────────────────────────
+function lgAggStatus(items) {
+  var c = { PENDING: 0, RUNNING: 0, DONE: 0, FAILED: 0, SKIPPED: 0 };
+  items.forEach(function (t) { c[t.status] = (c[t.status] || 0) + 1; });
+  return {
+    counts: c,
+    agg: c.RUNNING > 0 ? 'RUNNING' : c.FAILED > 0 ? 'FAILED' : c.SKIPPED > 0 ? 'SKIPPED'
+      : c.DONE === items.length ? 'DONE' : 'PENDING'
+  };
+}
+
+  // ── Iter-30 分层布局 DAG 画布（渲染层；算法区上方已自 PoC/dag-layered-prototype.html 定稿移植）──
+  const DagCanvas = React.memo(function DagCanvas(props) {
+    const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
     const [expanded, setExpanded] = React.useState({})
     const toggleGroup = React.useCallback(key => {
       setExpanded(prev => {
-        const n = {}
-        for (const k in prev) n[k] = prev[k]
-        n[key] = !prev[key]
-        return n
+        const nx = {}
+        for (const k in prev) nx[k] = prev[k]
+        nx[key] = !prev[key]
+        return nx
       })
     }, [])
 
-    // 最高节点高度（统一垂直中心 + SVG 高度）
-    const nodeHeightOf = (fn) => {
-      if (fn.type === 'loop' || fn.type === 'concgroup') return gHLoop
-      if (fn.type === 'vertgroup') return 2 * padV + fn.tasks.length * gH + (fn.tasks.length - 1) * gapV
-      return gH
-    }
-    const maxH = flowNodes.reduce((mx, fn) => Math.max(mx, nodeHeightOf(fn)), 0)
-    const centerY = maxH / 2 + pad
+    const flat = Array.isArray(tasks) ? tasks : []
+    const graph = lgBuildGraph(flat)
+    const la = lgLayersOf(graph.nodes, graph.edges)
+    const layers = lgOrderLayers(graph.nodes, la.layerOf, la.preds, la.succs)
+    const edges = graph.edges.slice()
+    const hasOut = new Set(edges.map(e => e.from))
+    graph.nodes.forEach(n => {
+      if ((la.preds.get(n.key) || []).length === 0 && la.layerOf.get(n.key) === 0) edges.push({ from: '__wf_start__', to: n.key })
+      if (!hasOut.has(n.key)) edges.push({ from: n.key, to: '__wf_end__' })
+    })
+    const extraH = new Map()
+    graph.nodes.forEach(n => { const eh = lgListHeight(n, !!expanded[n.key]); if (eh) extraH.set(n.key, eh) })
+    const geo = lgCoords(graph.nodes, layers, extraH)
+    const layerOfKey = new Map()
+    graph.nodes.forEach(n => layerOfKey.set(n.key, la.layerOf.get(n.key)))
+    layerOfKey.set('__wf_start__', -1)
+    layerOfKey.set('__wf_end__', geo.maxLayer + 1)
+    const paths = lgRouteEdges(edges, geo.pos, { layerOfKey: layerOfKey, colX: geo.colX, canvasH: geo.canvasH, colKeys: L => layers[L] || [] })
 
-    // 节点位置
-    const nodePositions = []
+    const mc = stage === 'COMPLETED' ? (gateResult === 'FAIL' ? C.FAILED : C.DONE) : stage === 'FAILED' ? C.FAILED : stage === 'RUNNING' ? C.RUNNING : C.PENDING
+    const doneN = flat.filter(t => t.status === 'DONE').length
+    const pct = flat.length ? Math.round(doneN / flat.length * 100) : 0
 
-    flowNodes.forEach((fn, fi) => {
-      const h = nodeHeightOf(fn)
-      const cy = fn.type === 'start' || fn.type === 'end' ? centerY - gH / 2 : centerY - h / 2
-
-      if (fn.type === 'task') {
-        const t = fn.task
-        const isSel = selectedId === t.id
-        svgChildren.push(
-          React.createElement('rect', {
-            key: 'r' + t.id, x: svgX, y: cy, width: gW, height: h, rx: 8,
-            fill: C[t.status] || C.PENDING, opacity: 0.92,
-            stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
-            cursor: 'pointer', onClick: () => onSelect(t.id)
-          }),
-          React.createElement('text', {
-            key: 't' + t.id, x: svgX + gW / 2, y: cy + h / 2 + 5,
-            textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600
-          }, t.name || t.id),
-          React.createElement('text', {
-            key: 'u' + t.id, x: svgX + gW / 2, y: cy + h / 2 + 18,
-            textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
-          }, t.id),
-        )
-      } else if (fn.type === 'start') {
-        // start 节点（绿色实心小圆点，流程起点）
-        const cx = svgX + gW / 2
-        svgChildren.push(
-          React.createElement('circle', { key: 'st', cx, cy: centerY, r: 12, fill: '#22c55e' }),
-        )
-      } else if (fn.type === 'end') {
-        // end 节点（红色空心小圆圈，流程终点）
-        const cx = svgX + gW / 2
-        svgChildren.push(
-          React.createElement('circle', { key: 'en', cx, cy: centerY, r: 12, fill: 'none', stroke: '#ef4444', strokeWidth: 3 }),
-        )
-      } else if (fn.type === 'loop') {
-        // Loop 组节点
-        const g = fn.group
-        if (fn.isPlaceholder) {
-          // Iter-26R：占位组框（虚线琥珀色 + "⏳ 等待 items..."）
-          svgChildren.push(
-            React.createElement('rect', {
-              key: 'ph-r-' + g.key, x: svgX, y: cy, width: gW, height: gHLoop, rx: 8,
-              fill: 'rgba(245, 158, 11, 0.15)', opacity: 0.92,
-              stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3',
-            }),
-            React.createElement('text', {
-              key: 'ph-t-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 - 2,
-              textAnchor: 'middle', fill: '#f59e0b', fontSize: 12, fontWeight: 600
-            }, '↻ ' + (g.name || g.key)),
-            React.createElement('text', {
-              key: 'ph-u-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 + 14,
-              textAnchor: 'middle', fill: '#f59e0b', fontSize: 10, opacity: 0.8
-            }, '⏳ 等待 items...'),
-          )
-        } else {
-          const lgEls = LoopGroupNode({
-            x: svgX, y: cy, gW, gH: gHLoop, group: g,
-            selectedId, onSelect, isExpanded: !!expanded[g.key], onToggle: () => toggleGroup(g.key)
-          })
-          svgChildren.push(...lgEls)
+    // ── 节点渲染（SVG 元素数组）──
+    function nodeEls(n) {
+      const p = geo.pos.get(n.key)
+      const isSel = selectedId === n.key
+      const kids = [React.createElement('title', { key: 'tt' }, n.name + '\n' + n.key + (n.kind === 'task' ? '\n状态: ' + n.status : ''))]
+      if (n.kind === 'task') {
+        const c = C[n.status] || C.PENDING
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? '#3b82f6' : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5 }))
+        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: c }))
+        kids.push(React.createElement('circle', { key: 'dot', cx: p.x + 15, cy: p.y + 16, r: 4, fill: c }))
+        kids.push(React.createElement('text', { key: 'nm', x: p.x + 24, y: p.y + 20, fontSize: 12, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc(n.name, LGEO.gW - 34)))
+        kids.push(React.createElement('text', { key: 'idt', x: p.x + 15, y: p.y + 35, fontSize: 10, fill: '#94a3b8' }, lgTrunc(n.key, LGEO.gW - 26)))
+        if (n.task.gate) {
+          const gc = n.task.gate.gateResult === 'PASS' ? '#22c55e' : n.task.gate.gateResult === 'FAIL' ? '#ef4444' : '#64748b'
+          kids.push(React.createElement('circle', { key: 'gate', cx: p.x + LGEO.gW - 10, cy: p.y + 10, r: 3.5, fill: gc }))
         }
-      } else if (fn.type === 'concgroup') {
-        // Iter-8：concurrent 节点——复用 LoopGroupNode（实线 + 进度 + 状态 + 可展开），标注 ⚡ 并发
-        const g = fn.group
-        if (fn.isPlaceholder) {
-          // Iter-26R：占位组框（虚线琥珀色 + "⏳ 等待 items..."）
-          svgChildren.push(
-            React.createElement('rect', {
-              key: 'ph-r-' + g.key, x: svgX, y: cy, width: gW, height: gHLoop, rx: 8,
-              fill: 'rgba(245, 158, 11, 0.15)', opacity: 0.92,
-              stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3',
-            }),
-            React.createElement('text', {
-              key: 'ph-t-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 - 2,
-              textAnchor: 'middle', fill: '#f59e0b', fontSize: 12, fontWeight: 600
-            }, '⚡ ' + (g.name || g.key)),
-            React.createElement('text', {
-              key: 'ph-u-' + g.key, x: svgX + gW / 2, y: cy + gHLoop / 2 + 14,
-              textAnchor: 'middle', fill: '#f59e0b', fontSize: 10, opacity: 0.8
-            }, '⏳ 等待 items...'),
-          )
-        } else {
-          const cgEls = LoopGroupNode({
-            x: svgX, y: cy, gW, gH: gHLoop, group: g,
-            selectedId, onSelect, isExpanded: !!expanded['cc-' + g.key], onToggle: () => toggleGroup('cc-' + g.key),
-            label: '\u26A1 并发 '
-          })
-          svgChildren.push(...cgEls)
-        }
+      } else if (n.kind === 'placeholder') {
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(245,158,11,0.10)', stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3' }))
+        kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#f59e0b' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
+        kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#f59e0b', opacity: 0.85 }, '等待 items：' + (n.items[0]._pendingItems || '')))
       } else {
-        // Iter-8：依赖同一前驱的节点——垂直并列，无线框（各自独立，可并发）
-        fn.tasks.forEach((t, i) => {
-          const ty = cy + padV + i * (gH + gapV)
-          const isSel = selectedId === t.id
-          svgChildren.push(
-            React.createElement('rect', {
-              key: 'r' + t.id, x: svgX + 4, y: ty, width: gW - 8, height: gH, rx: 6,
-              fill: C[t.status] || C.PENDING, opacity: 0.92,
-              stroke: isSel ? '#fff' : 'transparent', strokeWidth: isSel ? 3 : 0,
-              cursor: 'pointer', onClick: () => onSelect(t.id)
-            }),
-            React.createElement('text', {
-              key: 't' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 5,
-              textAnchor: 'middle', fill: '#fff', fontSize: 12, fontWeight: 600
-            }, t.name || t.id),
-            React.createElement('text', {
-              key: 'u' + t.id, x: svgX + gW / 2, y: ty + gH / 2 + 18,
-              textAnchor: 'middle', fill: 'rgba(255,255,255,0.85)', fontSize: 10
-            }, t.id),
-          )
+        const agg = lgAggStatus(n.items)
+        const ac = C[agg.agg] || C.PENDING
+        const isConc = n.groupKind === 'conc'
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? '#3b82f6' : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5 }))
+        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: ac }))
+        kids.push(React.createElement('text', { key: 'lb', x: p.x + 10, y: p.y + 17, fontSize: 11, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc((isConc ? '⚡ ' : '↻ ') + n.name + ' (' + n.items.length + ')', LGEO.gW - 40)))
+        const segs = [React.createElement('rect', { key: 'pbg', x: p.x + 10, y: p.y + 30, width: p.w - 20, height: 6, rx: 3, fill: 'rgba(0,0,0,0.35)' })]
+        let segX = p.x + 10
+        const barW = p.w - 20
+        ;['DONE', 'RUNNING', 'FAILED', 'SKIPPED', 'PENDING'].forEach(st => {
+          const cnt = agg.counts[st]
+          if (!cnt) return
+          const w = Math.max(cnt / n.items.length * barW, 8)
+          segs.push(React.createElement('rect', { key: 'sg' + st, x: segX, y: p.y + 30, width: w, height: 6, rx: 3, fill: C[st] }))
+          segX += w
         })
+        kids.push(segs)
+        const parts = []
+        ;[['DONE', '✓'], ['RUNNING', '●'], ['FAILED', '✗'], ['SKIPPED', '⏭']].forEach(x => { if (agg.counts[x[0]]) parts.push(agg.counts[x[0]] + x[1]) })
+        kids.push(React.createElement('text', { key: 'ct', x: p.x + 10, y: p.y + 51, fontSize: 9, fill: 'rgba(255,255,255,0.85)' }, parts.join(' ')))
+        kids.push(React.createElement('text', {
+          key: 'ex', x: p.x + p.w - 8, y: p.y + 17, textAnchor: 'end', fontSize: 11, fill: '#cbd5e1',
+          onClick: e => { e.stopPropagation(); toggleGroup(n.key) }, style: { cursor: 'pointer' }
+        }, expanded[n.key] ? '▼' : '▶'))
+        if (expanded[n.key]) {
+          const ly = p.y + p.h, lh = p.hTotal - p.h, lr = 6
+          const dFill = 'M ' + p.x + ',' + ly + ' L ' + (p.x + p.w) + ',' + ly +
+            ' L ' + (p.x + p.w) + ',' + (ly + lh - lr) + ' Q ' + (p.x + p.w) + ',' + (ly + lh) + ' ' + (p.x + p.w - lr) + ',' + (ly + lh) +
+            ' L ' + (p.x + lr) + ',' + (ly + lh) + ' Q ' + p.x + ',' + (ly + lh) + ' ' + p.x + ',' + (ly + lh - lr) + ' Z'
+          kids.push(React.createElement('path', { key: 'lfill', d: dFill, fill: '#131c30' }))
+          const dLine = 'M ' + p.x + ',' + ly + ' L ' + p.x + ',' + (ly + lh - lr) +
+            ' Q ' + p.x + ',' + (ly + lh) + ' ' + (p.x + lr) + ',' + (ly + lh) +
+            ' L ' + (p.x + p.w - lr) + ',' + (ly + lh) +
+            ' Q ' + (p.x + p.w) + ',' + (ly + lh) + ' ' + (p.x + p.w) + ',' + (ly + lh - lr) +
+            ' L ' + (p.x + p.w) + ',' + ly
+          kids.push(React.createElement('path', { key: 'lline', d: dLine, fill: 'none', stroke: lgRgba(ac, 0.55), strokeWidth: 1.25 }))
+          const rowEls = []
+          n.items.forEach((t, i) => {
+            const ry = ly + LGEO.listPad + i * LGEO.listRowH
+            const rowName = (t._loopItem != null && t._loopItem !== '（占位）') ? t._loopItem : (t.name || t.id)
+            rowEls.push(React.createElement('g', { key: 'r' + t.id, style: { cursor: 'pointer' }, onClick: e => { e.stopPropagation(); onSelect(t.id) } }, [
+              React.createElement('title', { key: 'tt' }, (t.name || t.id) + '\n' + t.id + ' · ' + t.status),
+              React.createElement('circle', { key: 'd', cx: p.x + 10, cy: ry + LGEO.listRowH / 2, r: 3.5, fill: C[t.status] || C.PENDING }),
+              React.createElement('text', { key: 'nm', x: p.x + 18, y: ry + 14, fontSize: 10, fill: '#cbd5e1' }, (i + 1) + '. ' + lgTrunc(rowName, LGEO.gW - 52)),
+              React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#64748b' }, String(t.status)),
+            ]))
+          })
+          kids.push(rowEls)
+        }
       }
-
-      nodePositions.push({
-        x: svgX, w: gW, h,
-        type: fn.type,
-        key: fn.type === 'start' || fn.type === 'end' ? fn.type
-          : fn.type === 'loop' || fn.type === 'concgroup' ? fn.group.key
-          : fn.type === 'vertgroup' ? fn.key
-          : fn.task.id
-      })
-      svgX += gW + gap
-
-      // 箭头（统一 centerY，对准所有节点中心）
-      if (fi < flowNodes.length - 1) {
-        svgChildren.push(
-          React.createElement('line', {
-            key: 'a' + fi,
-            x1: svgX - gap + 3, y1: centerY,
-            x2: svgX - 3, y2: centerY,
-            stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#da)'
-          }),
-        )
-      }
-    })
-
-    // 箭头标记
-    if (flowNodes.length > 0) {
-      svgChildren.push(
-        React.createElement('defs', { key: 'd' },
-          React.createElement('marker', {
-            id: 'da', viewBox: '0 0 10 10', refX: 9, refY: 5,
-            markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse'
-          },
-          React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' }))))
+      return React.createElement('g', { key: 'n-' + n.key, style: { cursor: 'pointer' }, onClick: () => onSelect(n.key) }, kids)
     }
 
-    const svgW = flowNodes.length ? pad * 2 + flowNodes.reduce((s, fn, i) => s + (i > 0 ? gap : 0) + gW, 0) : 0
-    const svgH = maxH + 2 * pad
+    const svgKids = [React.createElement('defs', { key: 'defs' },
+      React.createElement('marker', { id: 'wfdag-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' },
+        React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' })))]
+    paths.forEach(p => svgKids.push(React.createElement('path', { key: p.id, d: p.d, fill: 'none', stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#wfdag-arrow)', opacity: 0.85 })))
+    const sp = geo.pos.get('__wf_start__'), ep = geo.pos.get('__wf_end__')
+    if (sp) svgKids.push(React.createElement('circle', { key: 'cap-s', cx: sp.x + 10, cy: sp.cy, r: 10, fill: '#22c55e' }, React.createElement('title', null, '开始')))
+    if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: 'none', stroke: '#ef4444', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
+    graph.nodes.forEach(n => svgKids.push(nodeEls(n)))
 
-    // 展开的列表（SVG 下方）
-    const listElems = []
-    loopGroups.forEach(g => {
-      if (!expanded[g.key]) return
-      const pos = nodePositions.find(p => p.type === 'loop' && p.key === g.key)
-      if (!pos) return
-      const listX = pos.x
-      const listW = gW
-      listElems.push(
-        React.createElement('div', {
-          key: 'll' + g.key,
-          style: {
-            marginLeft: listX + 'px',
-            width: listW + 'px',
-            background: 'rgba(148,163,184,0.05)',
-            border: '1px solid rgba(148,163,184,0.2)',
-            borderTop: 'none',
-            borderBottomLeftRadius: 8, borderBottomRightRadius: 8,
-            padding: '4px 0',
-            fontSize: 12,
-          },
-        }, g.items.map((t, i) => {
-          const sel = selectedId === t.id
-          return React.createElement('div', {
-            key: t.id, onClick: () => onSelect(t.id),
-            style: {
-              display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
-              cursor: 'pointer', background: sel ? 'rgba(59,130,246,0.1)' : 'transparent',
-            },
-          }, [
-            React.createElement('span', {
-              style: { width: 8, height: 8, borderRadius: 4, background: C[t.status] || C.PENDING, flexShrink: 0 }
-            }),
-            React.createElement('span', { style: { flex: 1, color: '#475569' } }, (i + 1) + '. ' + (t.name || t.id)),
-            React.createElement('span', { style: { color: '#64748b', fontSize: 11 } }, t.status),
-          ])
-        }))
-      )
+    const legendKids = []
+    ;[['PENDING', '待跑'], ['RUNNING', '运行中'], ['DONE', '完成'], ['FAILED', '失败'], ['SKIPPED', '跳过']].forEach(x => {
+      legendKids.push(React.createElement('span', { key: x[0], style: { display: 'inline-flex', alignItems: 'center', gap: 5 } }, [
+        React.createElement('span', { key: 'd', style: { width: 9, height: 9, borderRadius: 5, background: C[x[0]] } }),
+        x[1],
+      ]))
     })
-
-    // Iter-8：concurrent 组展开列表（SVG 下方，同 loop）
-    concGroups.forEach(g => {
-      if (!expanded['cc-' + g.key]) return
-      const pos = nodePositions.find(p => p.type === 'concgroup' && p.key === g.key)
-      if (!pos) return
-      const listX = pos.x
-      const listW = gW
-      listElems.push(
-        React.createElement('div', {
-          key: 'cl' + g.key,
-          style: {
-            marginLeft: listX + 'px',
-            width: listW + 'px',
-            background: 'rgba(59,130,246,0.05)',
-            border: '1px solid rgba(59,130,246,0.2)',
-            borderTop: 'none',
-            borderBottomLeftRadius: 8, borderBottomRightRadius: 8,
-            padding: '4px 0',
-            fontSize: 12,
-          },
-        }, g.items.map((t, i) => {
-          const sel = selectedId === t.id
-          return React.createElement('div', {
-            key: t.id, onClick: () => onSelect(t.id),
-            style: {
-              display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px',
-              cursor: 'pointer', background: sel ? 'rgba(59,130,246,0.1)' : 'transparent',
-            },
-          }, [
-            React.createElement('span', {
-              style: { width: 8, height: 8, borderRadius: 4, background: C[t.status] || C.PENDING, flexShrink: 0 }
-            }),
-            React.createElement('span', { style: { flex: 1, color: '#475569' } }, (i + 1) + '. ' + (t.name || t.id)),
-            React.createElement('span', { style: { color: '#64748b', fontSize: 11 } }, t.status),
-          ])
-        }))
-      )
+    ;['↻ 循环组', '⚡ 并发组', '⏳ 虚线=延迟展开', '卡右上点=门禁结果'].forEach((s, i) => {
+      legendKids.push(React.createElement('span', { key: 'c' + i, style: { border: '1px solid rgba(148,163,184,0.3)', borderRadius: 5, padding: '0 6px', lineHeight: '17px' } }, s))
     })
 
     return React.createElement('div', { style: { padding: '14px 18px 10px' } }, [
-      // 状态栏
-      React.createElement('div', {
-        key: 'sb',
-        style: { display: 'flex', alignItems: 'center', gap: 14, marginBottom: 8, fontSize: 12, color: '#64748b', flexWrap: 'wrap' },
-      }, [
+      React.createElement('div', { key: 'sb', style: { display: 'flex', alignItems: 'center', gap: 14, marginBottom: 6, fontSize: 12, color: '#64748b', flexWrap: 'wrap' } }, [
         React.createElement('span', { key: 'w', style: { fontWeight: 600, color: '#334155' } }, workflowName || '-'),
         React.createElement('span', { key: 's' }, 'S: ', React.createElement('span', { style: { color: mc, fontWeight: 700 } },
-          (stage || '-') + ' ' + (stage === 'PENDING' ? 'Pd' : stage === 'RUNNING' ? 'Rn' : stage === 'COMPLETED' ? 'Cp' : 'Fl'))),
+          (stage || '-') + ' ' + (stage === 'PENDING' ? 'Pd' : stage === 'RUNNING' ? 'Rn' : stage === 'COMPLETED' ? 'Cp' : stage === 'STOPPED' ? 'St' : 'Fl'))),
+        React.createElement('span', { key: 'pb', style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, [
+          React.createElement('span', { key: 'bar', style: { width: 110, height: 6, borderRadius: 3, background: 'rgba(148,163,184,0.25)', overflow: 'hidden', display: 'inline-block' } },
+            React.createElement('span', { style: { display: 'block', height: '100%', width: pct + '%', background: '#22c55e' } })),
+          '✓' + doneN + '/' + flat.length,
+        ]),
         React.createElement('span', { key: 'g' }, 'G: ', gateResult
           ? React.createElement('span', { style: { color: gateResult === 'PASS' ? C.DONE : C.FAILED, fontWeight: 700 } }, gateResult)
           : '-'),
         retries > 0 ? React.createElement('span', { key: 'r' }, 'R: ' + retries) : null,
         error ? React.createElement('span', { key: 'e', style: { color: C.FAILED } }, error) : null,
       ]),
-      // SVG 流程图
-      flowNodes.length > 0 ? React.createElement('svg', {
-        key: 'svg', width: svgW, height: svgH,
-        xmlns: 'http://www.w3.org/2000/svg',
-        style: { background: 'rgba(148,163,184,0.08)', borderRadius: 8, width: '100%', maxWidth: svgW, marginBottom: 0 },
-      }, svgChildren) : null,
-      // 展开的列表
-      React.createElement('div', { key: 'lx', style: { position: 'relative', marginTop: -4 } }, listElems),
+      React.createElement('div', { key: 'lg', style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8, fontSize: 11, color: '#94a3b8' } }, legendKids),
+      graph.nodes.length ? React.createElement('div', {
+        key: 'scroll',
+        style: { overflowX: 'auto', border: '1px solid rgba(148,163,184,0.18)', borderRadius: 8, background: 'rgba(148,163,184,0.06)' }
+      }, React.createElement('svg', { width: geo.svgW, height: geo.canvasH, xmlns: 'http://www.w3.org/2000/svg', style: { display: 'block' } }, svgKids)) : null,
     ])
   })
 
@@ -1167,6 +1282,8 @@ export function register(ctx) {
           const [createResult, setCreateResult] = React.useState(null)
           const [busy, setBusy] = React.useState(false)
           const [formErr, setFormErr] = React.useState('')
+          // Iter-30 附加修复：创建校验失败的结构化错误清单（host 400 已回传 workflowBeginErrors，此前被丢弃）
+          const [formErrItems, setFormErrItems] = React.useState([])
 
           React.useEffect(() => {
             if (!formOpen || !activeRoot) return
@@ -1195,9 +1312,10 @@ export function register(ctx) {
             return () => { stop = true }
           }, [formOpen, activeRoot])
 
-          const openForm = () => { setFormErr(''); setCreateResult(null); setFormOpen(true) }
+          const openForm = () => { setFormErr(''); setFormErrItems([]); setCreateResult(null); setFormOpen(true) }
           const pickTpl = (v) => {
             setTplSel(v)
+            setFormErr(''); setFormErrItems([])
             const opt = tplOpts.find(o => o.v === v)
             setYamlText(opt && opt.t ? opt.t.yaml : '')
             // Iter-28：切模板重置 params 预填
@@ -1220,7 +1338,7 @@ export function register(ctx) {
             return out
           }
           const submitCreate = async () => {
-            setFormErr(''); setBusy(true)
+            setFormErr(''); setFormErrItems([]); setBusy(true)
             try {
               const params = entriesToParams(paramsEntries)
               const payload = { workspaceRoot: activeRoot, params, sessionId } // Iter-19：面板创建即绑定当前 sessionId
@@ -1231,10 +1349,31 @@ export function register(ctx) {
                 // Iter-24：模板选择统一走可编辑 yaml → workflowText（预定义与内建兜底同构）
                 if (!yamlText.trim()) throw new Error('模板内容为空')
                 payload.workflowText = yamlText
+                // Iter-30 附加修复：同时提交模板源路径——host 据此恢复 definition-preset 语境
+                //（目录锚点，items-from/相对路径按模板子目录解析，消除 E-ITEMS-MISSING 误报）
+                // 并触发模板静态文件 1:1 复制（presetCopy，实例自包含）。内建兜底（无 path）保持旧行为。
+                const tplOpt = tplOpts.find(o => o.v === tplSel)
+                if (tplOpt && tplOpt.t && tplOpt.t.path) payload.workflowPath = tplOpt.t.path
               }
               const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
               const r = await resp.json()
-              if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
+              if (!resp.ok) {
+                // Iter-30 附加修复：结构化校验错误清单展示（此前仅显示 "invalid workflow definition" 一行，
+                // 用户无法定位修复）；workflowBeginErrors 为 host 格式化串，errors 为对象形态兜底。
+                const items = r && Array.isArray(r.workflowBeginErrors) && r.workflowBeginErrors.length
+                  ? r.workflowBeginErrors.map(String)
+                  : (r && Array.isArray(r.errors) && r.errors.length
+                    ? r.errors.map(it => it && typeof it === 'object'
+                      ? '[' + it.code + '] 任务 "' + (it.task || '-') + '" ' + (it.field || '-') + ': ' + (it.message || '')
+                      : String(it))
+                    : [])
+                if (items.length) {
+                  setFormErr('创建被拒绝：定义校验未通过（' + items.length + ' 项，见下方清单）')
+                  setFormErrItems(items)
+                  return
+                }
+                throw new Error((r && r.error) || ('HTTP ' + resp.status))
+              }
               if (typeof wfListLoader === 'function') wfListLoader()
               // Iter-28：创建成功 → 结果视图（warnings 面板展示，承接 Iter-25 遗留；
               // recoveredConflict 一并展示替代旧 alert）。warnings 为空且无冲突 → 直接关弹窗。
@@ -1481,13 +1620,17 @@ export function register(ctx) {
             React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
             React.createElement('label', { key: 'l1' }, '模板 / 来源'),
             React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
-              tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v }, o.label))
+              tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: '#1e293b', background: '#f8fafc' } }, o.label))
             ),
             tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
             tplSel.indexOf('tpl:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
             React.createElement('label', { key: 'l2' }, 'params（键值对；模板默认值已预填，可增删改）'),
             React.createElement(KvEditor, { key: 'pj', entries: paramsEntries, onChange: setParamsEntries, keyPlaceholder: '参数名', valuePlaceholder: '值' }),
             formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
+            formErrItems.length > 0 ? React.createElement('div', {
+              key: 'errlist',
+              style: { border: '1px solid rgba(248,113,113,0.45)', borderRadius: 6, background: 'rgba(248,113,113,0.08)', maxHeight: 180, overflowY: 'auto', padding: '6px 10px', fontSize: 12, fontFamily: 'monospace', whiteSpace: 'pre-wrap', color: '#f87171' }
+            }, formErrItems.map((s, i) => React.createElement('div', { key: i }, '· ' + s))) : null,
             React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
               React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
               React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
