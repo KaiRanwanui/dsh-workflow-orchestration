@@ -34,7 +34,8 @@
 已完成: …（同上）… → Iter-26R ✅ → **Iter-27a ✅（2026-09-03 关闭：预定义目录结构与实例化——templates 按工作流分子目录自包含（实例级同构镜像 inputs/）、create/begin 1:1 复制静态文件（presetCopy）、items 解析链实例目录→defDir→两级链、扫描下钻+同名子目录赢、workflow-paths.js 共享模块（isAbsoluteishPath 前移）+后补丁 items-from/inputs 互斥（条目值经 _loopItem 随派发传入、新建 item-processor 技能、模板 7 处重复 inputs 清零），host v0.17.1，421 单测，用户 GUI 验收通过（四内建模板开箱即用+补丁复验），git 300923d→dd48ff0 已推送，报告 iter27a-report.md，设计 iter27-design.md（拆分版））**
 已完成: …（同上）… → Iter-27a ✅ → **Iter-27b ✅（2026-09-04 关闭：语义校验——workflow-validate.js 校验引擎（8 错误码+2 警告：依赖环/缺 processor/缺 gate checker/技能或输入文件缺失/items 缺失或解析失败/preset 禁字面绝对+重复声明警告），create/begin 硬拦截（拒绝零副作用不建实例）、start/resume 实时闸门（重读 instance.yaml 防创建后退化）、reset 回传不拦、workflow_validate 只读工具（实例/定义两形态+preset 锚定）、/wf/create 同款关口、拒绝响应 hint=验收修正安全红线（被拦后 LLM 只许转告清单+停止，严禁自行搜索/替换技能或输入文件），host v0.18.0，485 单测，用户 GUI 验收通过（拦错/修复放行/删技能拦停含修正复验/零误报），git 585c5b1 已推送，报告 iter27b-report.md）**
 已完成: …（同上）… → Iter-27b ✅ → **Iter-28 ✅（2026-09-04 关闭：实例编辑前台——DAG 下方可折叠双栏编辑器（任务列表+表单：技能下拉预定义/工作区合并同名顶替、inputs/outputs、重试/并发）+实例级 name/maxConcurrency/params 只读区、workflow-edit.js 共享模块（稳定序列化/权限矩阵/白名单补丁）+ /wf/skills·instance-yaml·validate-instance 路由（保存=Iter-27b 校验先于落盘+注释头保留）、创建对话框 params 键值行+成功呈现视图+warnings 面板（25 遗留清）、RUNNING 全禁用+外部 stage 即时刷新，host v0.19.0/client v0.7.0，529 单测，两轮 GUI 验收修正（inputs 添加态/workflow_status 挂 params/persona 内联双写踩坑→**persona 单源化 A 方案**：system-prompt.md 唯一源+sync-persona.js 构建期注入，rc2 内联限制记档 architecture-decisions §8），params 进 subagent 首条消息复验通过，git bc54fdf 已推送，报告 iter28-report.md）**
- 当前:   **Iter-29 实例管理子页签+归档/下载/删除（块4，独立可提前）**。后续=Iter-30 DAG 美化。
+已完成: …（同上）… → Iter-27b ✅ → Iter-28 ✅ → **Iter-29 ✅（2026-09-05 关闭：实例管理子页签+归档/下载/删除——「📋 管理」子页签（活动/归档两段+归档门控 STOPPED/COMPLETED/FAILED+多选 zip 下载+归档删除）、node:fs 直删三重查证定案（DSH fs 服务面无删除 API 但 npm 包 CJS 形态 require 完整可用，pendingCleanup 弃用于目录级操作）、zip-writer.js 第 12 同步 section（STORE 零依赖+bit11 UTF-8）、单测抓出 fs stat undefined 穿透真实 bug 已修，host v0.20.0/client v0.8.0，563 单测，GUI 验收通过（少量展示/交互小问题留待后续规划），报告 iter29-report.md）**
+ 当前:   **Iter-30 DAG 美化与交互（节点详情面板+视觉布局+交互增强）**。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -751,15 +752,17 @@ workflow_list → 列出所有实例 + 状态
 
 ### Iter-29: 实例管理子页签 + 归档/下载/删除（块4，独立可提前/并行）
 
+**状态**：✅ **完成关闭**（2026-09-05，`iter29-report.md`；host v0.20.0 / client v0.8.0）
+
 > **平台边界（Iter-26 实证，2026-09-02）**：DSH fs 服务（dsh-fs-local）**无删除/移动 API**（公开方法面仅 resolve/readText/writeText/editText/listDir/stat/lstat/readBytes/withLock；node rm/rename 被 import 但服务面有意不暴露；bash 能力缝 `ctx.subprocess` 同样不对插件开放 inject）。本迭代"删除实例""打包下载"若 Host 侧无法直接实现，须复用 Iter-26 reset 的 **pendingCleanup 模式**（工具返回命令、编排会话 bash 执行）或届时评估扩展通道；备份/打包还需注意 writeArchiveBackup 只复制顶层文件不递归子目录的既有局限。
 
-**交付**：
-1. **实例管理子页签**：列表分**活动/归档**两段；列=名称、ID、状态、孤儿标记、任务进度、创建时间；
-2. 归档全链（沿用已定稿设计 `workflow-lifecycle-design.md`：`archive/<id>/<时间戳>_<类别>_<状态>/` + manifest；reset 备份升级为目录归档；绑定会话终态后 DONE）；
-3. **打包下载**：多选打**一个 zip**（包内按实例分目录），仅实例目录内容；
-4. **删除**：非 RUNNING 可删（含归档段）；删除前数据丢失提醒；删除时**自动解绑会话**。
+**交付（实作与原案差异见括注）**：
+1. **实例管理子页签**：列表分**活动/归档**两段；列=名称、ID、状态、任务进度、绑定会话、创建时间（实作为「📋 管理」按钮与 DAG 互斥切换，非常驻列表）；
+2. 归档全链（沿用已定稿设计 `workflow-lifecycle-design.md`：`archive/<id>/<时间戳>_<类别>_<状态>/` + manifest；**归档按钮覆盖 STOPPED/COMPLETED/FAILED**；绑定会话终态 DONE）。原案"归档后原始目录 pendingCleanup 清理"**改为 Host node:fs 直删**（用户拍板：Session 不越权删 workspace 级数据；npm 包 CJS 形态 require 完整可用，三重查证见报告）；
+3. **打包下载**：多选（活动+归档跨段）打**一个 zip**（包内按实例/归档条目分目录），纯 JS STORE zip writer 零依赖；
+4. **删除**：原案"非 RUNNING 可删（含活动实例）"**收窄为仅归档段可删**（用户拍板保守防误删；活动实例只能归档）。
 
-**验收要点**：全生命周期走查——创建→运行→停止→归档→列表两段可见→下载 zip 内容完整→删除后解绑且列表消失。
+**验收要点**：全生命周期走查——创建→运行→停止→归档→列表两段可见→下载 zip 内容完整→删除后列表消失。✅ GUI 验收通过（少量展示/交互小问题留待后续规划）。
 
 ---
 

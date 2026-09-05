@@ -1237,6 +1237,145 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { serializeWorkflowYaml, instanceEditPermissions, applyInstancePatch, simplifyParams, parseSkillFrontmatter }
 }
 
+// ---- module: zip-writer ----
+// ============================================================================
+// workflow-agent — 纯 JS 最小 zip writer（Iter-29）
+// 文件：code/shared/zip-writer.js
+// 说明：
+//   - STORE 模式（compression method 0，不压缩）：实现最小、正确性最易验证，
+//     工作流产物以文本为主体积可控，不引入 zlib/Node 依赖——mjs 内联、CJS 构建、
+//     Node 单测三语境均可直接运行（纯函数，无 require）。
+//   - 产物为标准 ZIP（PKWARE APPNOTE 6.3.x 子集）：本地文件头 + 数据 + 中央目录
+//     + EOCD；UTF-8 文件名（通用位标志 bit11 恒置，目录名/中文安全）。
+//   - CRC32：IEEE 802.3（多项式 0xEDB88320 反射），查表法，首建缓存。
+//   - buildZip(entries)：entries = [{ path: 'a/b.txt', text: '...' , mtime?: Date }]
+//     或 { path, bytes: Uint8Array }；path 恒以 '/' 分隔、不得以 '/' 开头；
+//     返回 Uint8Array（Node http res.end 可直接写）。
+//   - dosTime/dosDate：本地时间转 DOS 格式（zip 规范；秒按 2 秒粒度截断）。
+// ============================================================================
+
+var ZIP_CRC_TABLE = null
+
+function zipCrcTable() {
+  if (ZIP_CRC_TABLE) return ZIP_CRC_TABLE
+  ZIP_CRC_TABLE = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1)
+    ZIP_CRC_TABLE[n] = c >>> 0
+  }
+  return ZIP_CRC_TABLE
+}
+
+function zipCrc32(bytes) {
+  const table = zipCrcTable()
+  let c = 0xFFFFFFFF
+  for (let i = 0; i < bytes.length; i++) c = table[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8)
+  return (c ^ 0xFFFFFFFF) >>> 0
+}
+
+// UTF-8 编码：TextEncoder 优先（Node ≥11 全局 / 动态沙箱内置），缺省回退手写编码
+function zipUtf8(str) {
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str)
+  const out = []
+  for (let i = 0; i < str.length; i++) {
+    let cp = str.codePointAt(i)
+    if (cp > 0xFFFF) i++ // 代理对占两个 code unit
+    if (cp < 0x80) out.push(cp)
+    else if (cp < 0x800) out.push(0xC0 | (cp >> 6), 0x80 | (cp & 63))
+    else if (cp < 0x10000) out.push(0xE0 | (cp >> 12), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63))
+    else out.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 63), 0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63))
+  }
+  return new Uint8Array(out)
+}
+
+function dosTime(date) {
+  const h = date.getHours(), m = date.getMinutes(), s = date.getSeconds()
+  return ((h << 11) | (m << 5) | Math.floor(s / 2)) & 0xFFFF
+}
+
+function dosDate(date) {
+  const y = Math.max(1980, date.getFullYear()), mo = date.getMonth() + 1, d = date.getDate()
+  return (((y - 1980) << 9) | (mo << 5) | d) & 0xFFFF
+}
+
+function u16(arr, v) { arr.push(v & 0xFF, (v >>> 8) & 0xFF) }
+function u32(arr, v) { arr.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF) }
+
+// 校验并规整条目：path 规范（无前导/尾随 '/'、无 '..' 段、无反斜杠），返回 {path, bytes, mtime}
+function zipNormalizeEntry(e) {
+  if (!e || typeof e !== 'object') throw new Error('zip entry path required')
+  const p = String(e.path || '').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/+|\/+$/g, '')
+  if (!p) throw new Error('zip entry path required')
+  if (p.split('/').some((seg) => seg === '.' || seg === '..')) throw new Error('zip entry path traversal: ' + p)
+  let bytes
+  if (e.bytes instanceof Uint8Array) bytes = e.bytes
+  else if (typeof e.text === 'string') bytes = zipUtf8(e.text)
+  else throw new Error('zip entry needs text or bytes: ' + p)
+  const mtime = e.mtime instanceof Date && !isNaN(e.mtime.getTime()) ? e.mtime : new Date()
+  return { path: p, bytes, mtime }
+}
+
+// 构建 STORE zip。entries 顺序即包内顺序；同路径重复以最后者为准（中央目录逐一登记，不做去重——调用方保证唯一）。
+function buildZip(entries) {
+  const list = (entries || []).map(zipNormalizeEntry)
+  const out = []        // byte 数组（数量级 ~ 数 MB，push 拼接可接受；保持零依赖）
+  const central = []    // 中央目录记录
+  for (const en of list) {
+    const nameBytes = zipUtf8(en.path)
+    const crc = zipCrc32(en.bytes)
+    const offset = out.length
+    // 本地文件头（30 + name）
+    u32(out, 0x04034b50)
+    u16(out, 20)        // version needed
+    u16(out, 0x0800)    // flags: bit11 UTF-8 文件名
+    u16(out, 0)         // method STORE
+    u16(out, dosTime(en.mtime))
+    u16(out, dosDate(en.mtime))
+    u32(out, crc)
+    u32(out, en.bytes.length)  // compressed == uncompressed（STORE）
+    u32(out, en.bytes.length)
+    u16(out, nameBytes.length)
+    u16(out, 0)         // extra len
+    for (const b of nameBytes) out.push(b)
+    for (const b of en.bytes) out.push(b)
+    central.push({ nameBytes, crc, size: en.bytes.length, mtime: en.mtime, offset })
+  }
+  const cdStart = out.length
+  for (const c of central) {
+    u32(out, 0x02014b50)
+    u16(out, 20)        // version made by
+    u16(out, 20)        // version needed
+    u16(out, 0x0800)
+    u16(out, 0)
+    u16(out, dosTime(c.mtime))
+    u16(out, dosDate(c.mtime))
+    u32(out, c.crc)
+    u32(out, c.size)
+    u32(out, c.size)
+    u16(out, c.nameBytes.length)
+    u16(out, 0); u16(out, 0)   // extra/comment len
+    u16(out, 0)                // disk number start
+    u16(out, 0)                // internal attrs
+    u32(out, 0)                // external attrs
+    u32(out, c.offset)
+    for (const b of c.nameBytes) out.push(b)
+  }
+  const cdSize = out.length - cdStart
+  // EOCD（22）
+  u32(out, 0x06054b50)
+  u16(out, 0); u16(out, 0)
+  u16(out, central.length); u16(out, central.length)
+  u32(out, cdSize)
+  u32(out, cdStart)
+  u16(out, 0)
+  return new Uint8Array(out)
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { buildZip, zipCrc32, zipUtf8 }
+}
+
 // ---- module: items-extract ----
 // ============================================================================
 // workflow-agent — items 结构化提取器（Iter-26，R17/R18）
@@ -2203,6 +2342,28 @@ function composeMetadata(m) {
   }
 }
 
+// ── Iter-29：node:fs 直删辅助（npm 包 CJS 形态 require 完整可用）────────────
+// 依据（2026-09-04 查证）：cordis-plugin-loader 以标准 import() 加载 npm 包（CommonJS
+// 模块作用域含完整 require）；vm 沙箱 require 陷阱仅作用于动态插件形态。DSH ctx.get('fs')
+// 服务面确实无删除/移动 API（官方 FileSystem 抽象类无 unlink/rm），故目录级删除
+// （归档移出池 / 删除归档）走 node:fs——操作范围严格限于 .workflow-agent 自有目录。
+// ESM 语境（如未来 preset 直挂 mjs）返回 null，调用方显式报错不静默降级。
+function nodeFsPromises() {
+  try {
+    if (typeof require !== 'undefined') return require('node:fs').promises
+  } catch (e) { /* require 不可用 */ }
+  return null
+}
+
+// Iter-29：路径段安全校验（instanceId / 归档条目名来自路由入参，禁止穿越）。
+// 允许：字母数字开头，仅含 [A-Za-z0-9._-]；拒绝 '.'/'..' 与空串。
+function sanitizeSegment(s) {
+  const v = String(s || '')
+  if (!v || v === '.' || v === '..') return null
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v)) return null
+  return v
+}
+
 // ── 实例注册表：instanceId → {engine, storage, meta}；sessionId → 活跃实例 ──
 function createInstanceRegistry(ctx, deps) {
   const engines = new Map()        // instanceId -> entry
@@ -2228,6 +2389,9 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-23(A2)：会话日志末条回合终局"用户中止"探针。生产由 apply 注入（agents.get(sid).session.log
   // → detectUserAbortFromLog 纯函数）；缺省恒 undefined（无法判定 → 降级为 session-idle 既有语义）。
   const detectUserAbort = typeof deps.detectUserAbort === 'function' ? deps.detectUserAbort : (async () => undefined)
+  // Iter-29：node:fs promises 注入口（归档删原目录/删除归档）。生产缺省 = nodeFsPromises()
+  // （npm 包 CJS 形态 require 完整可用）；单测注入 mock {rm, rmdir} 以在虚拟路径上验证。
+  const nodeFs = (deps.nodeFs && typeof deps.nodeFs.rm === 'function') ? deps.nodeFs : nodeFsPromises()
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -2809,6 +2973,134 @@ function createInstanceRegistry(ctx, deps) {
     return dest
   }
 
+  // ── Iter-29：归档列表（GET /wf/archives 数据源）────────────────────────────
+  // 扫 archive/<instanceId>/<entry>/：manifest.json（kind/state/archivedAt/workflowName）
+  // + metadata.json（sessionId，reset 备份可能缺失）+ listDir 递归计文件数/字节。
+  // 空 <instanceId> 父目录（删除后残留）自然跳过；残缺条目（无 manifest）跳过不报错。
+  async function listArchives(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return []
+    let instanceDirs = []
+    try {
+      const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
+      instanceDirs = ar.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      return [] // 无 archive 目录
+    }
+    const out = []
+    for (const iid of instanceDirs) {
+      let entryDirs = []
+      try {
+        const subs = await fs.listDir(await fs.resolve(archiveRootPath(cwd) + '/' + iid))
+        entryDirs = subs.filter(en => en.type === 'directory').map(en => en.name)
+      } catch (e) { continue }
+      for (const ed of entryDirs) {
+        try {
+          const base = archiveRootPath(cwd) + '/' + iid + '/' + ed
+          const manifest = JSON.parse(await fs.readText(await fs.resolve(base + '/manifest.json')))
+          let sessionId = null
+          try {
+            const meta = JSON.parse(await fs.readText(await fs.resolve(base + '/metadata.json')))
+            sessionId = (meta && meta.sessionId) || null
+          } catch (e) { /* metadata 缺失（罕见）→ null */ }
+          // 递归统计（listDir 对 file 直接带 size，无需逐个 stat）
+          let files = 0
+          let bytes = 0
+          const walk = async (dir) => {
+            let items = []
+            try { items = await fs.listDir(await fs.resolve(dir)) } catch (e) { return }
+            for (const it of items) {
+              if (it.type === 'directory') await walk(dir + '/' + it.name)
+              else if (it.type === 'file') { files += 1; bytes += it.size || 0 }
+            }
+          }
+          await walk(base)
+          out.push({
+            instanceId: iid,
+            entry: ed,
+            kind: manifest.kind || null,
+            state: manifest.state || null,
+            reason: manifest.reason || null,
+            archivedAt: manifest.archivedAt || null,
+            workflowName: manifest.workflowName || null,
+            sessionId,
+            files,
+            bytes,
+          })
+        } catch (e) { /* 残缺归档跳过 */ }
+      }
+    }
+    out.sort((a, b) => String(b.entry || '').localeCompare(String(a.entry || ''))) // ts 前缀名倒序=最新在前
+    return out
+  }
+
+  // ── Iter-29：显式归档（POST /wf/archive；lifecycle-design §7 archive-instance）──
+  // 门控（§4.1）：STOPPED/COMPLETED/FAILED 可归档；RUNNING 须先 stop；CREATED/PENDING
+  // 无执行内容不支持。流程：writeArchiveBackup('archive', stage) → 内存清理（engines/
+  // activeBySession）→ node:fs 直删原实例目录（备份已落 archive，删除失败=重复不丢数据，
+  // 报错可重试）。绑定会话经 archiveDeclaresSession 读备份内 metadata.json → DONE。
+  async function archiveInstance(cwd, instanceId) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    const iid = sanitizeSegment(instanceId)
+    if (!iid) throw new Error('非法 instanceId: ' + instanceId)
+    const dir = instanceDirPath(cwd, iid)
+    // 阶段判定：内存引擎快照 → 磁盘 state.json → CREATED
+    let stage = null
+    const entry = engines.get(iid)
+    if (entry) {
+      try { stage = entry.engine.snapshot().stage } catch (e) { stage = null }
+    }
+    if (!stage) {
+      try {
+        const state = JSON.parse(await fs.readText(await fs.resolve(dir + '/state.json')))
+        if (state && state.workflow) stage = state.stage || null
+      } catch (e) { /* 无 state.json → CREATED */ }
+    }
+    if (!stage) stage = 'CREATED'
+    if (stage === 'RUNNING') throw new Error('实例运行中，须先停止再归档')
+    if (stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
+      throw new Error('实例阶段 ' + stage + ' 无执行内容，不支持归档（仅 STOPPED/COMPLETED/FAILED）')
+    }
+    const meta = await tryReadMeta(cwd, iid)
+    if (!meta) throw new Error('实例不存在或 metadata 损坏: ' + iid)
+    const backupDir = await writeArchiveBackup(cwd, iid, 'archive', stage)
+    // 内存清理：归档后实例不在池中，引擎条目与会话活跃映射一并移除
+    const sid = meta.sessionId || null
+    engines.delete(iid)
+    if (sid && activeBySession.get(sid) === iid) activeBySession.delete(sid)
+    // node:fs 直删原实例目录（DSH fs 无删除 API；查证结论见 nodeFsPromises 注）
+    if (!nodeFs) throw new Error('node:fs 不可用，无法删除原实例目录（备份已在 ' + backupDir + '）')
+    try {
+      await nodeFs.rm(dir, { recursive: true, force: true })
+    } catch (e) {
+      throw new Error('归档备份成功（' + backupDir + '）但删除原目录失败：' + (e && e.message ? e.message : String(e)))
+    }
+    return { instanceId: iid, stage, backupDir, removed: true, unboundFrom: sid }
+  }
+
+  // ── Iter-29：删除归档（POST /wf/delete-archive；仅归档段可删）──────────────
+  // node:fs 直删 archive/<instanceId>/<entry>/；父目录空残留顺手 rmdir（失败忽略）。
+  // 删除不可恢复（路由层负责二次确认）；段名经 sanitizeSegment 防穿越。
+  async function deleteArchive(cwd, instanceId, entry) {
+    const iid = sanitizeSegment(instanceId)
+    const ed = sanitizeSegment(entry)
+    if (!iid) throw new Error('非法 instanceId: ' + instanceId)
+    if (!ed) throw new Error('非法归档条目: ' + entry)
+    if (!nodeFs) throw new Error('node:fs 不可用，无法删除归档')
+    const dir = archiveRootPath(cwd) + '/' + iid + '/' + ed
+    // 删除前确认目标在场——用 nodeFs.stat（与执行 rm 同一文件系统视图；目录级判定）。
+    // DSH fs stat 亦可但语义对 file 友好、mock 桩无目录概念；node:fs stat 缺失抛 ENOENT。
+    try {
+      await nodeFs.stat(dir)
+    } catch (e) {
+      throw new Error('归档不存在: ' + iid + '/' + ed)
+    }
+    await nodeFs.rm(dir, { recursive: true, force: true })
+    try { await nodeFs.rmdir(archiveRootPath(cwd) + '/' + iid) } catch (e) { /* 非空=还有其他归档，正常 */ }
+    return { instanceId: iid, entry: ed, deleted: true }
+  }
+
   // ── Iter-23(方向A)：权威 user-stop 处置（A1 事件驱动与 A2 轮询兜底共用）──────
   // 语义与 workflow_stop 工具一致：STOPPED（保 DONE）+ 落盘 + stopReason='user-stop'
   // + 级联 interrupt running 子会话（用户停止权威性高于 P1 子在跑守卫）。级联失败不阻断。
@@ -2912,6 +3204,9 @@ function createInstanceRegistry(ctx, deps) {
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,
+    listArchives,     // Iter-29：归档列表（/wf/archives）
+    archiveInstance,  // Iter-29：显式归档（/wf/archive）
+    deleteArchive,    // Iter-29：删除归档（/wf/delete-archive）
     syncInstanceState,
     handleSessionUserStop, // Iter-23(A1)：mjs session/event tap 调用
     isAgentRunning,        // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
@@ -2926,7 +3221,7 @@ function createInstanceRegistry(ctx, deps) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry, isUserAbortTurnEnd, detectUserAbortFromLog }
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry, isUserAbortTurnEnd, detectUserAbortFromLog, nodeFsPromises, sanitizeSegment }
 }
 
 // ---- module: builtin-skills ----
@@ -4935,6 +5230,11 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 // GET /wf/instance-yaml?workspaceRoot&instanceId → 编辑数据源（raw 定义+权限矩阵+任务状态）
 // POST /wf/validate-instance {workspaceRoot, instanceId, patch} → 编辑校验（dryRun 不落盘）
 // POST /wf/instance-yaml {workspaceRoot, instanceId, patch}     → 编辑保存（同一闸门，通过才写回）
+// GET /wf/archives?workspaceRoot=... → 归档列表（Iter-29：manifest+文件数/字节）
+// POST /wf/archive {workspaceRoot, instanceId}                  → 显式归档（Iter-29：备份+内存清理+node:fs 删原目录）
+// POST /wf/delete-archive {workspaceRoot, instanceId, entry}    → 删除归档（Iter-29：不可恢复）
+// POST /wf/download {workspaceRoot, targets:[{kind,instanceId,entry?}]} → 打包 zip（Iter-29）→ {downloadUrl}
+// GET /wf/download-artifact?token=...  → zip 字节流下载（Iter-29：一次性 token）
 // ── Iter-13：内置基础流程模板（随包分发；实例=模板+配置，模板保持只读）────
 // Iter-20/S5：内置模板改为**可执行默认模板**——无需修改、无需填参数即可创建并运行。
 // 处理器/检查器/输入/输出全部引用工作区 skills/（相对路径，按会话 cwd=工作区解析），
@@ -5110,6 +5410,8 @@ function registerWebRoutes(ctx, registry) {
   const webserver = ctx.get('webServer')
   if (!webserver) return // 可选能力：webServer 不存在时静默跳过
   const fs = ctx.get('fs')
+  // Iter-29：下载产物暂存（token → {bytes, filename, at}；一次性取走即焚 + 数量/总量上限）
+  const downloadArtifacts = new Map()
 
   webserver.register({
     kind: 'prefix',
@@ -5888,6 +6190,152 @@ function registerWebRoutes(ctx, registry) {
             writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
           }
         })
+        return
+      }
+
+      // ── Iter-29：实例管理（归档列表 / 归档 / 删除归档 / 打包下载）────────────
+      // 归档列表：archive/<id>/<entry>/ 清单（manifest+metadata+文件数/字节）
+      if (pathname === '/wf/archives') {
+        const root = query.get('workspaceRoot') || ''
+        if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+        if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+        try {
+          const archives = await registry.listArchives(root)
+          writeJson(res, 200, { workspaceRoot: root, archives })
+        } catch (e) {
+          writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+        }
+        return
+      }
+
+      // 显式归档：非 RUNNING 才可（门控在 registry.archiveInstance 内）；备份→内存清理→node:fs 删原目录
+      if (req.method === 'POST' && pathname === '/wf/archive') {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            const instanceId = args.instanceId
+            if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+            if (!instanceId) { writeJson(res, 400, { error: 'instanceId required' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            const r = await registry.archiveInstance(root, instanceId)
+            writeJson(res, 200, { ok: true, archived: true, instanceId: r.instanceId, stage: r.stage, backupDir: r.backupDir, unboundFrom: r.unboundFrom })
+          } catch (e) {
+            writeJson(res, 400, { error: e && e.message ? e.message : String(e) })
+          }
+        })
+        return
+      }
+
+      // 删除归档（不可恢复；UI 层二次确认后调用）
+      if (req.method === 'POST' && pathname === '/wf/delete-archive') {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            const r = await registry.deleteArchive(root, args.instanceId, args.entry)
+            writeJson(res, 200, { ok: true, deleted: true, instanceId: r.instanceId, entry: r.entry })
+          } catch (e) {
+            const msg = e && e.message ? e.message : String(e)
+            writeJson(res, msg.indexOf('不存在') >= 0 ? 404 : 400, { error: msg })
+          }
+        })
+        return
+      }
+
+      // 打包下载：多选活动实例 + 归档条目 → 单个 zip（STORE）；内存 artifact 暂存 → 下载路由取
+      if (req.method === 'POST' && pathname === '/wf/download') {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            const targets = Array.isArray(args.targets) ? args.targets : []
+            if (!root) { writeJson(res, 400, { error: 'workspaceRoot required' }); return }
+            if (!targets.length) { writeJson(res, 400, { error: 'targets required' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            if (!fs) { writeJson(res, 500, { error: 'fs service unavailable' }); return }
+            // 递归收集文本文件为 zip 条目（DSH fs 只读文本——二进制跳过，与 writeArchiveBackup 同语义）
+            async function collectZipEntries(baseDir, zipPrefix, entries) {
+              let items = []
+              try { items = await fs.listDir(await fs.resolve(baseDir)) } catch (e) { return }
+              for (const it of items) {
+                const p = baseDir + '/' + it.name
+                if (it.type === 'directory') {
+                  await collectZipEntries(p, zipPrefix + '/' + it.name, entries)
+                } else if (it.type === 'file') {
+                  try {
+                    const text = await fs.readText(await fs.resolve(p))
+                    entries.push({ path: zipPrefix + '/' + it.name, text })
+                  } catch (e) { /* 不可读（二进制）跳过 */ }
+                }
+              }
+            }
+            const entries = []
+            const included = []
+            for (const t of targets) {
+              try {
+                if (t && t.kind === 'instance') {
+                  const safeId = sanitizeSegment(t.instanceId)
+                  if (!safeId) continue
+                  const dir = instancesRootPath(root) + '/' + safeId
+                  await collectZipEntries(dir, String(t.instanceId), entries)
+                  included.push({ kind: 'instance', instanceId: t.instanceId })
+                } else if (t && t.kind === 'archive') {
+                  const safeId = sanitizeSegment(t.instanceId)
+                  const safeEntry = sanitizeSegment(t.entry)
+                  if (!safeId || !safeEntry) continue
+                  const dir = archiveRootPath(root) + '/' + safeId + '/' + safeEntry
+                  await collectZipEntries(dir, safeId + '/' + safeEntry, entries)
+                  included.push({ kind: 'archive', instanceId: t.instanceId, entry: t.entry })
+                }
+              } catch (e) { /* 单目标失败不阻塞其余 */ }
+            }
+            if (!entries.length) { writeJson(res, 400, { error: 'no downloadable files found for targets' }); return }
+            const bytes = buildZip(entries)
+            const token = makeUuid8() + makeUuid8()
+            const stamp = new Date().toISOString().slice(0, 10)
+            const filename = 'workflow-agent-' + stamp + '-' + token.slice(0, 8) + '.zip'
+            downloadArtifacts.set(token, { bytes, filename, at: Date.now() })
+            // 上限治理：>16 份或总量 >128MB 时丢弃最旧
+            let total = 0
+            for (const v of downloadArtifacts.values()) total += v.bytes.length
+            while (downloadArtifacts.size > 16 || total > 128 * 1024 * 1024) {
+              const oldest = [...downloadArtifacts.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+              if (!oldest) break
+              total -= oldest[1].bytes.length
+              downloadArtifacts.delete(oldest[0])
+            }
+            writeJson(res, 200, { ok: true, downloadUrl: '/wf/download-artifact?token=' + encodeURIComponent(token), filename, fileCount: entries.length, included })
+          } catch (e) {
+            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+          }
+        })
+        return
+      }
+
+      // 下载产物（一次性 token → zip 字节；浏览器 <a download> 触发）
+      if (pathname === '/wf/download-artifact') {
+        const token = query.get('token') || ''
+        const art = downloadArtifacts.get(token)
+        if (!art) { writeJson(res, 404, { error: 'artifact not found or expired' }); return }
+        downloadArtifacts.delete(token) // 一次性：取走即焚
+        const asciiName = art.filename.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '')
+        const encodedName = encodeURIComponent(art.filename)
+        res.writeHead(200, {
+          'content-type': 'application/zip',
+          'content-length': String(art.bytes.length),
+          'content-disposition': 'attachment; filename="' + asciiName + '"; filename*=UTF-8\'\'' + encodedName,
+          'cache-control': 'no-store',
+        })
+        res.end(Buffer.from(art.bytes))
         return
       }
 

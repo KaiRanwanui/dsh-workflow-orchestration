@@ -4,10 +4,10 @@
 > 迭代队列/验收标准见 `development-plan.md`；架构决策见
 > `../architecture/architecture-decisions.md`。
 
-## 当前状态（截至 2026-09-04）
+## 当前状态（截至 2026-09-05）
 
-- 最新关闭：**Iter-28 实例编辑前台 + persona 单源化**（host v0.19.0 / client v0.7.0，529 单测，git `534992d`）
-- 下一迭代：**Iter-29** 实例管理子页签+归档/下载/删除（独立可提前）；Iter-30 DAG 美化排队
+- 最新关闭：**Iter-29 实例管理子页签 + 归档/下载/删除**（host v0.20.0 / client v0.8.0，563 单测）
+- 下一迭代：**Iter-30** DAG 美化与交互（节点详情面板+视觉布局+交互增强）
 - 基线：DSH `0.1.1-rc.2`（WSL2，web 3080 + headless profile；版本迁移见文末备注）
 
 ---
@@ -63,11 +63,15 @@
 - **Iter-27b 语义校验**（09-04）：workflow-validate.js 校验引擎（8 错误码+2 警告）+create/begin 硬拦截（零副作用）+start/resume 实时闸门+reset 回传+workflow_validate 只读工具+/wf/create 同款关口；**验收修正安全红线**=被拦后 LLM 只许转告清单+停止（hint 权威提示）；485 单测，host v0.18.0。报告 `iter27b-report.md`。
 - **Iter-28 实例编辑前台**（09-04）：workflow-edit.js（稳定序列化/权限矩阵/白名单补丁）+/wf/skills·instance-yaml·validate-instance 路由（保存=校验先于落盘+注释头保留）+EditorPanel 双栏编辑器（DAG 下方可折叠；RUNNING 全禁用+外部 stage 即时刷新）+创建对话框 params 键值行/warnings 面板（Iter-25 遗留清账）；**验收修正**含 params 进 subagent 派发 prompt（workflow_status 快照挂 meta.params+persona 加行）；**persona 单源化 A 方案**（rc2 dsh-persona 仅内联 text=系统限制记档 `../architecture/architecture-decisions.md` §8；system-prompt.md 唯一源+sync-persona.js 注入）；529 单测，host v0.19.0/client v0.7.0。报告 `iter28-report.md`。
 
+## 六、实例管理与归档（Iter-29，2026-09-05）
+
+- **Iter-29 实例管理子页签+归档/下载/删除**（09-05）：「📋 管理」子页签（活动/归档两段表格+归档门控 STOPPED/COMPLETED/FAILED+多选跨段 zip 下载+归档删除二次确认）；**node:fs 直删定案**（用户否决 pendingCleanup 于目录级操作——Session 不越权删 workspace 级数据；三重查证=官方 FileSystem 抽象类无删除 API+npm 包经 cordis-plugin-loader 标准 CJS require 加载（vm 沙箱陷阱仅限动态插件形态）+process.env.HOME 物化实证；操作范围限 .workflow-agent/ 自有目录+sanitizeSegment 白名单）；zip-writer.js 第 12 同步 section（STORE 零依赖+bit11 UTF-8 中文名+CRC32）；5 条新路由（/wf/archives·archive·delete-archive·download·download-artifact 一次性 token）；**单测抓出真实 bug 已修**（DSH fs stat 对不存在返回 undefined 不抛错→try/catch 守卫静默穿透，改 nodeFs.stat 判定）；563 单测，host v0.20.0/client v0.8.0，GUI 验收通过（少量展示/交互小问题留待后续规划）。报告 `iter29-report.md`。
+
 ---
 
 ## 迭代报告索引
 
-`plan/development/` 下：`iter1/2/3/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/21/22/23/24/25/26/26r/27a/27b/28-report.md` 与 `iter-suba-report.md`；验证报告同名 `*-verification-report*.md`；探针/设计文档在各条目内标注。Iter-4 无独立报告。
+`plan/development/` 下：`iter1/2/3/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19/21/22/23/24/25/26/26r/27a/27b/28/29-report.md` 与 `iter-suba-report.md`；验证报告同名 `*-verification-report*.md`；探针/设计文档在各条目内标注。Iter-4 无独立报告。
 
 ---
 

@@ -99,6 +99,28 @@ function composeMetadata(m) {
   }
 }
 
+// ── Iter-29：node:fs 直删辅助（npm 包 CJS 形态 require 完整可用）────────────
+// 依据（2026-09-04 查证）：cordis-plugin-loader 以标准 import() 加载 npm 包（CommonJS
+// 模块作用域含完整 require）；vm 沙箱 require 陷阱仅作用于动态插件形态。DSH ctx.get('fs')
+// 服务面确实无删除/移动 API（官方 FileSystem 抽象类无 unlink/rm），故目录级删除
+// （归档移出池 / 删除归档）走 node:fs——操作范围严格限于 .workflow-agent 自有目录。
+// ESM 语境（如未来 preset 直挂 mjs）返回 null，调用方显式报错不静默降级。
+function nodeFsPromises() {
+  try {
+    if (typeof require !== 'undefined') return require('node:fs').promises
+  } catch (e) { /* require 不可用 */ }
+  return null
+}
+
+// Iter-29：路径段安全校验（instanceId / 归档条目名来自路由入参，禁止穿越）。
+// 允许：字母数字开头，仅含 [A-Za-z0-9._-]；拒绝 '.'/'..' 与空串。
+function sanitizeSegment(s) {
+  const v = String(s || '')
+  if (!v || v === '.' || v === '..') return null
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v)) return null
+  return v
+}
+
 // ── 实例注册表：instanceId → {engine, storage, meta}；sessionId → 活跃实例 ──
 function createInstanceRegistry(ctx, deps) {
   const engines = new Map()        // instanceId -> entry
@@ -124,6 +146,9 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-23(A2)：会话日志末条回合终局"用户中止"探针。生产由 apply 注入（agents.get(sid).session.log
   // → detectUserAbortFromLog 纯函数）；缺省恒 undefined（无法判定 → 降级为 session-idle 既有语义）。
   const detectUserAbort = typeof deps.detectUserAbort === 'function' ? deps.detectUserAbort : (async () => undefined)
+  // Iter-29：node:fs promises 注入口（归档删原目录/删除归档）。生产缺省 = nodeFsPromises()
+  // （npm 包 CJS 形态 require 完整可用）；单测注入 mock {rm, rmdir} 以在虚拟路径上验证。
+  const nodeFs = (deps.nodeFs && typeof deps.nodeFs.rm === 'function') ? deps.nodeFs : nodeFsPromises()
 
   function get(instanceId) {
     return engines.get(instanceId)
@@ -705,6 +730,134 @@ function createInstanceRegistry(ctx, deps) {
     return dest
   }
 
+  // ── Iter-29：归档列表（GET /wf/archives 数据源）────────────────────────────
+  // 扫 archive/<instanceId>/<entry>/：manifest.json（kind/state/archivedAt/workflowName）
+  // + metadata.json（sessionId，reset 备份可能缺失）+ listDir 递归计文件数/字节。
+  // 空 <instanceId> 父目录（删除后残留）自然跳过；残缺条目（无 manifest）跳过不报错。
+  async function listArchives(cwd) {
+    const fs = ctx.get('fs')
+    if (!fs) return []
+    let instanceDirs = []
+    try {
+      const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
+      instanceDirs = ar.filter(en => en.type === 'directory').map(en => en.name)
+    } catch (e) {
+      return [] // 无 archive 目录
+    }
+    const out = []
+    for (const iid of instanceDirs) {
+      let entryDirs = []
+      try {
+        const subs = await fs.listDir(await fs.resolve(archiveRootPath(cwd) + '/' + iid))
+        entryDirs = subs.filter(en => en.type === 'directory').map(en => en.name)
+      } catch (e) { continue }
+      for (const ed of entryDirs) {
+        try {
+          const base = archiveRootPath(cwd) + '/' + iid + '/' + ed
+          const manifest = JSON.parse(await fs.readText(await fs.resolve(base + '/manifest.json')))
+          let sessionId = null
+          try {
+            const meta = JSON.parse(await fs.readText(await fs.resolve(base + '/metadata.json')))
+            sessionId = (meta && meta.sessionId) || null
+          } catch (e) { /* metadata 缺失（罕见）→ null */ }
+          // 递归统计（listDir 对 file 直接带 size，无需逐个 stat）
+          let files = 0
+          let bytes = 0
+          const walk = async (dir) => {
+            let items = []
+            try { items = await fs.listDir(await fs.resolve(dir)) } catch (e) { return }
+            for (const it of items) {
+              if (it.type === 'directory') await walk(dir + '/' + it.name)
+              else if (it.type === 'file') { files += 1; bytes += it.size || 0 }
+            }
+          }
+          await walk(base)
+          out.push({
+            instanceId: iid,
+            entry: ed,
+            kind: manifest.kind || null,
+            state: manifest.state || null,
+            reason: manifest.reason || null,
+            archivedAt: manifest.archivedAt || null,
+            workflowName: manifest.workflowName || null,
+            sessionId,
+            files,
+            bytes,
+          })
+        } catch (e) { /* 残缺归档跳过 */ }
+      }
+    }
+    out.sort((a, b) => String(b.entry || '').localeCompare(String(a.entry || ''))) // ts 前缀名倒序=最新在前
+    return out
+  }
+
+  // ── Iter-29：显式归档（POST /wf/archive；lifecycle-design §7 archive-instance）──
+  // 门控（§4.1）：STOPPED/COMPLETED/FAILED 可归档；RUNNING 须先 stop；CREATED/PENDING
+  // 无执行内容不支持。流程：writeArchiveBackup('archive', stage) → 内存清理（engines/
+  // activeBySession）→ node:fs 直删原实例目录（备份已落 archive，删除失败=重复不丢数据，
+  // 报错可重试）。绑定会话经 archiveDeclaresSession 读备份内 metadata.json → DONE。
+  async function archiveInstance(cwd, instanceId) {
+    const fs = ctx.get('fs')
+    if (!fs) throw new Error('fs service unavailable')
+    const iid = sanitizeSegment(instanceId)
+    if (!iid) throw new Error('非法 instanceId: ' + instanceId)
+    const dir = instanceDirPath(cwd, iid)
+    // 阶段判定：内存引擎快照 → 磁盘 state.json → CREATED
+    let stage = null
+    const entry = engines.get(iid)
+    if (entry) {
+      try { stage = entry.engine.snapshot().stage } catch (e) { stage = null }
+    }
+    if (!stage) {
+      try {
+        const state = JSON.parse(await fs.readText(await fs.resolve(dir + '/state.json')))
+        if (state && state.workflow) stage = state.stage || null
+      } catch (e) { /* 无 state.json → CREATED */ }
+    }
+    if (!stage) stage = 'CREATED'
+    if (stage === 'RUNNING') throw new Error('实例运行中，须先停止再归档')
+    if (stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
+      throw new Error('实例阶段 ' + stage + ' 无执行内容，不支持归档（仅 STOPPED/COMPLETED/FAILED）')
+    }
+    const meta = await tryReadMeta(cwd, iid)
+    if (!meta) throw new Error('实例不存在或 metadata 损坏: ' + iid)
+    const backupDir = await writeArchiveBackup(cwd, iid, 'archive', stage)
+    // 内存清理：归档后实例不在池中，引擎条目与会话活跃映射一并移除
+    const sid = meta.sessionId || null
+    engines.delete(iid)
+    if (sid && activeBySession.get(sid) === iid) activeBySession.delete(sid)
+    // node:fs 直删原实例目录（DSH fs 无删除 API；查证结论见 nodeFsPromises 注）
+    if (!nodeFs) throw new Error('node:fs 不可用，无法删除原实例目录（备份已在 ' + backupDir + '）')
+    try {
+      await nodeFs.rm(dir, { recursive: true, force: true })
+    } catch (e) {
+      throw new Error('归档备份成功（' + backupDir + '）但删除原目录失败：' + (e && e.message ? e.message : String(e)))
+    }
+    return { instanceId: iid, stage, backupDir, removed: true, unboundFrom: sid }
+  }
+
+  // ── Iter-29：删除归档（POST /wf/delete-archive；仅归档段可删）──────────────
+  // node:fs 直删 archive/<instanceId>/<entry>/；父目录空残留顺手 rmdir（失败忽略）。
+  // 删除不可恢复（路由层负责二次确认）；段名经 sanitizeSegment 防穿越。
+  async function deleteArchive(cwd, instanceId, entry) {
+    const iid = sanitizeSegment(instanceId)
+    const ed = sanitizeSegment(entry)
+    if (!iid) throw new Error('非法 instanceId: ' + instanceId)
+    if (!ed) throw new Error('非法归档条目: ' + entry)
+    if (!nodeFs) throw new Error('node:fs 不可用，无法删除归档')
+    const dir = archiveRootPath(cwd) + '/' + iid + '/' + ed
+    // 删除前确认目标在场——用 nodeFs.stat（与执行 rm 同一文件系统视图；目录级判定）。
+    // DSH fs stat 亦可但语义对 file 友好、mock 桩无目录概念；node:fs stat 缺失抛 ENOENT。
+    try {
+      await nodeFs.stat(dir)
+    } catch (e) {
+      throw new Error('归档不存在: ' + iid + '/' + ed)
+    }
+    await nodeFs.rm(dir, { recursive: true, force: true })
+    try { await nodeFs.rmdir(archiveRootPath(cwd) + '/' + iid) } catch (e) { /* 非空=还有其他归档，正常 */ }
+    return { instanceId: iid, entry: ed, deleted: true }
+  }
+
   // ── Iter-23(方向A)：权威 user-stop 处置（A1 事件驱动与 A2 轮询兜底共用）──────
   // 语义与 workflow_stop 工具一致：STOPPED（保 DONE）+ 落盘 + stopReason='user-stop'
   // + 级联 interrupt running 子会话（用户停止权威性高于 P1 子在跑守卫）。级联失败不阻断。
@@ -808,6 +961,9 @@ function createInstanceRegistry(ctx, deps) {
     scanOrphans,
     recoverOrphan,
     writeArchiveBackup,
+    listArchives,     // Iter-29：归档列表（/wf/archives）
+    archiveInstance,  // Iter-29：显式归档（/wf/archive）
+    deleteArchive,    // Iter-29：删除归档（/wf/delete-archive）
     syncInstanceState,
     handleSessionUserStop, // Iter-23(A1)：mjs session/event tap 调用
     isAgentRunning,        // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
@@ -822,5 +978,5 @@ function createInstanceRegistry(ctx, deps) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry, isUserAbortTurnEnd, detectUserAbortFromLog }
+  module.exports = { slugifyName, makeUuid8, instancesRootPath, instanceDirPath, archiveRootPath, archiveTimestamp, composeMetadata, createInstanceRegistry, isUserAbortTurnEnd, detectUserAbortFromLog, nodeFsPromises, sanitizeSegment }
 }

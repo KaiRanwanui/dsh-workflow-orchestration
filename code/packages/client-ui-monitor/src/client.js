@@ -365,6 +365,182 @@ export function register(ctx) {
     return EditorComponent
   }
 
+  // ── Iter-29：实例管理子页签（活动/归档两段 + 归档/删除/多选打包下载）──────
+  // 数据源：/wf/list（活动实例）+ /wf/archives（归档条目）；打开与每次操作后重拉。
+  // 归档门控（lifecycle-design §4.1）：STOPPED/COMPLETED/FAILED 可归档；RUNNING 灰禁
+  // （须先停止）；CREATED/PENDING 灰禁（无执行内容）。删除仅归档段（不可恢复，二次确认）。
+  // 下载：两段复选框多选 → POST /wf/download → downloadUrl（一次性 token）触发浏览器保存。
+  let ManagerComponent = null
+  function getManagerComponent() {
+    if (ManagerComponent) return ManagerComponent
+    ManagerComponent = function ManagerPanel(props) {
+      const { workspaceRoot, onClose, onChanged } = props
+      const [instances, setInstances] = React.useState([])
+      const [archives, setArchives] = React.useState([])
+      const [checked, setChecked] = React.useState({}) // key 'i:<id>' / 'a:<id>/<entry>' → true
+      const [busy, setBusy] = React.useState(false)
+      const [msg, setMsg] = React.useState(null) // { kind: 'ok'|'err', text }
+      const [loaded, setLoaded] = React.useState(false)
+
+      const load = React.useCallback(() => {
+        if (!workspaceRoot) return
+        fetch('/wf/list?workspaceRoot=' + encodeURIComponent(workspaceRoot) + '&sessionId=')
+          .then(r => r.json())
+          .then(r => { setInstances((r && r.instances) || []); setLoaded(true) })
+          .catch(() => setLoaded(true))
+        fetch('/wf/archives?workspaceRoot=' + encodeURIComponent(workspaceRoot))
+          .then(r => r.json())
+          .then(r => setArchives((r && r.archives) || []))
+          .catch(() => {})
+      }, [workspaceRoot])
+
+      React.useEffect(() => { load() }, [load])
+
+      const stageColor = { CREATED: '#9ca3af', PENDING: '#9ca3af', RUNNING: '#3b82f6', STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
+      const fmtBytes = (n) => (n == null ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB')
+      const fmtTime = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '—')
+      const archivable = (st) => st === 'STOPPED' || st === 'COMPLETED' || st === 'FAILED'
+
+      const toggle = (key) => setChecked(prev => Object.assign({}, prev, { [key]: !prev[key] }))
+      const checkedKeys = Object.keys(checked).filter(k => checked[k])
+      const checkedTargets = checkedKeys.map(k => k.slice(0, 2) === 'i:'
+        ? { kind: 'instance', instanceId: k.slice(2) }
+        : (function () { const s = k.slice(2); const i = s.indexOf('/'); return { kind: 'archive', instanceId: s.slice(0, i), entry: s.slice(i + 1) } })())
+
+      const doArchive = async (instanceId, stage) => {
+        if (!confirm('归档实例 ' + instanceId + ' ？\n\n归档后实例移出实例池（原始目录删除），全部内容备份到 archive/，绑定会话进入终态（DONE）。')) return
+        setBusy(true); setMsg(null)
+        try {
+          const resp = await fetch('/wf/archive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceRoot, instanceId }) })
+          const r = await resp.json()
+          if (!resp.ok) throw new Error(r.error || ('HTTP ' + resp.status))
+          setMsg({ kind: 'ok', text: '✓ 已归档 ' + instanceId + '（' + (r.stage || '') + '）→ ' + (r.backupDir || '') })
+          setChecked(prev => { const n = Object.assign({}, prev); delete n['i:' + instanceId]; return n })
+          load(); if (onChanged) onChanged()
+        } catch (e) { setMsg({ kind: 'err', text: '归档失败：' + (e && e.message ? e.message : String(e)) }) }
+        setBusy(false)
+      }
+
+      const doDeleteArchive = async (instanceId, entry) => {
+        if (!confirm('删除归档 ' + instanceId + '/' + entry + ' ？\n\n该归档内容将被永久删除，不可恢复。')) return
+        setBusy(true); setMsg(null)
+        try {
+          const resp = await fetch('/wf/delete-archive', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceRoot, instanceId, entry }) })
+          const r = await resp.json()
+          if (!resp.ok) throw new Error(r.error || ('HTTP ' + resp.status))
+          setMsg({ kind: 'ok', text: '✓ 已删除归档 ' + instanceId + '/' + entry })
+          setChecked(prev => { const n = Object.assign({}, prev); delete n['a:' + instanceId + '/' + entry]; return n })
+          load(); if (onChanged) onChanged()
+        } catch (e) { setMsg({ kind: 'err', text: '删除失败：' + (e && e.message ? e.message : String(e)) }) }
+        setBusy(false)
+      }
+
+      const doDownload = async () => {
+        if (!checkedTargets.length) return
+        setBusy(true); setMsg(null)
+        try {
+          const resp = await fetch('/wf/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspaceRoot, targets: checkedTargets }) })
+          const r = await resp.json()
+          if (!resp.ok) throw new Error(r.error || ('HTTP ' + resp.status))
+          const a = document.createElement('a')
+          a.href = r.downloadUrl
+          a.download = r.filename || 'workflow-agent.zip'
+          document.body.appendChild(a)
+          a.click()
+          a.remove()
+          setMsg({ kind: 'ok', text: '✓ 打包完成（' + (r.fileCount || 0) + ' 个文件）：' + (r.filename || '') })
+        } catch (e) { setMsg({ kind: 'err', text: '下载失败：' + (e && e.message ? e.message : String(e)) }) }
+        setBusy(false)
+      }
+
+      const cell = { padding: '3px 8px', fontSize: 12, borderBottom: '1px solid rgba(148,163,184,0.15)', whiteSpace: 'nowrap', textAlign: 'left' }
+      const headCell = Object.assign({}, cell, { color: '#9ca3af', fontSize: 11, fontWeight: 600, borderBottom: '1px solid rgba(148,163,184,0.3)' })
+      const btn = (color, dis) => ({ border: '1px solid ' + color + '66', background: 'transparent', color, borderRadius: 5, padding: '1px 8px', fontSize: 11, cursor: dis ? 'default' : 'pointer', opacity: dis ? 0.4 : 1 })
+      const checkbox = (checkedKey, dis) => React.createElement('input', {
+        type: 'checkbox', checked: !!checked[checkedKey], disabled: !!dis,
+        onChange: () => toggle(checkedKey), style: { cursor: dis ? 'default' : 'pointer', accentColor: '#3b82f6' },
+      })
+
+      const sectionTitle = (text, count) => React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0 4px' } }, [
+        React.createElement('span', { key: 't', style: { fontSize: 12, fontWeight: 600 } }, text),
+        React.createElement('span', { key: 'c', style: { fontSize: 11, color: '#9ca3af' } }, String(count)),
+      ])
+
+      const activeRows = instances.map(it => {
+        const dis = busy || !archivable(it.stage)
+        const key = 'i:' + it.instanceId
+        return React.createElement('tr', { key: it.instanceId }, [
+          React.createElement('td', { key: 'c', style: cell }, checkbox(key, false)),
+          React.createElement('td', { key: 'n', style: cell }, String(it.workflowName || '')),
+          React.createElement('td', { key: 'i', style: Object.assign({}, cell, { color: '#9ca3af', fontFamily: 'monospace', fontSize: 11 }) }, String(it.instanceId).slice(-8)),
+          React.createElement('td', { key: 's', style: cell }, [
+            React.createElement('span', { key: 'd', style: { display: 'inline-block', width: 7, height: 7, borderRadius: 4, background: stageColor[it.stage] || '#9ca3af', marginRight: 5 } }),
+            React.createElement('span', { key: 't', style: { color: stageColor[it.stage] || '#9ca3af' } }, it.stage || 'CREATED'),
+          ]),
+          React.createElement('td', { key: 'p', style: cell }, it.phase === 'READY' ? (it.taskDone + '/' + it.taskTotal + (it.taskFailed ? ' ✗' + it.taskFailed : '')) : '—'),
+          React.createElement('td', { key: 'b', style: cell }, it.sessionId ? String(it.sessionId).slice(-6) + (it.active ? '' : '（离线）') : '未绑定'),
+          React.createElement('td', { key: 't', style: Object.assign({}, cell, { color: '#9ca3af' }) }, fmtTime(it.createdAt)),
+          React.createElement('td', { key: 'a', style: cell }, React.createElement('button', {
+            title: !archivable(it.stage) ? (it.stage === 'RUNNING' ? '运行中：须先停止再归档' : '未启动：无执行内容，不支持归档') : '归档（移出池并备份）',
+            disabled: dis, onClick: () => doArchive(it.instanceId, it.stage), style: btn('#a78bfa', dis),
+          }, '📦 归档')),
+        ])
+      })
+
+      const archiveRows = archives.map(a => {
+        const key = 'a:' + a.instanceId + '/' + a.entry
+        return React.createElement('tr', { key }, [
+          React.createElement('td', { key: 'c', style: cell }, checkbox(key, false)),
+          React.createElement('td', { key: 'n', style: cell }, String(a.workflowName || '')),
+          React.createElement('td', { key: 'i', style: Object.assign({}, cell, { color: '#9ca3af', fontFamily: 'monospace', fontSize: 11 }) }, String(a.instanceId).slice(-8) + '/' + String(a.entry)),
+          React.createElement('td', { key: 'k', style: cell }, (a.kind === 'reset' ? '↻ 重置备份' : a.kind === 'archive' ? '📦 显式归档' : (a.kind || '—')) + ' · ' + (a.state || '')),
+          React.createElement('td', { key: 'f', style: Object.assign({}, cell, { color: '#9ca3af' }) }, (a.files || 0) + ' 文件 · ' + fmtBytes(a.bytes)),
+          React.createElement('td', { key: 't', style: Object.assign({}, cell, { color: '#9ca3af' }) }, fmtTime(a.archivedAt)),
+          React.createElement('td', { key: 'd', style: cell }, React.createElement('button', {
+            title: '删除此归档（不可恢复）', disabled: busy, onClick: () => doDeleteArchive(a.instanceId, a.entry), style: btn('#f87171', busy),
+          }, '🗑 删除')),
+        ])
+      })
+
+      const table = (heads, rows, emptyText) => rows.length
+        ? React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse' } }, [
+            React.createElement('thead', { key: 'h' }, React.createElement('tr', {}, heads.map((h, i) => React.createElement('td', { key: i, style: headCell }, h)))),
+            React.createElement('tbody', { key: 'b' }, rows),
+          ])
+        : React.createElement('div', { style: { color: '#9ca3af', fontSize: 12, padding: '6px 8px' } }, emptyText)
+
+      return React.createElement('div', {
+        style: { margin: '0 12px 10px', border: '1px solid rgba(148,163,184,0.35)', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, background: 'rgba(148,163,184,0.04)' },
+      }, [
+        React.createElement('div', { key: 'bar', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+          React.createElement('span', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '实例管理'),
+          React.createElement('span', { key: 'hint', style: { fontSize: 11, color: '#9ca3af' } }, '活动实例可归档（备份后移出池）；归档可下载/删除'),
+          React.createElement('div', { key: 'sp', style: { flex: 1 } }),
+          React.createElement('span', { key: 'sel', style: { fontSize: 11, color: checkedKeys.length ? '#60a5fa' : '#9ca3af' } }, '已选 ' + checkedKeys.length + ' 项'),
+          React.createElement('button', { key: 'dl', disabled: busy || !checkedKeys.length, onClick: doDownload, title: '把选中项打包为一个 zip 下载', style: btn('#60a5fa', busy || !checkedKeys.length) }, '⬇ 下载'),
+          React.createElement('button', { key: 'rf', disabled: busy, onClick: load, style: btn('#9ca3af', busy) }, '↻ 刷新'),
+          React.createElement('button', { key: 'x', onClick: onClose, style: btn('#9ca3af', false) }, '✕ 关闭'),
+        ]),
+        msg ? React.createElement('div', {
+          key: 'msg',
+          style: {
+            fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 6, padding: '6px 9px',
+            border: '1px solid ' + (msg.kind === 'ok' ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)'),
+            background: msg.kind === 'ok' ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+            color: msg.kind === 'ok' ? '#22c55e' : '#f87171',
+          },
+        }, msg.text) : null,
+        React.createElement('div', { key: 'active', style: { display: 'flex', flexDirection: 'column' } },
+          sectionTitle('活动实例', instances.length),
+          table(['', '名称', 'ID', '状态', '进度', '绑定', '创建时间', '操作'], activeRows, loaded ? '当前没有活动实例。' : '加载中…')),
+        React.createElement('div', { key: 'archive', style: { display: 'flex', flexDirection: 'column' } },
+          sectionTitle('归档', archives.length),
+          table(['', '名称', 'ID / 条目', '类别 · 状态', '内容', '归档时间', '操作'], archiveRows, '当前没有归档。')),
+      ])
+    }
+    return ManagerComponent
+  }
+
   function fingerprint(state) {
     if (!state || !state.tasks) return ''
     const t = state.tasks.map(x => x.id + ':' + x.status).join(',')
@@ -979,6 +1155,8 @@ export function register(ctx) {
           const [adoptOpen, setAdoptOpen] = React.useState(false) // Iter-20：采用未绑定实例
           // Iter-28：实例编辑器折叠开关（hooks 区声明；渲染条件在 hasData 分支内）
           const [editorOpen, setEditorOpen] = React.useState(false)
+          // Iter-29：实例管理子页签开关（hooks 区声明；渲染在条件 return 之后）
+          const [mgmtOpen, setMgmtOpen] = React.useState(false)
           const [tplOpts, setTplOpts] = React.useState([])
           const [tplSel, setTplSel] = React.useState('custom')
           const [yamlText, setYamlText] = React.useState('')
@@ -1259,10 +1437,25 @@ export function register(ctx) {
             key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => { if (activeRoot) startListPolling(); setAdoptOpen(true) }, // Iter-21：打开即刷新列表，避免采用池空/延迟;孤儿可采纳(需 S3 recoverOrphan)属 Iter-22
             style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
           }, '采用') : null
+          // Iter-29：实例管理子页签按钮（所有 workflow 会话可见：管理列表展示全量实例+归档，
+          // UNBOUND 会话也可查看/下载/删除；与 DAG 视图互斥切换）
+          const mgmtBtn = activeRoot ? React.createElement('button', {
+            key: 'mgmt',
+            title: '实例管理（活动/归档两段列表：归档、下载、删除）',
+            onClick: () => setMgmtOpen(o => !o),
+            style: {
+              border: mgmtOpen ? '1px solid rgba(167,139,250,0.7)' : '1px solid rgba(148,163,184,0.35)',
+              background: mgmtOpen ? 'rgba(167,139,250,0.15)' : 'transparent',
+              color: mgmtOpen ? '#a78bfa' : 'inherit',
+              borderRadius: 6, padding: '1px 9px', fontSize: 12,
+              cursor: 'pointer', lineHeight: '18px',
+            }
+          }, '📋 管理') : null
           // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮（+ Iter-28 编辑入口）
+          // Iter-29：管理按钮恒在末尾（与视图状态无关）
           const toolbar = React.createElement('div', {
             key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, canCreate ? [plusBtn, adoptBtn] : (editBtn ? controlBtns.concat([editBtn]) : controlBtns))
+          }, (canCreate ? [plusBtn, adoptBtn] : (editBtn ? controlBtns.concat([editBtn]) : controlBtns)).concat(mgmtBtn ? [mgmtBtn] : []))
 
           const KvEditor = getKeyValueComponent()
           const formOverlay = !formOpen ? null : React.createElement('div', {
@@ -1381,6 +1574,16 @@ export function register(ctx) {
             style: { margin: '6px 12px 0', padding: '7px 12px', borderRadius: 8, fontSize: 12, lineHeight: '18px', border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b' }
           }, '⏸ ' + (wfStopHint.message || '编排会话空闲等待中：会话内的停止按钮此刻无效。后台任务执行中——要停止工作流请点面板 Stop'))
 
+          // Iter-29：管理子页签组件（activeRoot 存在时可用；与 DAG 视图互斥）
+          const ManagerPanel = getManagerComponent()
+          const mgmtView = (mgmtOpen && activeRoot)
+            ? React.createElement(ManagerPanel, {
+                workspaceRoot: activeRoot,
+                onClose: () => setMgmtOpen(false),
+                onChanged: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+              })
+            : null
+
           if (!hasData) {
             return React.createElement('div', {
               style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
@@ -1389,7 +1592,7 @@ export function register(ctx) {
               stopHintBar,
               formOverlay,
             adoptOverlay,
-              React.createElement('div', {
+              mgmtView ? mgmtView : React.createElement('div', {
                 style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
               }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...'))
             )
@@ -1401,27 +1604,30 @@ export function register(ctx) {
           },
             toolbar,
             stopHintBar,
-            React.createElement(DagCanvas, {
-              stage: stateData.stage,
-              gateResult: stateData.gateResult || null,
-              tasks,
-              selectedId,
-              onSelect: id => setSelectedId(prev => prev === id ? null : id),
-              workflowName: stateData.workflow,
-              retries: stateData.retries || 0,
-              error: stateData.error || null,
-            }),
-            // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
-            // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
-            editorOpen && currentInstanceId && activeRoot
-              ? React.createElement(EditorPanel, {
-                  workspaceRoot: activeRoot,
-                  instanceId: currentInstanceId,
-                  stage: stateData ? stateData.stage : '',
-                  onClose: () => setEditorOpen(false),
-                  onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
-                })
-              : null,
+            // Iter-29：管理子页签打开时替换 DAG+编辑器主区（互斥切换）
+            mgmtView ? mgmtView : React.createElement(React.Fragment, { key: 'dagview' },
+              React.createElement(DagCanvas, {
+                stage: stateData.stage,
+                gateResult: stateData.gateResult || null,
+                tasks,
+                selectedId,
+                onSelect: id => setSelectedId(prev => prev === id ? null : id),
+                workflowName: stateData.workflow,
+                retries: stateData.retries || 0,
+                error: stateData.error || null,
+              }),
+              // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
+              // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
+              editorOpen && currentInstanceId && activeRoot
+                ? React.createElement(EditorPanel, {
+                    workspaceRoot: activeRoot,
+                    instanceId: currentInstanceId,
+                    stage: stateData ? stateData.stage : '',
+                    onClose: () => setEditorOpen(false),
+                    onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+                  })
+                : null,
+            ),
             formOverlay,
             adoptOverlay
           )

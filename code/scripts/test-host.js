@@ -40,7 +40,10 @@ function makeMockFs() {
         const rest = key.slice(prefix.length)
         const seg = rest.split('/')[0]
         if (!seg) continue
-        seen.set(seg, { name: seg, type: rest.includes('/') ? 'directory' : 'file', target: { path: prefix + seg } })
+        // Iter-29：对齐真实 dsh-fs-local 契约——file 条目带 size（fsio.ts listDirectory 逐子 probe）
+        const isFile = !rest.includes('/')
+        const size = isFile ? String(files.get(prefix + seg)).length : undefined
+        seen.set(seg, Object.assign({ name: seg, type: isFile ? 'file' : 'directory', target: { path: prefix + seg } }, isFile ? { size } : {}))
       }
       return Array.from(seen.values())
     },
@@ -2562,6 +2565,185 @@ async function runCase25() {
 
   process.env.DSH_HOME = savedDsh25
 }
+
+// ── 用例 26：实例管理子页签后端（Iter-29：zip-writer / archives / archive / delete-archive / download）──
+async function runCase26() {
+  console.log('［用例 26］实例管理 — zip writer / 归档列表 / 显式归档 / 删除归档 / 打包下载')
+  const { buildZip, zipCrc32, zipUtf8 } = require('../shared/zip-writer.js')
+
+  // ── A. zip-writer 纯函数 ──
+  const crcVec = zipCrc32(zipUtf8('123456789'))
+  check('zip: CRC32 已知向量（"123456789"→0xCBF43926）', crcVec === 0xCBF43926, '0x' + crcVec.toString(16))
+  check('zip: UTF-8 编码回读一致', Buffer.from(zipUtf8('中文产物')).toString('utf8') === '中文产物')
+  let threw = false
+  try { buildZip([{ path: 'a/../evil.txt', text: 'x' }]) } catch (e) { threw = true }
+  check('zip: 条目路径穿越拒绝', threw)
+  threw = false
+  try { buildZip([{ path: 'ok.txt' }]) } catch (e) { threw = true }
+  check('zip: 缺 text/bytes 拒绝', threw)
+
+  const bytes = buildZip([
+    { path: 'wf-a/instance.yaml', text: 'name: demo\n' },
+    { path: 'wf-a/output/中文产物.md', text: '# 中文\n' },
+    { path: 'wf-a/output/sub/n.txt', text: 'nested-content' },
+  ])
+  const u8 = Buffer.from(bytes)
+  check('zip: 本地文件头签名 PK\\x03\\x04', u8.readUInt32LE(0) === 0x04034b50)
+  // 手工解析 EOCD（固定 22 字节尾部；entry 数与中央目录偏移自洽）
+  const eocd = u8.length - 22
+  check('zip: EOCD 签名', u8.readUInt32LE(eocd) === 0x06054b50)
+  const entryCount = u8.readUInt16LE(eocd + 10)
+  const cdSize = u8.readUInt32LE(eocd + 12)
+  const cdOffset = u8.readUInt32LE(eocd + 16)
+  check('zip: EOCD 计数=3 且中央目录偏移+大小自洽', entryCount === 3 && cdOffset + cdSize === eocd, `count=${entryCount} off=${cdOffset} size=${cdSize} total=${u8.length}`)
+  // 走中央目录逐条验证：STORE 方法 0 / bit11 置位 / 压缩=原始大小 / CRC 与内容一致 / 文件名 UTF-8 可读
+  let p = cdOffset, names = [], crcOk = true, storeOk = true, utfOk = true
+  for (let i = 0; i < entryCount; i++) {
+    if (u8.readUInt32LE(p) !== 0x02014b50) { storeOk = false; break }
+    const flags = u8.readUInt16LE(p + 8), method = u8.readUInt16LE(p + 10)
+    const crc = u8.readUInt32LE(p + 16), csize = u8.readUInt32LE(p + 20), usize = u8.readUInt32LE(p + 24)
+    const nlen = u8.readUInt16LE(p + 28), elen = u8.readUInt16LE(p + 30), clen = u8.readUInt16LE(p + 32)
+    const lho = u8.readUInt32LE(p + 42)
+    const name = u8.slice(p + 46, p + 46 + nlen).toString('utf8')
+    names.push(name)
+    if (method !== 0 || csize !== usize) storeOk = false
+    if (!(flags & 0x800)) utfOk = false
+    const nl2 = u8.readUInt16LE(lho + 26), el2 = u8.readUInt16LE(lho + 28)
+    const dataStart = lho + 30 + nl2 + el2
+    const content = u8.slice(dataStart, dataStart + usize)
+    if (zipCrc32(content) !== crc) crcOk = false
+    p += 46 + nlen + elen + clen
+  }
+  check('zip: 中央目录 3 条目名齐全（含中文）', names.join('|') === 'wf-a/instance.yaml|wf-a/output/中文产物.md|wf-a/output/sub/n.txt', names.join('|'))
+  check('zip: 全条目 STORE(bit11 置位, method=0, csize=usize)', storeOk && utfOk)
+  check('zip: 全条目 CRC 与内容一致', crcOk)
+
+  // ── B. 路由（import mjs + mock fs + mock nodeFs）──
+  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const { files, fs: mockFs } = makeMockFs()
+  // mock nodeFs.rm：同步删除 mock files 中该前缀全部条目（模拟真实递归删除）
+  const rmCalls = []
+  const nodeFsMock = {
+    async rm(dir) {
+      const pre = String(dir).replace(/\/+$/, '') + '/'
+      rmCalls.push(String(dir))
+      for (const k of [...files.keys()]) if (k.startsWith(pre) || k === String(dir)) files.delete(k)
+    },
+    async rmdir(dir) {
+      const pre = String(dir).replace(/\/+$/, '') + '/'
+      if ([...files.keys()].some(k => k.startsWith(pre))) throw new Error('ENOTEMPTY')
+    },
+    async stat(p) {
+      const s = String(p)
+      const pre = s.replace(/\/+$/, '') + '/'
+      if ([...files.keys()].some(k => k === s || k.startsWith(pre))) return { isDirectory: () => true }
+      const e = new Error('ENOENT: ' + s); e.code = 'ENOENT'; throw e
+    },
+  }
+  let routeHandler = null
+  const ctx = {
+    get(name) {
+      if (name === 'webServer') return { register(def) { routeHandler = def.handler } }
+      if (name === 'fs') return mockFs
+      return undefined
+    },
+  }
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, nodeFs: nodeFsMock })
+  mjs.registerWebRoutes(ctx, registry)
+  const call = (method, url, body) => new Promise((resolve, reject) => {
+    const res = {
+      code: 0, headers: null, payload: '',
+      writeHead(c, h) { this.code = c; this.headers = h },
+      end(pt) { this.payload = pt || ''; try { resolve({ code: this.code, headers: this.headers, body: JSON.parse(this.payload) }) } catch (e) { resolve({ code: this.code, headers: this.headers, raw: this.payload, bytes: this.payload }) } },
+    }
+    const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
+    if (method === 'POST') {
+      const chunks = [JSON.stringify(body)]
+      req.on = (ev, fn) => {
+        if (ev === 'data') chunks.forEach(c => fn(c))
+        if (ev === 'end') Promise.resolve().then(() => fn())
+      }
+    }
+    Promise.resolve(routeHandler(req, res)).catch(reject)
+  })
+
+  const WF26 = 'name: t26m\nversion: "1"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /ws/t26/x/a/SKILL.md\n    outputs: ["/ws/t26/output/a.md"]\n    depends-on: []\n'
+  const mkManual = async (iid, stage, taskStatus, sessionId) => {
+    const dir = '/ws/t26/.workflow-agent/instances/' + iid
+    files.set(dir + '/metadata.json', JSON.stringify({ instanceId: iid, workflowName: 't26m', sessionId: sessionId === undefined ? null : sessionId, sessionCwd: '/ws/t26', sourcePath: '(inline workflowText)', params: {}, createdAt: '2026-09-05T00:00:00Z' }))
+    files.set(dir + '/instance.yaml', '# workflow 实例定义快照（参数化副本；源定义文件保持只读）\n# source: (inline workflowText)\n# instanceId: ' + iid + '\n# createdAt: 2026-09-05T00:00:00Z\n# params: {}\n\n' + WF26)
+    files.set(dir + '/state.json', JSON.stringify({ workflow: 't26m', stage, tasks: [{ id: 'a', name: 'A', type: 'llm-task', status: taskStatus, dependsOn: [] }], maxConcurrency: 2 }))
+    files.set(dir + '/output/o.md', '产物-' + iid)
+    files.set(dir + '/logs/run.log', 'log-' + iid)
+  }
+  await mkManual('t26-stop-00000001', 'STOPPED', 'DONE', 'sess-t29-a')
+  await mkManual('t26-run-00000002', 'RUNNING', 'RUNNING', 'sess-t29-b')
+  await mkManual('t26-created-00003', 'PENDING', 'PENDING', null)
+  await mkManual('t26-comp-00000004', 'COMPLETED', 'DONE', null)
+  files.set('/ws/t26/.workflow-agent/archive/.gitkeep', '')
+
+  // 空归档列表
+  let r = await call('GET', '/wf/archives?workspaceRoot=/ws/t26')
+  check('archives: 空列表 200', r.code === 200 && Array.isArray(r.body.archives) && r.body.archives.length === 0, JSON.stringify(r.body))
+  r = await call('GET', '/wf/archives')
+  check('archives: 缺 workspaceRoot 400', r.code === 400)
+
+  // 归档门控：RUNNING / PENDING 拒绝（含参数缺失与穿越）
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: 't26-run-00000002' })
+  check('archive: RUNNING 400 须先停止', r.code === 400 && String(r.body.error).indexOf('先停止') >= 0, JSON.stringify(r.body))
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: 't26-created-00003' })
+  check('archive: PENDING 400 无执行内容', r.code === 400 && String(r.body.error).indexOf('不支持归档') >= 0, JSON.stringify(r.body))
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: '../evil' })
+  check('archive: 穿越 id 400', r.code === 400 && String(r.body.error).indexOf('非法') >= 0)
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26' })
+  check('archive: 缺 instanceId 400', r.code === 400)
+
+  // 显式归档 STOPPED 实例：备份 + 原目录删除 + 会话 DONE
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: 't26-stop-00000001' })
+  check('archive: STOPPED 200 + backupDir 含 _archive_STOPPED', r.code === 200 && r.body.ok === true && String(r.body.backupDir).indexOf('_archive_STOPPED') > 0, JSON.stringify(r.body))
+  check('archive: 原实例目录已删除（node:fs rm）', rmCalls.some(p => p.indexOf('instances/t26-stop-00000001') > 0) && ![...files.keys()].some(k => k.indexOf('instances/t26-stop-00000001') === 0), JSON.stringify([...files.keys()].filter(k => k.indexOf('t26-stop') >= 0)))
+  check('archive: 引擎内存条目清理', registry.get('t26-stop-00000001') === undefined)
+  r = await call('GET', '/wf/archives?workspaceRoot=/ws/t26')
+  const arch1 = (r.body.archives || []).find(a => a.instanceId === 't26-stop-00000001')
+  check('archives: 归档条目列出（kind/state/files/bytes）', !!arch1 && arch1.kind === 'archive' && arch1.state === 'STOPPED' && arch1.files >= 4 && arch1.bytes > 0, JSON.stringify(arch1))
+  check('archives: 条目携带原绑定 sessionId', arch1 && arch1.sessionId === 'sess-t29-a', JSON.stringify(arch1 && arch1.sessionId))
+  const doneState = await registry.deriveSessionState('/ws/t26', 'sess-t29-a')
+  check('archive: 绑定会话派生 DONE（archiveDeclaresSession）', doneState && doneState.state === 'DONE', JSON.stringify(doneState))
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: 't26-stop-00000001' })
+  check('archive: 已归档实例再归档 400（目录已删）', r.code === 400, JSON.stringify(r.body))
+
+  // 删除归档：404 / 穿越 / 成功
+  r = await call('POST', '/wf/delete-archive', { workspaceRoot: '/ws/t26', instanceId: 't26-stop-00000001', entry: 'no-such-entry' })
+  check('delete-archive: 不存在 404', r.code === 404, JSON.stringify(r.body))
+  r = await call('POST', '/wf/delete-archive', { workspaceRoot: '/ws/t26', instanceId: 't26-stop-00000001', entry: '../../evil' })
+  check('delete-archive: 穿越条目 400', r.code === 400 && String(r.body.error).indexOf('非法') >= 0)
+  r = await call('POST', '/wf/delete-archive', { workspaceRoot: '/ws/t26', instanceId: 't26-stop-00000001', entry: arch1.entry })
+  check('delete-archive: 200 deleted', r.code === 200 && r.body.deleted === true, JSON.stringify(r.body))
+  r = await call('GET', '/wf/archives?workspaceRoot=/ws/t26')
+  check('delete-archive: 列表不再含该条目', !(r.body.archives || []).some(a => a.instanceId === 't26-stop-00000001'), JSON.stringify(r.body.archives))
+
+  // 下载：活动实例（COMPLETED 已归档条目）+ 活动实例多选 → 单 zip → 一次性 token 取回
+  r = await call('POST', '/wf/archive', { workspaceRoot: '/ws/t26', instanceId: 't26-comp-00000004' })
+  check('archive: COMPLETED 也可归档', r.code === 200 && r.body.stage === 'COMPLETED', JSON.stringify(r.body))
+  r = await call('GET', '/wf/archives?workspaceRoot=/ws/t26')
+  const dlArch = (r.body.archives || []).find(a => a.instanceId === 't26-comp-00000004')
+  check('download 前置: 归档列表含 t26-comp 条目', !!dlArch, JSON.stringify(r.body.archives))
+  r = await call('POST', '/wf/download', { workspaceRoot: '/ws/t26', targets: [] })
+  check('download: 空 targets 400', r.code === 400)
+  r = await call('POST', '/wf/download', { workspaceRoot: '/ws/t26', targets: [{ kind: 'archive', instanceId: 't26-comp-00000004', entry: '../../etc' }] })
+  check('download: 穿越条目被过滤 → 无文件 400', r.code === 400, JSON.stringify(r.body))
+  let r2
+  r = await call('POST', '/wf/download', { workspaceRoot: '/ws/t26', targets: [
+    { kind: 'archive', instanceId: dlArch.instanceId, entry: dlArch.entry },
+    { kind: 'instance', instanceId: 't26-run-00000002' },
+  ] })
+  check('download: 200 downloadUrl+filename+fileCount', r.code === 200 && !!r.body.downloadUrl && String(r.body.filename).endsWith('.zip') && r.body.fileCount >= 4, JSON.stringify(r.body))
+  r2 = await call('GET', r.body.downloadUrl)
+  const zbuf = Buffer.from(r2.bytes || [])
+  check('download: 产物为合法 zip（PK 头 + content-disposition）', zbuf.length > 100 && zbuf.readUInt32LE(0) === 0x04034b50 && String(r2.headers['content-disposition']).indexOf('attachment') >= 0, `len=${zbuf.length} cd=${String(r2.headers && r2.headers['content-disposition']).slice(0, 60)}`)
+  r2 = await call('GET', r.body.downloadUrl)
+  check('download: token 一次性（二次 404）', r2.code === 404, '')
+}
   // 验证 expandConcurrentTasks 展开（无依赖 + 元数据）
   const concTask = {
     id: 'batch', name: '批量', type: 'concurrent', dependsOn: [], timeout: 600,
@@ -2608,6 +2790,8 @@ async function runCase25() {
     await runCase24()
     // ── 用例 25：实例编辑前台（Iter-28）──
     await runCase25()
+    // ── 用例 26：实例管理（Iter-29：zip-writer/归档/删除/下载）──
+    await runCase26()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

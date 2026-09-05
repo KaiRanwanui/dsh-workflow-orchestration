@@ -17,6 +17,7 @@ const SOURCES = {
   'workflow-paths': path.join(ROOT, 'shared/workflow-paths.js'), // Iter-27a：路径分类/解析锚点（isAbsoluteishPath 前移自此；须位于 tools-preset 之前）
   'workflow-validate': path.join(ROOT, 'shared/workflow-validate.js'), // Iter-27b：语义校验引擎（排 workflow-paths 后：E_ 别名同作用域直呼；其内部再引用 items-extract/schema，均在前置 section）
   'workflow-edit': path.join(ROOT, 'shared/workflow-edit.js'), // Iter-28：实例编辑前台（序列化器/权限矩阵/patch 合并；排 workflow-validate 后：仅依赖 parser 的 parseYaml 同作用域可见）
+  'zip-writer': path.join(ROOT, 'shared/zip-writer.js'), // Iter-29：纯 JS STORE zip writer（零依赖；归档/实例打包下载用）
   'engine': path.join(ROOT, 'plugins/workflow-host/engine.js'),
   'storage': path.join(ROOT, 'plugins/workflow-host/storage.js'),
   'instance-store': path.join(ROOT, 'plugins/workflow-host/instance-store.js'),
