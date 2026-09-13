@@ -1219,26 +1219,24 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         entry.engine.stop() // Iter-18：仅 RUNNING→STOPPED（保进度，active=false）
         const r = await entry.storage.save()
         entry.engine.setPersist(r)
-        // Iter-SUBA(P3)：权威急停——级联 interrupt 仍在跑的任务子会话（fire-and-return，one-shot/absent=no-op）；
-        // apiProxy 不可用/单子失败均不阻断 stop 主流程。Iter-23(方向A)：手工停 DSH 会话路径（A1 事件
-        // tap 即时处置 / A2 sync 轮询兜底）走 instance-store.applyUserStop，与本工具同一处置语义
-        // （STOPPED(user-stop)+级联），面板 Stop 与 UI 停止按钮自此同级权威。
+        // Iter-SUBA(P3)：权威急停——级联 interrupt 任务子会话（fire-and-return）。0.1.5 迁移 +
+        // Phase 3 实证修订：activity 字段不可靠（子会话在跑仍报 inactive），而 interruptByParent
+        // 官方契约「absent/idle/completed 目标 = accepted no-op」→ **放弃判活，对全部 child 条目
+        // 直接下发 interrupt**：活着的被打断，死的自动 no-op。单子失败不阻断 stop 主流程。
+        // Iter-23(方向A)：手工停 DSH 会话路径（A1 事件 tap / A2 sync 轮询）走 applyUserStop 同语义。
         let stoppedChildren = 0
         try {
           const sid = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.id : undefined
-          const apiProxy = ctx && ctx.get ? ctx.get('apiProxy') : undefined
-          if (apiProxy && apiProxy.subagents && sid) {
-            const lst = await apiProxy.subagents.list({ rpcId: 'wf-stop-list-' + Date.now(), payload: { parentSessionId: sid } })
-            const body = lst && lst.payload !== undefined ? lst.payload : lst
-            const value = body && body.result && body.result.value ? body.result.value : body
-            const entries = value && Array.isArray(value.entries) ? value.entries : []
-            for (const ch of entries) {
-              if (ch && ch.kind === 'child' && ch.activity === 'running') {
-                try {
-                  await apiProxy.subagents.interrupt({ rpcId: 'wf-stop-int-' + Date.now() + '-' + ch.id, payload: { parentSessionId: sid, childSessionId: ch.id } })
-                  stoppedChildren += 1
-                } catch (e2) { /* 单子失败不阻断 */ }
-              }
+          const subagents = ctx && ctx.get ? ctx.get('subagents') : undefined
+          if (subagents && typeof subagents.listChildren === 'function' && sid) {
+            const entries = await subagents.listChildren(sid)
+            const list = Array.isArray(entries) ? entries : []
+            const childIds = list.filter((ch) => ch && ch.kind === 'child' && ch.id).map((ch) => ch.id)
+            for (const cid of childIds) {
+              try {
+                await subagents.interruptByParent(cid, sid, 'continuable')
+                stoppedChildren += 1
+              } catch (e2) { /* 单子失败不阻断 */ }
             }
           }
         } catch (e2) { /* 级联失败不阻断 stop 主流程 */ }

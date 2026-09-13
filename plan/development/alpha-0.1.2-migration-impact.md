@@ -1,5 +1,7 @@
 # DSH 0.1.2-alpha.2 变更对 workflow-agent 的影响分析与迁移方案要点
 
+> **状态（2026-09-13）**：本文的反推分析已用 0.1.5-rc.2 实包逐项复核完毕（`sessionController.prompt` 签名推断证实；另发现 `subagents.followup` 服务级 API 移除、`sessions.cancel` 去向等新变化）。**最新结论以《dsh-0.1.5-rc-upgrade-impact-and-migration-plan.md》为准**，本文保留作 alpha 期调研历史。
+
 > **文档用途**：后续从 DSH `0.1.1-rc.2` 迁移到 `0.1.2-alpha.x`（或更新稳定版）时的参考资料。
 > 记录 alpha 变更内容、对 workflow-agent 的具体影响、迁移注意事项与初步方案，避免届时重新调研。
 >

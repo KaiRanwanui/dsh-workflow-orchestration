@@ -1185,8 +1185,17 @@ function lgAggStatus(items) {
           ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
           : undefined
         // Iter-20(S5)：当前会话 agent preset（预设门控；仅 workflow-orchestrator 显示面板）
+        // 0.1.5 迁移：session preset 改经 projection 下发——官方读取路径为
+        // byId[id].projectionValues.agentPreset（见 dsh-client-ui-agent-preset AgentPresetLabel）；
+        // 保留直读 byId[id].agentPreset 兜底（兼容旧 store 形态）。
         const sessionPreset = useSessions
-          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].agentPreset : undefined))
+          ? useSessions((s) => {
+              if (sessionId === undefined || sessionId === null) return undefined
+              const entry = s.byId && s.byId[sessionId]
+              if (!entry) return undefined
+              const projected = entry.projectionValues && entry.projectionValues.agentPreset
+              return typeof projected === 'string' ? projected : entry.agentPreset
+            })
           : undefined
         // Iter-21(R2)：子会话（origin==='subagent'）一律占位，不显示工作流面板
         const sessionOrigin = useSessions

@@ -1,9 +1,10 @@
 # Workflow Orchestrator — 编排 Agent 核心指令
 
 > 本文件是编排 Agent 的 system prompt（persona）**单一源**。
-> rc2 系统限制：`@deepseek-ai/dsh-persona` 的 Config 仅支持内联 text（无 file 引用），
+> 系统限制：`@deepseek-ai/dsh-persona` 的 Config 仅支持内联字段（无 file 引用）；
+> 0.1.5 起 schema 为必填 `prefix`（0.1.1-rc.2 时代为 `text`），
 > 因此构建期由 `code/scripts/sync-persona.js` 把本文件全文注入
-> `agent.cordis.yml` 的 persona 行 `text` literal block（该区块勿手编）。
+> `agent.cordis.yml` 的 persona 行 `prefix` literal block（该区块勿手编）。
 > **改 persona 一律改本文件后跑 sync-persona.js。** DSH 版本升级后须复查
 > dsh-persona 是否新增文件引用能力（若有则改为 file 引用并删除该脚本）。
 

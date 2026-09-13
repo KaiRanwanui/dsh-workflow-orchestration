@@ -85,9 +85,10 @@
 
 ---
 
-## 备注：DSH 版本迁移（待规划）
+## 备注：DSH 版本迁移（已立项：0.1.1-rc.2 → 0.1.5-rc.2）
 
-- **状态**：待规划。项目仍以 DSH `0.1.1-rc.2`（`latest` 稳定版）为基线迭代，暂不迁移。
-- **触发背景**：`0.1.2-alpha.2` 已确认**退役 APIProxy**，改用 Remote/Controller（Typert）架构，属破坏性变更。
-- **影响分析与迁移要点**：见 `plan/development/alpha-0.1.2-migration-impact.md`。
-- **计划**：本项不并入迭代节奏；待 DSH `0.1.2` 出稳定版、且时机成熟时，再单独立项规划（先探针确认 `ctx.get('sessionController')` 签名 → 跑通 rc2 基线回归 → 迁移 inject + 两处 prompt 调用 → 回归面板 4 键）。
+- **状态（2026-09-13 刷新）**：已立项，待环境升级完成后启动迁移迭代。完整影响评估与四阶段计划见 `plan/development/dsh-0.1.5-rc-upgrade-impact-and-migration-plan.md`（已用 0.1.5-rc.2 实包代码级核对；前作 `alpha-0.1.2-migration-impact.md` 已标注被其接替）。
+- **用户拍板（2026-09-13，D1-D6 全闭合）**：D1 目标版本=`0.1.5-rc.2`；D3 直接切换不做双版本 shim；D4 **全新安装、SQLite 会话与原插件数据全部丢弃**（无备份/导出）；D5 插件从零按需选装；D6 不用社区升级 skill；D2 全部 30 个迭代已完成，无在途冲突。环境安装由用户借助其他 Agent 完成，之后回 DSH 会话做 workflow-agent 迁移迭代（Phase 2 含全新环境重新挂载：profile `link:`+`dsh.profile.bundles`+`pnpm install`、preset 三件重部署）。
+- **迁移面（实包核实）**：inject 去除 apiProxy→sessionController；生产 4 调用点（prompt×2/list/interrupt）改新签名；/wf/probe-inject 探针 followup→sendMessage；客户端 conversation.view 槽位存续、预期零改动。
+- **Phase 2 已执行（2026-09-13，迁移迭代）**：§3.3 七项映射全部落地（inject 两处/prompt×4 新签名含 delivery/listChildren+interruptByParent/probe sendMessage/snap 字段核对）；563 单测全绿（桩同步新服务形状）；host v0.21.0/client v0.9.1；**修复 build.js 模板硬编码旧 inject 的漂移隐患**（改从 mjs 提取）；全新环境重挂载完成（`dsh plugin add` 官方通道 + preset 全量部署 `~/.dsh/.agent-presets/workflow-orchestrator/`）；开工前全量备份 `workflow-agent-backup-pre-0.1.5-migration-full-20260913-202833.tar.gz`。**待办**：用户重启 `dsh.service` → journalctl 验证激活；Phase 3 行为回归另行报设计。报告 `iter-migration-015rc2-report.md`。
+- **Phase 3 已执行（2026-09-13，迁移回归迭代）**：四键真实感知/A1 停止链路/demo 端到端×2/客户端面板/孤儿回收全绿；**发现并修复 6 项迁移缺陷**（persona prefix schema、client projection 门控、prompt signal 必填、agents 判活失效、面板 Stop 架构修订为路由层权威直停 `sessionController.cancel` 原生级联、重启后 hasState 磁盘水合）；delivery 两态+probe-inject 完整冒烟留观 Iter-31。报告 `iter-migration-015rc2-verification-report.md`。

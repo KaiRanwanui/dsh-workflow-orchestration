@@ -655,18 +655,19 @@ async function runCase15() {
   check('S3 自愈(D4): 磁盘 state.json 已落盘 STOPPED 且保 DONE', healedState.stage === 'STOPPED' && healedState.tasks.some(t => t.id === 'b' && t.status === 'DONE'), healedState.stage)
 
   // 3c) Iter-22(S4)：/wf/reset 注入"已重置"通知（queue 模式，含全新运行语义文案）
+  // 0.1.5 迁移：apiProxy.sessions.prompt → sessionController.prompt（requestId 拍平、返回 {accepted:true}）
   const promptCalls = []
   ctx2.get = (n) => {
     if (n === 'webServer') return { register(def) { routeHandler = def.handler } }
     if (n === 'fs') return mockFs
-    if (n === 'apiProxy') return { sessions: { prompt: async (p) => { promptCalls.push(p); return { ok: true } } } }
+    if (n === 'sessionController') return { prompt: async (p) => { promptCalls.push(p); return { accepted: true } } }
     return undefined
   }
   const rr = await call('POST', '/wf/reset', { workspaceRoot: cwd, instanceId: b.instanceId, sessionId: 'sess-a' })
   const lastPrompt = promptCalls[promptCalls.length - 1]
-  const lastText = lastPrompt && lastPrompt.payload && Array.isArray(lastPrompt.payload.content) && lastPrompt.payload.content[0] ? lastPrompt.payload.content[0].text : ''
+  const lastText = lastPrompt && Array.isArray(lastPrompt.content) && lastPrompt.content[0] ? lastPrompt.content[0].text : ''
   check('S4 /wf/reset: 状态重置为 PENDING + 注入已重置消息', rr.code === 200 && rr.body.stage === 'PENDING' && rr.body.messageInjected === true, JSON.stringify({ code: rr.code, stage: rr.body.stage, mi: rr.body.messageInjected, error: rr.body.error }))
-  check('S4 /wf/reset: 注入文案含"已重置"+全新运行语义 + queue', /已重置/.test(lastText) && /全新工作流/.test(lastText) && lastPrompt.payload.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.payload && lastPrompt.payload.mode, text: String(lastText).slice(0, 80) }))
+  check('S4 /wf/reset: 注入文案含"已重置"+全新运行语义 + queue', /已重置/.test(lastText) && /全新工作流/.test(lastText) && lastPrompt.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.mode, text: String(lastText).slice(0, 80) }))
 
   // 4) forSession 根修复：未绑定会话 → undefined（绝不取工作区最新实例）；已绑定 → 返回本会话实例
   const r1 = await registry.forSession({ agent: { session: { header: { id: 'sess-zzz', cwd } } } })
@@ -700,12 +701,18 @@ async function runCase16() {
     get(n) {
       if (n === 'fs') return mockFs
       if (n === 'tools') return { register(t) { bag[t.name] = t } }
-      if (n === 'apiProxy') {
-        return { subagents: {
-          // Iter-SUBA(P3) 工具级联依赖的 mock：响应形状对齐 apiProxy 实测（payload.result.value）
-          list: async (req) => ({ payload: { rpcId: req.rpcId, result: { ok: true, value: { entries: (childrenBySession['sess-a'] || []).map((id) => ({ kind: 'child', id, activity: runningChildren.has(id) ? 'running' : 'inactive' })), parentAvailable: true } } } }),
-          interrupt: async (req) => { interrupted.push(req.payload.childSessionId); runningChildren.delete(req.payload.childSessionId); return { payload: { rpcId: req.rpcId, result: { ok: true, value: { accepted: true } } } } },
-        } }
+      if (n === 'subagents') {
+        return {
+          // 0.1.5 迁移：apiProxy.subagents 退役 → subagents 服务新形状 mock
+          // listChildren(parentSessionId) → SubagentListEntry[]（durable；activity 由插件用 agents 重算）
+          listChildren: async (parentSessionId) => (childrenBySession[parentSessionId] || []).map((id) => ({ kind: 'child', id })),
+          // interruptByParent(childSessionId, parentSessionId, mode) → { accepted: true }
+          interruptByParent: async (childSessionId) => { interrupted.push(childSessionId); runningChildren.delete(childSessionId); return { accepted: true } },
+        }
+      }
+      if (n === 'agents') {
+        // workflow_stop 级联判活依赖：agents.get(childId).status === 'running'
+        return { get: (id) => ({ status: runningChildren.has(id) ? 'running' : 'idle' }) }
       }
       return undefined
     },
@@ -738,7 +745,9 @@ async function runCase16() {
   r = await registered.workflow_stop.execute({}, exec)
   check('c16 P3:workflow_stop → STOPPED', r.stage === 'STOPPED', r.stage)
   check('c16 P3:级联打断 running 子会话', interrupted.includes('child-2'), JSON.stringify(interrupted))
-  check('c16 P3:返回 stoppedChildren=1', r.stoppedChildren === 1, r.stoppedChildren)
+  // 0.1.5 Phase 3 修订：级联放弃判活、对全部 child 条目下发 interrupt（idle/absent 目标为服务端 no-op）
+  // → stoppedChildren 语义变为「下发 interrupt 的子会话数」= 全部 child 条目数
+  check('c16 P3:返回 stoppedChildren=全部子会话数', r.stoppedChildren === childrenBySession['sess-a'].length, r.stoppedChildren)
   check('c16 P2:stopReason=user-stop', registry.get(iid).meta.stopReason === 'user-stop', registry.get(iid).meta.stopReason)
 
   // 4) user-stop + agent running → 永不自动恢复（P2 反例，权威停止语义）

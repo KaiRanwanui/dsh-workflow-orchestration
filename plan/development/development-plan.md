@@ -35,7 +35,7 @@
 已完成: …（同上）… → Iter-27a ✅ → **Iter-27b ✅（2026-09-04 关闭：语义校验——workflow-validate.js 校验引擎（8 错误码+2 警告：依赖环/缺 processor/缺 gate checker/技能或输入文件缺失/items 缺失或解析失败/preset 禁字面绝对+重复声明警告），create/begin 硬拦截（拒绝零副作用不建实例）、start/resume 实时闸门（重读 instance.yaml 防创建后退化）、reset 回传不拦、workflow_validate 只读工具（实例/定义两形态+preset 锚定）、/wf/create 同款关口、拒绝响应 hint=验收修正安全红线（被拦后 LLM 只许转告清单+停止，严禁自行搜索/替换技能或输入文件），host v0.18.0，485 单测，用户 GUI 验收通过（拦错/修复放行/删技能拦停含修正复验/零误报），git 585c5b1 已推送，报告 iter27b-report.md）**
 已完成: …（同上）… → Iter-27b ✅ → **Iter-28 ✅（2026-09-04 关闭：实例编辑前台——DAG 下方可折叠双栏编辑器（任务列表+表单：技能下拉预定义/工作区合并同名顶替、inputs/outputs、重试/并发）+实例级 name/maxConcurrency/params 只读区、workflow-edit.js 共享模块（稳定序列化/权限矩阵/白名单补丁）+ /wf/skills·instance-yaml·validate-instance 路由（保存=Iter-27b 校验先于落盘+注释头保留）、创建对话框 params 键值行+成功呈现视图+warnings 面板（25 遗留清）、RUNNING 全禁用+外部 stage 即时刷新，host v0.19.0/client v0.7.0，529 单测，两轮 GUI 验收修正（inputs 添加态/workflow_status 挂 params/persona 内联双写踩坑→**persona 单源化 A 方案**：system-prompt.md 唯一源+sync-persona.js 构建期注入，rc2 内联限制记档 architecture-decisions §8），params 进 subagent 首条消息复验通过，git bc54fdf 已推送，报告 iter28-report.md）**
 已完成: …（同上）… → Iter-27b ✅ → Iter-28 ✅ → Iter-29 ✅ → **Iter-30 ✅（2026-09-05 关闭：DAG 分层布局——最长路径分层+重心排序+非交叉锚点分配+沟道走廊直角路由+合并点正交/分支扇出贝塞尔；原型 PoC 多轮打磨后机械移植进 client.js；附加修复 4 项（创建弹窗模板路径+校验错误清单/哨兵任务渲染/延迟展开命名剥离后缀/下拉配色）；host v0.20.1/client v0.9.0，563 单测，用户 GUI 验收通过，git 已推送，报告 iter30-report.md）**
- 当前:   **Iter-31 节点详情面板 + 交互增强 + 主题适配（规划中）**。
+ 当前:   **DSH 迁移迭代（0.1.1-rc.2 → 0.1.5-rc.2，待用户完成环境升级后启动；见 §5 与 `dsh-0.1.5-rc-upgrade-impact-and-migration-plan.md`）**；其后 Iter-31（节点详情面板 + 交互增强 + 主题适配，规划中——建议排在迁移后，避免新版客户端 UI 上返工）。
 ```
 
 | 迭代 | 名称 | 核心交付 | 验证方式 | 依赖 |
@@ -768,7 +768,11 @@ workflow_list → 列出所有实例 + 状态
 
 ### Iter-30: DAG 美化与交互（块3）
 
-**交付**（范围待本迭代开工前细化确认）：
+**状态**：✅ **完成关闭**（2026-09-05，`iter30-report.md`；host v0.20.1 / client v0.9.0，563 单测，GUI 验收通过）
+
+**关闭摘要**：分层布局算法（最长路径分层+重心排序+非交叉锚点分配+沟道走廊直角路由+合并点正交/分支扇出贝塞尔；`PoC/dag-layered-prototype.html` 原型多轮打磨后机械移植 client.js，算法区逐字符一致）+ 附加修复 4 项（创建弹窗模板路径 E-ITEMS-MISSING 误报+校验错误结构化清单 / 哨兵任务渲染 4 行→3 行 / 延迟展开命名剥离「（等待 items）」后缀 / 下拉列表配色）。详见 `progress-record.md` §七。
+
+**交付**：
 1. 节点详情面板（点击节点展示：状态、inputs/outputs、技能、门禁结果——数据依赖 Iter-25 落盘）；
 2. 视觉与布局优化（配色/层次/进度表达/运行态动画/自动跟随）；
 3. 交互增强按需取舍（缩放平移等）。
@@ -804,16 +808,12 @@ workflow_list → 列出所有实例 + 状态
 
 ---
 
-## 5. 待规划：DSH 版本迁移（`0.1.2-alpha.x`+）
+## 5. DSH 版本迁移（`0.1.1-rc.2` → `0.1.5-rc.2`，已立项）
 
-> **状态：待规划**。当前仍以 DSH `0.1.1-rc.2`（`latest` 稳定版）为基线迭代，**暂不迁移**。
-> 本小节仅登记迁移事项，待 DSH `0.1.2` 出稳定版且时机成熟时再单独立项规划具体执行。
+> **状态（2026-09-13 刷新）**：已立项，待环境升级完成后启动迁移迭代。DSH 最新 rc = `0.1.5-rc.1`（npm `latest`）/ `0.1.5-rc.2`（`next`），均发布于 2026-09-10。
+> **完整影响评估与四阶段迁移计划**：见 **`plan/development/dsh-0.1.5-rc-upgrade-impact-and-migration-plan.md`**（2026-09-13 建立，已用 0.1.5-rc.2 实包代码级核对；前作 `alpha-0.1.2-migration-impact.md` 的反推全部证实，保留作历史）。
 
-- **背景**：`0.1.2-alpha.2` 已确认**退役 `APIProxy`**，改用 Remote/Controller（Typert）架构。这属于破坏性变更。
-- **对 workflow-agent 的直接影响**：插件 `inject` 把 `apiProxy` 声明为硬依赖（`code/packages/workflow-host/lib/index.js:7`、`code/agent-presets/workflow-orchestrator/workflow-host.mjs:8`），且面板控制（启动/停止/继续/重置）的消息注入依赖 `apiProxy.sessions.prompt` / `apiProxy.subagents.prompt`。
-- **影响分析与迁移方案要点**：见 **`plan/development/alpha-0.1.2-migration-impact.md`**（已建，含详细定位、新旧接口对照、迁移 Checklist、初步方案）。
-- **规划时点**：等 DSH `0.1.2` 进入稳定通道后再评估；alpha 属测试通道，不在其上进行功能迭代。
-- **迁移前必做**：
-  1. 确认 `ctx.get('sessionController')` 存在及其 `prompt` 精确签名（当前 GitHub 在本机不可达，需对照 alpha `.d.ts` 复核）。
-  2. 先跑通 rc2 基线回归用例，锁定行为基线。
+- **决策（2026-09-13 用户拍板 D1-D6 全闭合）**：目标版本 = **`0.1.5-rc.2`**；D3 直接切换不做双版本 shim；D4 **全新安装、原插件与会话数据全部丢弃**（无备份/SQLite 导出）；D5 插件从零按需选装；D6 不用社区升级 skill；30 个迭代已全部完成，无在途冲突。环境安装由用户借助其他 Agent 完成，完成后回 DSH 会话启动迁移迭代（Phase 2 含全新环境重新挂载）。
+- **迁移面摘要（实包核实）**：唯一硬断裂 = `inject` 中的 `apiProxy`；生产 4 个调用点迁移（`sessions.prompt`→`sessionController.prompt`、`subagents.prompt`→`subagents.prompt`（新增 `delivery` 字段）、`subagents.list`→`listChildren`、`subagents.interrupt`→`interruptByParent`）+ `/wf/probe-inject` 探针（`subagents.followup` 已移除→`sendMessage`）；客户端 `conversation.view` 槽位、`slots` 服务、`dsh.profile.bundles` 均存续，预期零改动；fs/tools/webServer/agents/sessions/session-event 全部存续。
+- **原「迁移前必做」两项已闭环**：① `sessionController` 存在且 `prompt` 签名已实包核实（`{requestId, sessionId, mode:'queue'|'steer', content, clientTimeZone?}`）；② rc2 行为基线以 563 单测 + 各迭代 GUI 验收为准。
   3. 重点回归「面板 4 键 → agent 是否真正感知」（Iter-21 曾修「按钮无效/agent 不感知」）。

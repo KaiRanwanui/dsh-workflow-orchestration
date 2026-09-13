@@ -136,9 +136,10 @@ function createInstanceRegistry(ctx, deps) {
   // 探针结论（Iter-22 S1 探针）：提问等待（ask_user_question 阻塞）期间 status 仍为 running，
   // 不产生 idle；hasPending=true 仅出现在用户消息已排队、driver 尚未认领的间隙——该间隙不得误停。
   const isAgentPending = typeof deps.isAgentPending === 'function' ? deps.isAgentPending : (() => false)
-  // Iter-SUBA(P1/P3)：会话树子会话聚合探针。生产由 apply 注入 apiProxy.subagents 包装：
+  // Iter-SUBA(P1/P3)：会话树子会话聚合探针。生产由 apply 注入 subagents 服务包装（0.1.5 迁移：
+  //   apiProxy.subagents 退役 → listChildren/interruptByParent）：
   //   listRunningChildren(sid) → 仍在上跑（activity==='running'）的子会话 id 数组（含历史枚举，
-  //   activity 由 apiProxy 用 agents.get(id)?.status==='running' 重算——官方同款判活）
+  //   activity 由 agents.get(id)?.status==='running' 重算——官方同款判活）
   //   interruptChild(sid, childId) → 级联打断子会话当前回合（fire-and-return；one-shot/absent=no-op）
   // 缺省 no-op（无子会话信息 → 不守卫直接停，保持既有行为）。
   const listRunningChildren = typeof deps.listRunningChildren === 'function' ? deps.listRunningChildren : (async () => [])
