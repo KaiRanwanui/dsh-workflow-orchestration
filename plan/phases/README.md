@@ -12,7 +12,7 @@
 | **阶段 1 · 核心功能开发** | `phase-1-core/` | 2026-08-26 ~ 09-05 | 0.1.1-rc.2 | host v0.20.1 / client v0.9.0 | **30 迭代 + Iter-SUBA** |
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | `phase-2-dsh-migration/` | 2026-09-13 | 0.1.1-rc.2 → 0.1.5-rc.2 | host v0.21.0 / client v0.9.1 | **5 个阶段任务**（Phase 0–4） |
 
-阶段 3（构建链合并重构）启动后按同一结构新建 `phase-3-*/`。
+阶段 3（构建链合并重构）：方案见 [`phase-3-build-chain/plan.md`](phase-3-build-chain/plan.md)（待确认）；收尾时补 `README.md` 与 `iterations/`。
 
 ## 归档规则
 
