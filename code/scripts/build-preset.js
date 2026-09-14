@@ -1,13 +1,41 @@
 // ============================================================================
-// workflow-agent — Agent Preset 本地插件构建脚本
+// workflow-agent — Agent Preset 本地插件构建脚本〔已废弃 · DEPRECATED〕
 // 文件：code/scripts/build-preset.js
-// 说明：把共享模块（schema/parser/engine/storage）与 preset 形态工具
-//       （ctx.tools.register，exec.cwd 默认落盘）拼接为单个 ESM 插件文件：
-//       code/agent-presets/workflow-orchestrator/workflow-host.mjs
-//       供 agent.cordis.yml 以 `name: ./workflow-host.mjs` 挂载。
-// 用法：node code/scripts/build-preset.js
+//
+// ⚠️ 本脚本已废弃（2026-09-13，Iter-Migration-Phase4 拍板），**禁止运行**。
+//
+// 废弃原因：本脚本是早期（3 模块时代）的 mjs 生成器，模板硬编码
+//   `inject: ['fs', 'timer']` 与 5 个模块拼接，早已落后于现役 workflow-host.mjs
+//   （6400+ 行、12 个 section）。**运行它会用陈旧模板整体覆盖现役 mjs**，
+//   造成此前多轮迭代成果丢失（含 0.1.5 迁移改动）。
+//
+// 现役构建链（改源后按序执行）：
+//   1) 改 section 源模块（code/shared/*、code/plugins/workflow-host/*、
+//      code/plugins/workflow-host-preset/tools-preset.js 等）
+//   2) node code/scripts/sync-modules.js [section ...]   ← 同步内联副本进 mjs
+//   3) mjs 直编 section（apply 前言探针 / webserver-routes / A1 tap）手工编辑
+//   4) node code/packages/workflow-host/build.js          ← 生成 npm 包 lib/index.js
+//   5) node code/scripts/test-host.js                     ← 单测回归
+//
+// 本文件保留仅作历史参考；如需重新生成 mjs，应基于 sync-modules.js 的
+// SOURCES 登记表扩展，而非复活本模板。
 // ============================================================================
 
+console.error('')
+console.error('✗ build-preset.js 已废弃，禁止运行。')
+console.error('  它会用陈旧模板（inject: [\'fs\', \'timer\']、5 模块）覆盖现役 workflow-host.mjs。')
+console.error('')
+console.error('  现役构建链：')
+console.error('    1) 改 section 源模块（code/shared/*、code/plugins/**/tools-preset.js 等）')
+console.error('    2) node code/scripts/sync-modules.js [section ...]')
+console.error('    3) mjs 直编 section（apply 前言探针 / webserver-routes / A1 tap）手工编辑')
+console.error('    4) node code/packages/workflow-host/build.js')
+console.error('    5) node code/scripts/test-host.js')
+console.error('')
+process.exit(1)
+
+/* eslint-disable */
+// ── 以下为废弃的历史实现，保留作参考，永不执行 ──────────────────────────
 const fs = require('fs')
 const path = require('path')
 

@@ -1,12 +1,14 @@
 # DSH 0.1.1-rc.2 → 0.1.5-rc.2 升级影响评估与迁移计划
 
+> **状态（2026-09-13 收尾）**：✅ **已执行完毕（Phase 0–4 全部闭合）**。Phase 2 记录见 `iter-migration-015rc2-report.md`，Phase 3 回归与缺陷修复见 `iter-migration-015rc2-verification-report.md`（含版本锁定矩阵与已知限制）。
+>
 > **文档用途**：DSH 新 rc 版本（0.1.5 系列）已发布。本文档给出 0.1.1-rc.2 → 0.1.5-rc.2 的完整变更清单（插件开发视角）、对 workflow-agent 的代码级影响评估（已用 0.1.5-rc.2 实包逐项核对）、以及分阶段迁移计划，供决策是否升级与规划迁移迭代。
 >
 > - **创建时间**：2026-09-13（周六）
-> - **当前 DSH 基线**：`0.1.1-rc.2`（本机，用户级 systemd `dsh.service`，Web 3080）
-> - **项目基线**：workflow-host `0.20.1`、client-ui-monitor `0.9.0`（npm 包形态 + agent preset 形态并存）
+> - **迁移前基线**：DSH `0.1.1-rc.2`（本机，用户级 systemd `dsh.service`，Web 3080）；项目 workflow-host `0.20.1` / client-ui-monitor `0.9.0`
+> - **迁移后现状（2026-09-13）**：DSH `0.1.5-rc.2`（10 个关键卫星包同版本）；项目 host **0.21.0** / client **0.9.1**；563 单测全绿
 > - **调研方法**：官方 GitHub Releases（v0.1.2-rc.1 tag 页 + releases.atom 全文）+ npm 实包下载解包（主包 + 10 个卫星包 @0.1.5-rc.2，本地 `dsh-upgrade-lab/`）代码级核对 + workflow-agent 源码全量扫描（服务用法矩阵）。
-> - **前作**：`alpha-0.1.2-migration-impact.md`（2026-08-31，alpha.2 期反推分析）。本文已用 0.1.5-rc.2 实包**逐项复核并确认**了当时的推断——Host 侧 `sessionController.prompt` 签名与反推完全一致；并修正/补充了新发现（`subagents.followup` 服务级 API 移除、`sessions.cancel` 去向、`conversation.view` 槽位存续等）。
+> - **前作**：`alpha-0.1.2-migration-impact.md`（2026-08-31，alpha.2 期反推分析）。本文已用 0.1.5-rc.2 实包**逐项复核并确认**了当时的推断——Host 侧 `sessionController.prompt` 签名与反推一致；并修正/补充了新发现（`subagents.followup` 服务级 API 移除、`sessions.cancel` 去向、`conversation.view` 槽位存续等）。**执行期再实证修正 3 处**（§3.3 相应条目已就地标注）：`prompt` 的 signal 实为必填、continuable 子会话不再进 agents store、注入通道不再保证即时打断（→ 面板 Stop 改路由层权威直停）。
 
 ---
 
@@ -128,11 +130,13 @@ const promptResult = await apiProxy.sessions.prompt({
 const sessionController = ctx.get('sessionController')
 const promptResult = await sessionController.prompt(
   { requestId: `wf-${verb}-${Date.now()}`, sessionId, mode, content: [{ type: 'text', text }] },
-  undefined   // signal 可选
+  new AbortController().signal   // ⚠️ 执行期实证修正：signal 实为**必填**
 )             // → { accepted: true }（SessionPromptValue）
 ```
 
 差异：`rpcId`→`requestId` 并入请求体；去掉 `payload` 包裹；返回直接值（不再有 `{payload:{rpcId,result:{ok,value}}}` 双层解包）；新增可选 `clientTimeZone`（Host 侧注入可不传）。
+
+> ⚠️ **执行期实证修正（2026-09-13，Phase 3）**：原文写「signal 可选」与实包不符——`sessionController.prompt` 实现首行即 `signal.throwIfAborted()`，传 `undefined` 抛 `Cannot read properties of undefined (reading 'throwIfAborted')`（缺陷 #3，见验证报告）。4 处调用统一改传真实 `AbortController().signal`。
 
 **③ 子代理指令注入**（L6059-6066 与 L6093-6100）
 
@@ -167,6 +171,8 @@ const catalog = await ctx.subagents.remoteExportList(parentSessionId, s)   // �
 ```
 
 > 现 probe 自己用 `agents.get(id)?.status === 'running'` 重算 activity，故 `listChildren` 即可等价；条目结构变化：`SubagentListEntry = { kind: 'child' | 'diagnostic', ... }`（按 createdAt、id 排序）。
+>
+> ⚠️ **执行期实证修正（2026-09-13，Phase 3）**：0.1.5 下 **continuable 子会话不再进 agents store**（`agents.get(childId)` 恒 `undefined`），且 `listChildren` 条目的 `activity` 字段亦不可靠（子会话在跑仍报 `inactive`）→ 原「用 agents 重算 activity」的等价性前提不成立。**最终实现**：守卫判活主源改为 `sessions.get(child)`（resident = live activation，0.1.1 同源语义），`activity`/`agents.get` 仅作兜底；停止级联则**放弃判活、对全部 child 条目直接下发 `interruptByParent`**（官方契约保证 absent/idle/completed 目标为 accepted no-op）。详见验证报告缺陷 #4。
 
 **⑤ 子代理中断**（L61-64 探针 + L4853-4864 stop 级联）
 
@@ -187,7 +193,11 @@ const messageId = await ctx.subagents.sendMessage(parentAgent, targetSessionId, 
 parentAgent.followup(message)                                                                        // queue 语义（Agent 原语）
 ```
 
-**⑦ 返回值与快照字段**：`snap.promptResult` / probe 返回里的结果结构改变（`{accepted:true}` 或 `{messageId}`），`/wf` 面板与 JSON 直出消费方需同步核对（Phase 3 回归项）。
+**⑦ 返回值与快照字段**：`snap.promptResult` / probe 返回里的结果结构改变（`{accepted:true}` 或 `{messageId}`），`/wf` 面板与 JSON 直出消费方需同步核对（Phase 3 回归项）。核对结论：`snap.promptResult` 仅进 `/wf` JSON 直出（诊断用），无客户端消费方；`snap.apiProxyUnavailable` → `snap.sessionControllerUnavailable`（同样无外部消费方）。
+
+> ⚠️ **执行期架构修订（2026-09-13，Phase 3 缺陷 #5）——注入通道不再保证即时性**：实测 0.1.5 下 `sessionController.prompt`/`subagents.prompt` 注入的消息**不再保证当场打断进行中的回合**（被排到 inbox `next-step`，甚至被后续 UI 操作整批移除，会话日志见 `agent/inbox/spliced {removedCount:2}`）。因此 Iter-21 确立的「面板 Stop = steer 注入 → agent 调 `workflow_stop`」间接链路失效（子会话迟迟不停）。
+>
+> **最终实现（面板 Stop 新语义）**：`/wf/stop` 路由层**权威直停**，同步串行四步——① 磁盘水合（重启后 `hasState=false` 时按 `state.json` 恢复）② `engine.stop()` + 落盘 + `stopReason='user-stop'` ③ **`sessionController.cancel({ sessionId })`（主通道）**：与 UI 停止按钮同一原语，0.1.5 原生级联令子会话收到 `aborted(parent)` 并终止；cancel 不可用时退回「对全部 child 条目下发 `interruptByParent`」兜底 ④ 注入「请停止」消息降级为**事后通知**（best-effort，让 agent 下轮看到 STOPPED 不再派发）。A1（会话级 UI 停止）链路不变，继续经 `session/event` tap → `applyUserStop`。
 
 ### 3.4 次生影响
 
@@ -224,13 +234,13 @@ parentAgent.followup(message)                                                   
 - 仅存动作：确认 `~/Projects/dsh_projects/workflow-agent/`（仓库）与 `dsh-upgrade-lab/`（0.1.5-rc.2 证据包）不在清理范围——二者在 Projects 工作区，不受 `~/.dsh` / `~/.mnemon` 清空影响。
 - **验证标准**：仓库与证据包完好。
 
-### Phase 1 — 全新安装 DSH 0.1.5-rc.2（0.5d，用户 + 外部 Agent）
+### Phase 1 — 全新安装 DSH 0.1.5-rc.2（0.5d，用户 + 外部 Agent）✅ 已完成（2026-09-13，会话外）
 
-- [ ] 清空旧 DSH 数据（`~/.dsh` 等，D4/D5 拍板全部丢弃），全新安装 `@deepseek-ai/dsh@0.1.5-rc.2`，重建 web(3080) / headless profile。
-- [ ] 插件按需从零选装（D5：旧插件不迁移；dshmarket / modsearch / mnemon / data-agent 等需要哪个装哪个，取 0.1.5 兼容版；侧边栏用官方内置）。
-- [ ] **重启 `dsh.service` 后 journalctl 冒烟**：Web 3080 打开、新建会话（默认模型 deepseek-flash）、3081 转发可达。
-- [ ] 此阶段 workflow-agent 尚未挂载（全新环境无插件）——Phase 2 完成适配后一并重新挂载。
-- **验证标准**：journalctl 无意外报错；新会话正常对话。
+- [x] 清空旧 DSH 数据（`~/.dsh` 等，D4/D5 拍板全部丢弃），全新安装 `@deepseek-ai/dsh@0.1.5-rc.2`，重建 web(3080) / headless profile。（✅ 复核：主包 + 10 关键卫星包均 0.1.5-rc.2）
+- [x] 插件按需从零选装（D5：旧插件不迁移；侧边栏用官方内置）。（✅ 全新环境仅挂载本项目两包 + 官方 bundle）
+- [x] **重启 `dsh.service` 后 journalctl 冒烟**：Web 3080 打开、新建会话、3081 转发可达。（✅ Phase 2 部署后由本会话复核：journal 无意外报错）
+- [x] 此阶段 workflow-agent 尚未挂载（全新环境无插件）——Phase 2 完成适配后一并重新挂载。（✅ Phase 2 已重挂载）
+- **验证标准**：journalctl 无意外报错；新会话正常对话。✅
 - **回滚点**：无（全新安装无存量数据可回滚；异常则重装另起）。
 
 ### Phase 2 — workflow-agent 适配（1~1.5d）✅ 已执行（2026-09-13，报告 `iter-migration-015rc2-report.md`）
@@ -250,20 +260,28 @@ parentAgent.followup(message)                                                   
 
 ### Phase 3 — 回归验证（0.5~1d）✅ 已执行（2026-09-13，报告 `iter-migration-015rc2-verification-report.md`；期间发现并修复 6 项迁移缺陷，含面板 Stop 架构修订为路由层权威直停）
 
-- [ ] **面板 4 键对「agent 真实感知」**（Iter-21 教训核心）：start（queue）/ stop（steer 打断当前轮）/ resume / reset——不能只看实例态变化，要看 agent 是否真的执行了注入指令。
-- [ ] 子代理分支：orchestrator 作为 continuable 子代理被注入（delivery=queue/steer 两态）。
-- [ ] A1 用户停止链路：UI 停止 → `sessionController.cancel` → 回合 aborted(user) → `session/event` tap → wf STOPPED(user-stop) + 级联 interrupt。
-- [ ] 孤儿回收（sessions.get 判活）、多实例并行、门禁 subagent（PASS→COMPLETED）、stop→resume 保进度。
-- [ ] `/wf/probe-inject` 新 API 冒烟（sendMessage 返回 messageId）。
-- [ ] 客户端面板（conversation.view 槽位）渲染正常；`read_image` 卡片等新版 UI 下顺带过一遍。
-- [ ] 跑通一个完整 demo 工作流（含模板复制、preset items、output 落盘）。
-- **验证标准**：Phase 0 锁定的回归用例全绿 + demo 工作流端到端成功。
+- [x] **面板 4 键对「agent 真实感知」**（Iter-21 教训核心）：start（queue）/ stop / resume / reset——不能只看实例态变化，要看 agent 是否真的执行了注入指令。
+      （✅ Start `{accepted:true}` → agent 调 `workflow_begin` → RUNNING；Stop 经 steer 当场 `agent/inbox/spliced` → agent 调 `workflow_stop` → STOPPED+`user-stop`；Resume 保进度 2/4→3/4→COMPLETED；Reset 备份+清理。**注**：Stop 最终语义已按缺陷 #5 修订为路由层权威直停，见 §3.3⑦ 注）
+- [x] 子代理分支：orchestrator 作为 continuable 子代理被注入（delivery=queue/steer 两态）。
+      （⚠️ **未做真实拓扑实测**——实际使用形态为根会话，无父子拓扑；以单测覆盖两态语义 + API 可达性验证关闭，见验证报告「已知限制」#1）
+- [x] A1 用户停止链路：UI 停止 → `sessionController.cancel` → 回合 aborted(user) → `session/event` tap → wf STOPPED(user-stop) + 级联 interrupt。
+      （✅ 实证：`turn/end {aborted, reason:{kind:'user'}}` → tap 命中 → STOPPED + `stopReason:user-stop` 落盘；子会话收到 `aborted(parent)`）
+- [x] 孤儿回收（sessions.get 判活）、多实例并行、门禁 subagent（PASS→COMPLETED）、stop→resume 保进度。
+      （✅ 重启后实例自动解绑入池/多实例并存/归档采用流程正常；stop→resume 保进度实证。门禁 subagent 属引擎既有能力，本轮 demo 未覆盖门禁分支，归 Iter-31 顺带）
+- [x] `/wf/probe-inject` 新 API 冒烟（sendMessage 返回 messageId）。
+      （⚠️ **部分完成**：路由可达 + 对根会话目标正确返回 lineage 拒绝；完整冒烟需父子拓扑，同「已知限制」#1）
+- [x] 客户端面板（conversation.view 槽位）渲染正常。
+      （✅ 修复缺陷 #2（projection 门控）后 DAG 面板正常渲染；`read_image` 等新版 UI 卡片未逐一过检，归日常使用观察）
+- [x] 跑通一个完整 demo 工作流（含模板复制、preset items、output 落盘）。
+      （✅ default-demo 完整跑通 ×2（4/4 COMPLETED，产物落盘）；items-demo/preset 复制分支由既有 563 单测覆盖）
+- **验证标准**：Phase 0 锁定的回归用例全绿 + demo 工作流端到端成功。（✅ 563 单测全绿 + default-demo 端到端 COMPLETED 4/4 ×2；两项受限项见上方标注与验证报告「已知限制」）
 
-### Phase 4 — 收尾（0.5d）
+### Phase 4 — 收尾（0.5d）✅ 已执行（2026-09-13）
 
-- [ ] 版本锁定记录：DSH 0.1.5-rc.2 + 关键卫星包版本 + workflow-host/client 新版本号（建议 host 0.21.0、client 0.9.1 起一次 minor）。
-- [ ] 文档更新：本文档状态改为「已执行」、progress-record 增补迭代条目；旧 `alpha-0.1.2-migration-impact.md` 已标注由本文接替。
-- [ ] 仓库提交 + push（既有 git 通道）。
+- [x] 版本锁定记录：DSH **0.1.5-rc.2** + 10 个关键卫星包（同版本）+ 本项目 host **0.21.0** / client **0.9.1**（`dsh.engines.dsh: >=0.1.5-rc.1`）→ 落档见 `iter-migration-015rc2-verification-report.md`「版本锁定」节。
+- [x] 文档更新：本文档头部状态改「已执行（Phase 0–4）」、基线更新为迁移后现状、§3.3 三处执行期实证修正就地标注；progress-record 增补迁移与收尾条目；旧 `alpha-0.1.2-migration-impact.md` 已标注由本文接替。
+- [x] 仓库提交 + push（既有 git 通道；迁移迭代提交 `7bf13dd`）。
+- [x] 附加收尾：`scripts/build-preset.js` 废弃化（文件头 DEPRECATED + 运行即 `exit 1` 并提示现役构建链），从机制上杜绝误跑覆盖现役 mjs。
 
 ---
 
