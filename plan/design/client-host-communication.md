@@ -2,7 +2,7 @@
 
 > 状态：参考文档（当前采用**轮询**，推送为远期演进）
 > 决策记录：`plan/architecture/architecture-decisions.md` §5
-> 源码研究：`plan/development/client-rpc-research.md`
+> 源码研究：`plan/phases/phase-1-core/client-rpc-research.md`
 > 本文记录两个方案的完整设计、取舍与演进路径，供后续迭代参考。
 
 ---
@@ -167,7 +167,7 @@ Host 侧保持 state.json + 自定义推送端点：
 | 文档 | 位置 |
 |------|------|
 | 架构决策（当前采用轮询） | `plan/architecture/architecture-decisions.md` §5 |
-| 源码研究报告 | `plan/development/client-rpc-research.md` |
+| 源码研究报告 | `plan/phases/phase-1-core/client-rpc-research.md` |
 | 官方 webServer 文档 | `deepseek-harness-master/docs/subsystems/web-server.zh.md` |
 | 官方 workflow 文档 | `deepseek-harness-master/docs/subsystems/workflow.zh.md` |
 | Conversation Node 教程 | `deepseek-harness-master/docs/cookbook/adding-a-conversation-node.zh.md` |

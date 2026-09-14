@@ -1,8 +1,8 @@
 # 多实例管理 — 复用 DSH Session 的技术方案
 
-> 迭代计划：`plan/development/development-plan.md`（Iter-9 及之后）
+> 迭代计划：`plan/phases/phase-1-core/development-plan.md`（Iter-9 及之后）
 > 本文记录 Iter-9（多实例管理）从需求到方案的技术讨论与决策，是后续迭代的依据。
-> 状态：方案已通过 Iter-9 探针技术验证（12/12 通过，见 `plan/development/iter9-report.md`），按 Iter-10~13 逐步落地。
+> 状态：方案已通过 Iter-9 探针技术验证（12/12 通过，见 `plan/phases/phase-1-core/iterations/iter9-report.md`），按 Iter-10~13 逐步落地。
 
 ---
 
@@ -122,6 +122,6 @@
 ## 7. 参考
 
 - `plan/architecture/architecture-decisions.md`（架构决策，本文同步刷新）
-- `plan/development/development-plan.md`（Iter-9~ 重新规划）
-- `plan/development/iter8-report.md`（Iter-8 完成）
+- `plan/phases/phase-1-core/development-plan.md`（Iter-9~ 重新规划）
+- `plan/phases/phase-1-core/iterations/iter8-report.md`（Iter-8 完成）
 - DSH `@deepseek-ai/dsh-session`（sessions 服务）

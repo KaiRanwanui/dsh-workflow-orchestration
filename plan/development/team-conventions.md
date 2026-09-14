@@ -10,7 +10,7 @@
 
 ### 已踩的坑
 
-- **Iter-3 Flicker Fix**：Agent 感知上下文紧张，自行压缩代码并一次性修改多个维度（Slot 回调签名 + Host 返回格式 + 删除 tryDiscover + 改转义方式），结果 5 处全炸，排查耗时是直接告知的 3 倍。详见 `iter3-report.md` 4.4 节。
+- **Iter-3 Flicker Fix**：Agent 感知上下文紧张，自行压缩代码并一次性修改多个维度（Slot 回调签名 + Host 返回格式 + 删除 tryDiscover + 改转义方式），结果 5 处全炸，排查耗时是直接告知的 3 倍。详见 `../phases/phase-1-core/iterations/iter3-report.md` 4.4 节。
 
 ## 2. 差分验证原则
 

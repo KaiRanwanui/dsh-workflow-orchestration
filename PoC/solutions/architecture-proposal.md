@@ -2,7 +2,7 @@
 
 ## 设计目标
 
-基于 `RR/Raw_Reqs.md` 中的原始需求，`software-design-agent` 的整体架构遵循以下原则：
+基于 `PoC/legacy-root/RR/Raw_Reqs.md` 中的原始需求，`software-design-agent` 的整体架构遵循以下原则：
 
 1. **以 DSH 为宿主**：所有运行时能力通过 DSH Agent Preset 注入
 2. **Agent 驱动的流程调度**：工作流编排由专用 Agent（LLM）执行，用户可通过对话实时介入

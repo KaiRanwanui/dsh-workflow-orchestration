@@ -2,7 +2,7 @@
 
 - **定位**：workflow 执行状态机已基本完善，本文在开始新迭代前对该机制做一次面向人的技术总结——从使用场景出发描述用户能感受到的状态变化与前台交互，并给出一句话可查的 DSH API 对照。
 - **读者**：后续维护者、评审者、需要理解"面板上那个状态到底怎么变的"的人。
-- **配套**：`workflow-lifecycle-design.md`（生命周期与归档设计）、`dsh-session-subagent-control-research.md`（子会话控制探索）、`plan/development/iter23-probe-report.md`（停止信号实证）。
+- **配套**：`workflow-lifecycle-design.md`（生命周期与归档设计）、`dsh-session-subagent-control-research.md`（子会话控制探索）、`plan/phases/phase-1-core/iterations/iter23-probe-report.md`（停止信号实证）。
 
 ---
 
@@ -212,5 +212,5 @@
 
 - `plan/design/workflow-lifecycle-design.md` — 实例生命周期与归档设计
 - `plan/design/dsh-session-subagent-control-research.md` — 子会话控制能力探索（结论：continuable 可中断/可追问是级联控制的前提）
-- `plan/development/iter23-probe-report.md` — 会话停止信号实证（活动回合可检测/空闲零痕迹）
-- `plan/development/iter22-report.md`、`plan/development/iter23-report.md` — 状态同步语义与权威停止的实现过程
+- `plan/phases/phase-1-core/iterations/iter23-probe-report.md` — 会话停止信号实证（活动回合可检测/空闲零痕迹）
+- `plan/phases/phase-1-core/iterations/iter22-report.md`、`plan/phases/phase-1-core/iterations/iter23-report.md` — 状态同步语义与权威停止的实现过程

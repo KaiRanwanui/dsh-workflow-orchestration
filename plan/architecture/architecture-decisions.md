@@ -1,4 +1,9 @@
-# Workflow Agent 架构决策
+# Workflow Agent 架构决策（ADR）
+
+> **本文件是架构决策的现行权威**；重大决策应在此登记。
+> **校订（2026-09-14）**：文中部分决策记录写于阶段 1 早期（DSH 0.1.1-rc.2 时代），
+> 涉及部署路径（`desktop` → `web` profile）、脚本（已停用的 `.ps1`）与服务名（`apiProxy` → `sessionController`/`subagents`）的表述以
+> [`../status.md`](../status.md) 与 [`../phases/phase-2-dsh-migration/README.md`](../phases/phase-2-dsh-migration/README.md) 为准。
 
 ## 1. 插件加载方式：从动态插件转向 npm 包
 
@@ -116,7 +121,7 @@ npm 包由 Cordis Loader 直接加载，不经过动态插件沙箱，因此无�
 Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 `host.call` 是**动态插件**闭包注入的符号，npm 包无法使用
 （`dsh-cordis-client-runner` 的闭包参数，非 `@deepseek-ai/dsh-client-runtime` 的导出）。
-详见 `plan/development/client-rpc-research.md`。
+详见 `plan/phases/phase-1-core/client-rpc-research.md`。
 
 ### 决策
 采用 **HTTP 轮询方案**：
@@ -161,7 +166,7 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 | `code/packages/client-ui-monitor/build.js` | 移除 `require("@deepseek-ai/dsh-client-runtime").host`；inject 改为 `['slots']` |
 | `code/agent-presets/.../workflow-rpc.mjs` | 停用/归档（harness RPC 由 webServer 路由替代） |
 
-**验证结论（Iter-5）**：DAG 面板经 HTTP 轮询显示工作流状态（节点颜色绿/红/琥珀 + 循环组折叠框 + 状态条正确），详见 `plan/development/progress-record.md` §6 与 `plan/development/client-rpc-research.md` §7。
+**验证结论（Iter-5）**：DAG 面板经 HTTP 轮询显示工作流状态（节点颜色绿/红/琥珀 + 循环组折叠框 + 状态条正确），详见 `plan/phases/progress-record.md` §6 与 `plan/phases/phase-1-core/client-rpc-research.md` §7。
 
 ---
 
@@ -193,7 +198,7 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 在 workflow 层实现 `workflow_reset`：清空实例目录 `output/`/`logs/`/`state.json` → 重读定义 → `workflow_begin` 重跑。
 
 ### 验证结论（✅ Iter-9 探针）
-12 项探针全部通过，决策可行（详见 `plan/development/iter9-report.md`）：
+12 项探针全部通过，决策可行（详见 `plan/phases/phase-1-core/iterations/iter9-report.md`）：
 1. `sessions` 服务全链路可用：create（id 唯一 + cwd 绝对路径 guard）、list/get 多 session 并行共存、`prepare+enter+announce+detach` 受控生命周期、flush 持久化检查点
 2. `session.header.cwd → <cwd>/.workflow-agent/instances/<id>/metadata.json` 定位链路读写验证一致
 3. 自定义 session 事件类型可直接 append（轨迹记录可用）
@@ -203,7 +208,7 @@ Client UI（DAG 监控面板）迁移到 npm 包后 RPC 链路断裂：
 
 ## 7. 工作流实例生命周期：绑定 / 状态机 / 完整性 / 归档（决策）
 
-> 完整设计见 `plan/design/workflow-lifecycle-design.md`；迭代落地在 development-plan.md Iter-16。
+> 完整设计见 `plan/design/workflow-lifecycle-design.md`；迭代落地见 `plan/phases/phase-1-core/development-plan.md` Iter-16。
 
 ### 7.1 数据模型与绑定
 - **workspace 与 Session = 1:N**：workspace 是共享存储单元（会话创建时显式指定的 `cwd` 即工作区根），同 workspace 的会话共享实例池。
@@ -304,8 +309,8 @@ workflow-agent/
 │           └── workflow-rpc.mjs       # RPC 本地插件（harness 必需）
 └── plan/
     └── build/
-        ├── client-ui-plugin-guide.md  # 开发指南
-        └── team-conventions.md        # 团队约定
+        ├── ../build/client-ui-plugin-guide.md  # 开发指南
+        └── ../development/team-conventions.md        # 团队约定
 ```
 
 ## 参考命令

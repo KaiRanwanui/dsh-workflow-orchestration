@@ -2,7 +2,7 @@
 
 **日期**：2026-08-28（v2：并入产品流程映射与用户拍板决策）
 **状态**：v2 已定稿（用户审查通过）
-**关联**：`multi-instance-session-design.md`、`architecture-decisions.md` §6、Iter-11/12 报告
+**关联**：`multi-instance-session-design.md`、`../architecture/architecture-decisions.md` §6、Iter-11/12 报告
 
 ---
 

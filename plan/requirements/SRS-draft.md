@@ -8,7 +8,7 @@
 | Version | 0.3 |
 | Status | **DRAFT — 部分澄清，核心需求已确认** |
 | Date | 2025-01 |
-| Based on | `RR/需求-从PoC到正式开发.md` + `RR/Raw_Reqs.md` + PoC 验证结论 |
+| Based on | `PoC/legacy-root/RR/需求-从PoC到正式开发.md` + `PoC/legacy-root/RR/Raw_Reqs.md` + PoC 验证结论 |
 
 ---
 
@@ -42,12 +42,12 @@ workflow-agent 是一个基于 DeepSeek Harness (DSH) 的通用工作流编排�
 
 | 文档 | 位置 |
 |------|------|
-| 原始需求 | `RR/Raw_Reqs.md` |
-| 目标调整后需求 | `RR/需求-从PoC到正式开发.md` |
-| PoC 设计方案 | `PoC/design.md` |
-| PoC 验证报告 | `PoC/REPORT.md` |
-| 架构方案 | `solutions/architecture-proposal.md` |
-| Pre-1.0 PoC 开发计划 | `PoC/development-plan.md` |
+| 原始需求 | `PoC/legacy-root/RR/Raw_Reqs.md` |
+| 目标调整后需求 | `PoC/legacy-root/RR/需求-从PoC到正式开发.md` |
+| PoC 设计方案 | `PoC/docs/design.md` |
+| PoC 验证报告 | `PoC/docs/REPORT.md` |
+| 架构方案 | `PoC/solutions/architecture-proposal.md` |
+| Pre-1.0 PoC 开发计划 | `PoC/docs/development-plan.md` |
 
 ---
 
@@ -146,7 +146,7 @@ workflow-agent 与 DSH 的关系：
 - YAML schema 的详细字段（循环 `loop` 的控制结构语法、分支持件 `condition` 的表达式语法）需定义
 - 参数注入（`${param_name}`）的解析范围需明确
 
-**参考**：`solutions/architecture-proposal.md` 中的示例 schema
+**参考**：`PoC/solutions/architecture-proposal.md` 中的示例 schema
 
 ### FR-02: Task 执行（I PO Model）
 

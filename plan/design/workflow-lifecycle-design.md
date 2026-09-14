@@ -1,6 +1,6 @@
 # Workflow 实例生命周期设计（绑定 / 状态机 / 归档 / 完整性）
 
-> 本文是"流程控制完整化"（development-plan.md Iter-16）的技术方案。它把 Iter-15 只打通
+> 本文是"流程控制完整化"（`../phases/phase-1-core/development-plan.md` Iter-16）的技术方案。它把 Iter-15 只打通
 > 的"面板 → 路由 → 写状态 + 注消息"升级为可闭环的实例生命周期管理。
 >
 > **核心设计原则**：
@@ -207,7 +207,7 @@ STOPPED/COMPLETED/FAILED（PENDING 全不支持，RUNNING 须先 stop）。`setS
 
 ---
 
-## 10. 迭代落地映射（development-plan.md Iter-16~23，按功能闭环组织）
+## 10. 迭代落地映射（`../phases/phase-1-core/development-plan.md` Iter-16~23，按功能闭环组织）
 
 | 迭代 | 层 | 交付 |
 |------|----|------|

@@ -1,6 +1,10 @@
 # Client UI 插件开发指南
 
-本文档介绍如何开发、构建和安装 workflow-agent 的 Client UI 插件。
+> **校订（2026-09-14）**：本文已对齐 DSH 0.1.5-rc.2 现状——构建/生效链路改为 Linux + `link:` 依赖（无需重装），
+> RPC（`host.call`）自 Iter-5 起已由 webServer HTTP 路由（`/wf/*` + `fetch`）取代。
+> 代码规范与验证要求另见 `../development/team-conventions.md` §B。
+
+本文档介绍如何开发、构建和验证 workflow-agent 的 Client UI 插件。
 
 ## 目录结构
 
@@ -50,21 +54,21 @@ export function register(ctx) {
 - 使用 `ctx.interval()` 而不是 `setInterval()`
 - 使用 `ctx.get('slots')` 获取 slots 服务
 - 使用 `React.createElement()` 创建 UI 元素
-- 使用 `host.call()` 调用 Host RPC 方法
+- 与 Host 通信走 webServer HTTP 路由（`fetch('/wf/...')`）；RPC 已停用
 
-### 2. 构建
+### 2. 构建与产物级验证
 
 ```bash
-cd workflow-agent/code/packages/client-ui-monitor
-node build.js
+node code/packages/client-ui-monitor/build.js      # src/client.js → lib/client.js
+node code/scripts/verify-client-bundle.js          # 产物求值级验证（必须跑）
 ```
 
-构建脚本会：
-1. 读取 `src/client.js`
-2. 转换为 DSH 模块格式
-3. 输出到 `lib/client.js`
+### 3. 生效
 
-### 3. 安装到 DSH
+profile 以 `link:` 依赖本仓库包（`~/.dsh/profiles/web/node_modules/@workflow-agent/client-ui-monitor`），
+**构建后无需重新安装**：刷新浏览器页面即可。Host 侧改动才需要重启 `dsh.service`。
+
+## 3. 安装到 DSH
 
 ```powershell
 # 设置路径
@@ -100,23 +104,21 @@ Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 3. 查看底部是否出现 "Workflow" 标签页
 4. 点击标签页查看 DAG 监控面板
 
-## 快速构建脚本
-
-使用当前脚本体系（`code/scripts/`）：
-
-```powershell
-cd workflow-agent/code/scripts
-.\build-workflow-plugins.ps1                  # 构建所有插件
-.\install-workflow-plugins.ps1 -Profile desktop  # 安装到 desktop profile（DSH 需退出）
-.\verify-workflow-plugins.ps1 -Profile desktop   # 验证
-```
-
-单包构建（Node，跨平台）：
+## 常用命令（Linux / 现状）
 
 ```bash
-cd workflow-agent/code/packages/client-ui-monitor
-node build.js
+# 构建 + 产物级验证（Client 改动后必做）
+node code/packages/client-ui-monitor/build.js
+node code/scripts/verify-client-bundle.js
+
+# 生效：profile 以 link: 依赖本包，刷新浏览器页面即可
+# （Host 侧改动才需要：systemctl --user restart dsh.service）
+
+# 首次/全新环境挂载
+dsh plugin --profile web add ./code/packages/workflow-host ./code/packages/client-ui-monitor
 ```
+
+> 历史脚本 `code/scripts/*.ps1`（Windows 时代的构建/安装/验证）已停用，保留仅作参考。
 
 ## 调试技巧
 

@@ -2,7 +2,7 @@
 
 ## 目标
 
-在正式编码前，通过手工验证确认核心假设成立。**已执行，详见 `PoC/REPORT.md`。**
+在正式编码前，通过手工验证确认核心假设成立。**已执行，详见 `PoC/docs/REPORT.md`。**
 
 ---
 
@@ -24,10 +24,10 @@
 **修正后的方向**：编排逻辑放在 Agent Loop 层（模型调 `subagent` 工具），实现为一个 DSH Agent Preset。
 
 详见：
-- `solutions/architecture-proposal.md` — 更新后的架构方案
-- `solutions/architecture-comparison.md` — 方案对比
-- `PoC/REPORT.md` — 验证报告
-- `PoC/design.md` — 设计文档（含实际验证结论）
+- `PoC/solutions/architecture-proposal.md` — 更新后的架构方案
+- `PoC/solutions/architecture-comparison.md` — 方案对比
+- `PoC/docs/REPORT.md` — 验证报告
+- `PoC/docs/design.md` — 设计文档（含实际验证结论）
 
 ---
 
