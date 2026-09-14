@@ -16,7 +16,7 @@
 | **阶段 0 · PoC 验证** | 2026-08 中旬前 | 0.1.2-alpha 系列 | 原型（未发行） | 无 | ✅ 已归档 |
 | **阶段 1 · 核心功能开发**（Iter-1 ~ Iter-30 + Iter-SUBA） | 2026-08-26 ~ 09-05 | **0.1.1-rc.2** | host v0.20.1 / client v0.9.0 | 563 单测全绿 | ✅ 已完成并归档 |
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | 2026-09-13（单日完成） | **0.1.5-rc.2** | host **v0.21.0** / client **v0.9.1** | 563 单测全绿 + GUI 回归通过 | ✅ 已完成并归档 |
-| **阶段 3 · 构建链合并重构**（规划中） | 待启动 | 0.1.5-rc.2 | — | — | ⏳ 方案已论证（见下） |
+| **阶段 3 · 构建链合并重构** | 待启动（方案已确认，等准备工作） | 0.1.5-rc.2 | 目标 host v0.22.0 / client v0.9.2 | 563（执行中保持） | ⏸ 方案已拍板 |
 
 阶段详情与迭代索引：`phases/README.md`。
 
@@ -48,11 +48,19 @@
 - 抽取 2 段手编区为真实源文件 → 单一生成器直接从源模块产出 CJS 交付物 → mjs 降级为生成物或取消；
 - 单测改为对准真实产物；消除同步纪律。
 
-**方案**：[`phases/phase-3-build-chain/plan.md`](phases/phase-3-build-chain/plan.md)（迭代方案已出，**待用户确认**；含 3a 构建链合并 / 3b legacy 退役 / 可选 3c 发行工具、3d persona 文件化）。
-**待办**：用户确认方案（6 个决策点）→ 按 §4 执行 S1–S8。
+**方案**：[`phases/phase-3-build-chain/plan.md`](phases/phase-3-build-chain/plan.md)（**6 个决策点已全部拍板**：模块作用域 / dist 生成物入库且开关可选 / 3c 发行工具纳入本阶段 / 3d 独立迭代先验证 / legacy 代码集中 `code/legacy/` / host 0.22.0 + client 0.9.2）。
+**待办**：⏸ **等待用户准备工作完成**后按 §4 执行 S1–S8（S1/S2 为纯抽取 + 逐字 diff）。
 `development-plan.md`（阶段 1 详案）已归档，新阶段计划按 `plan/development/iteration-plan-template.md` 撰写。
 
 ---
+
+### 阶段 4 候选（已立项方向，先验证后实施）
+
+| 候选 | 内容 | 前置验证（探针，4 项） |
+|---|---|---|
+| **persona 文件化** | 用 preset 本地插件（`persona-file.mjs`）经 `systemPrompt` 服务运行时读取 `system-prompt.md`，替换 `dsh-persona` 行；删除 `sync-persona.js` 与 `agent.cordis.yml` 中 240 行内联块 | ① preset 作用域内 `inject:['systemPrompt']` 与 `ctx.get('fs')` 可用 ② `apply` 是否支持 async（否则改用 `system-prompt/assemble` 瀑布）③ 同级文件路径解析（`import.meta.url`）④ 惰性 `text` provider 与 `{{}}` 插值行为 |
+
+> 触发条件：阶段 3 收尾后启动；探针全部通过才实施（团队约定 §A4「先打桩验证新模式」）。
 
 ## 4. 已知限制（明确不做，留档）
 
