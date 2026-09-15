@@ -17,13 +17,13 @@ output/
 *.orig
 
 # 调试残留（Iter-3 动态插件开发产物，不入库）
-code/plugins/workflow-client/_client-*
-code/plugins/workflow-client/_code-*
-code/plugins/workflow-client/_define-*
-code/plugins/workflow-client/_full-*
-code/plugins/workflow-client/_host-*
-code/plugins/workflow-client/_payload-*
-code/plugins/workflow-client/_test-*
+code/legacy/plugins/workflow-client/_client-*
+code/legacy/plugins/workflow-client/_code-*
+code/legacy/plugins/workflow-client/_define-*
+code/legacy/plugins/workflow-client/_full-*
+code/legacy/plugins/workflow-client/_host-*
+code/legacy/plugins/workflow-client/_payload-*
+code/legacy/plugins/workflow-client/_test-*
 code/plugins/workflow-client/build-client.js
 code/plugins/workflow-client/build-json.js
 code/plugins/workflow-client/build-payload.js

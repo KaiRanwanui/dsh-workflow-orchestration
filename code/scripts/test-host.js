@@ -1357,14 +1357,16 @@ async function runCase21() {
 
   // 9) items-demo 模板与样例登记（mjs 文本级断言；模板 parse 逻辑与 workflow_begin 同链路）
   {
-    const mjsSrc = require('fs').readFileSync(require('path').join(__dirname, '../agent-presets/workflow-orchestrator/workflow-host.mjs'), 'utf8')
-    check('c21 items-demo: 模板登记（BUILTIN_TEMPLATES，items 源=samples 两级链）', mjsSrc.includes("name: 'items-demo'") && mjsSrc.includes('samples/items/modules-table.md') && mjsSrc.includes('${mod.slug}'))
+    // 阶段 3：模板登记在 webserver-routes 源（BUILTIN_TEMPLATES 引用）；资产定义在内建技能源（BUILTIN_TEMPLATES/SAMPLES）
+    const mjsSrc = require('fs').readFileSync(require('path').join(__dirname, '../plugins/workflow-host/webserver-routes.js'), 'utf8')
+    const builtinSrc = require('fs').readFileSync(require('path').join(__dirname, '../plugins/workflow-host/builtin-skills.js'), 'utf8')
+    check('c21 items-demo: 模板登记（BUILTIN_TEMPLATES，items 源=模板子目录 inputs/items/）', mjsSrc.includes("name: 'items-demo'") && mjsSrc.includes('inputs/items/modules-table.md') && mjsSrc.includes('${mod.slug}'))
     // Iter-27a 后补丁（用户拍板）：items-from 与 inputs 互斥——模板六任务不再把
     // items 文件声明进 inputs；processor 换专用逐 item 技能（含 runtime analyze 共 7 处）
     check('c21 items-demo: 六任务 items-from 保留（items-demo×6+runtime×1=7）', (mjsSrc.match(/'    items-from: /g) || []).length === 7 && !mjsSrc.includes('并发归档（${mod.slug}'))
     check('c21 items-demo: inputs 重复声明清零 + processor 换 item-processor（×7）', (mjsSrc.match(/items: "inputs\/items\//g) || []).length === 0 && (mjsSrc.match(/processor: skills\/item-processor\/SKILL\.md/g) || []).length === 7)
     check('c21 items-demo: default-demo integrator 两输入汇总场景不被误伤', (mjsSrc.match(/processor: skills\/integrator\/SKILL\.md/g) || []).length === 2 && mjsSrc.includes('spec: "output/spec.md"'))
-    check('c21 items-demo: 样例物化登记（BUILTIN_SAMPLES 四格式）', mjsSrc.includes('samples/items/modules.md') && mjsSrc.includes('samples/items/components.json') && mjsSrc.includes('samples/items/features.yaml'))
+    check('c21 items-demo: 样例物化登记（BUILTIN_SAMPLES 四格式）', builtinSrc.includes('samples/items/modules.md') && builtinSrc.includes('samples/items/components.json') && builtinSrc.includes('samples/items/features.yaml'))
   }
 }
 

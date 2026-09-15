@@ -43,17 +43,19 @@ workflow-agent/
 │   ├── packages/                          # ★ 交付物（npm 包，profile 以 link: 依赖）
 │   │   ├── workflow-host/                 #   Host 插件：lib/index.js（CJS，运行时加载）+ cordis.patch.yml
 │   │   └── client-ui-monitor/             #   Client 插件：src/client.js → lib/client.js（浏览器 bundle）
-│   ├── plugins/                           # 源模块（被同步/拼接进 Host 产物）
-│   │   ├── workflow-host/                 #   engine.js（状态机/并发/循环）、storage.js、instance-store.js、builtin-skills.js
-│   │   ├── workflow-host-preset/          #   tools-preset.js（workflow_* 十个工具）
-│   │   └── workflow-client/ workflow-rpc/ #   ⚠️ 历史遗留（阶段 3 退役）
+│   ├── plugins/                           # 源模块（由 module-manifest 拼入 Host 产物）
+│   │   ├── workflow-host/                 #   apply-prologue.js（探针+A1 tap）、engine.js、storage.js、
+│   │   │                                  #   instance-store.js、builtin-skills.js、webserver-routes.js（/wf/*）
+│   │   └── workflow-host-preset/          #   tools-preset.js（workflow_* 十个工具）
+│   ├── legacy/                            # ⚠️ 历史代码归档（非现役，见 legacy/README.md）
 │   ├── shared/                            # schema / parser / paths / validate / edit / items-extract / zip-writer
 │   ├── agent-presets/workflow-orchestrator/  # preset.yml + agent.cordis.yml + system-prompt.md（persona 单一源）
-│   │                                         #   + workflow-host.mjs（构建中间产物，当前未被挂载）
+│   │                                         #   （阶段 3 后 preset 不再携带 mjs；Host 以 npm 包交付）
 │   ├── scripts/                           # 构建/测试/同步脚本（见 §5）
 │   └── probes/                            # 历史探针脚本（Iter-SUBA / Iter-23 实证留档）
 ├── plan/                                  # 管理文档（status / phases / design / architecture / requirements / development / build）
 ├── PoC/                                   # PoC 阶段资产（docs / solutions / legacy-root）
+├── workflows → PoC/legacy-root/workflows  # 早期示例工作流（已归位）
 ├── README.md                              # 项目入口（3 分钟了解）
 └── GUIDE.md                               # 本文（工程导览）
 ```
@@ -116,29 +118,34 @@ Host（webserver-routes section）
 - profile bundle 列表（`~/.dsh/profiles/web/package.json` = `dsh.profile.bundles`）→ 每个包的 `cordis.patch.yml` 声明 `insert` 行 → dsh 启动时按包 `main` 加载。
 - 本仓库两包以 **`link:`** 依赖进 profile：**构建即生效**，无需重装。
 - **Host 改动 → 重启 `dsh.service`；Client 改动 → 刷新页面**。
+- 阶段 3 起 preset 目录**不再携带 `workflow-host.mjs`**（Host 一律以 npm 包交付；如需 preset 本地插件形态，产物在 `code/packages/workflow-host/dist/workflow-host.mjs`）。
 
-## 5. 开发流程与构建链
+## 5. 开发流程与构建链（阶段 3 起：单一生成器）
 
 ```
-改源模块 → node code/scripts/sync-modules.js [section]   （同步内联副本进 workflow-host.mjs）
-        → node code/packages/workflow-host/build.js       （mjs → packages/workflow-host/lib/index.js）
-        → node code/scripts/test-host.js                  （563 单测）
+# Host：改源模块（按 module-manifest 拼入产物）→ 单一生成器 → 单测
+node code/packages/workflow-host/build.js     # 源模块 → lib/index.js（CJS 交付物）+ dist/workflow-host.mjs（ESM）
+node code/scripts/test-host.js                # 569 用例；启动时自动检查产物新鲜度并按需重建
 
-改 Client → node code/packages/client-ui-monitor/build.js
-         → node code/scripts/verify-client-bundle.js       （产物求值级验证）
+# Client：改 src/client.js → 构建 → 产物级验证
+node code/packages/client-ui-monitor/build.js
+node code/scripts/verify-client-bundle.js
 
-改 persona → node code/scripts/sync-persona.js            （system-prompt.md → agent.cordis.yml）
+# persona：改 system-prompt.md → 注入 agent.cordis.yml
+node code/scripts/sync-persona.js
 ```
 
 | 你要改的东西 | 编辑文件 | 必跑命令 | 生效方式 |
 |---|---|---|---|
-| 引擎 / 状态机 | `code/plugins/workflow-host/engine.js` | sync → build → test | 重启 `dsh.service` |
+| 引擎 / 状态机 | `code/plugins/workflow-host/engine.js` | build → test | 重启 `dsh.service` |
 | 存储 / 注册表 / 归档 | `code/plugins/workflow-host/{storage,instance-store}.js` | 同上 | 同上 |
 | 工具（`workflow_*`） | `code/plugins/workflow-host-preset/tools-preset.js` | 同上 | 同上 |
-| `/wf/*` 路由、面板 Stop | `workflow-host.mjs` 的 webserver-routes 段（手编） | build → test | 同上 |
-| inject / 探针 / A1 tap | `workflow-host.mjs` 的 apply 前言（手编） | build → test | 同上 |
+| `/wf/*` 路由、面板 Stop | `code/plugins/workflow-host/webserver-routes.js` | 同上 | 同上 |
+| inject / 探针 / A1 tap | `code/plugins/workflow-host/apply-prologue.js` | 同上 | 同上 |
 | 面板 UI | `code/packages/client-ui-monitor/src/client.js` | client build → verify | 刷新页面 |
 | persona 提示词 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | sync-persona | 新建/重载 preset 会话 |
+
+> 构建链历史（sync-modules 两步链、build-preset.js）已退役，脚本在 `code/legacy/scripts/`。
 
 > ⚠️ `code/scripts/build-preset.js` **已废弃**（运行即 exit 1，防止用陈旧模板覆盖现役 mjs）。
 > ⚠️ Host 源码目前是「源模块 + 2 段手编区」混合体 —— **阶段 3 将合并为单一生成器**（详见 `plan/status.md` §3）。

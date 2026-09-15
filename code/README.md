@@ -15,19 +15,19 @@
 | `scripts/` | 构建与测试 | 见下表 |
 | `probes/` | 历史探针 | Iter-SUBA / Iter-23 的实证探针脚本（留档） |
 
-## 构建与测试脚本
+## 构建与测试脚本（阶段 3 起：单一生成器）
 
 | 脚本 | 用途 |
 |---|---|
-| `scripts/sync-modules.js` | 把源模块同步进 `workflow-host.mjs` 的对应 section（改源后**必须**先跑） |
-| `packages/workflow-host/build.js` | `workflow-host.mjs` → `packages/workflow-host/lib/index.js`（ESM → CJS） |
-| `packages/client-ui-monitor/build.js` | `src/client.js` → `lib/client.js`（包装为 `__ModuleLoader__.load` 模块） |
-| `scripts/verify-client-bundle.js` | Client 产物**求值级**验证（执行 bundle + 断言 apply/inject 导出） |
-| `scripts/test-host.js` | 单测（563 用例：解析/引擎/注册表/路由/工具/主从聚合） |
-| `scripts/sync-persona.js` | `system-prompt.md` → `agent.cordis.yml` 的 persona 块（`--check` 只校验） |
+| `scripts/module-manifest.js` | **构建清单**：name/inject + 14 项有序源模块表 |
+| `packages/workflow-host/build.js` | **单一生成器**：源模块 → `lib/index.js`（CJS 交付物）+ `dist/workflow-host.mjs`（ESM，入库）；`--format=cjs\|esm\|both`；`--check` 新鲜度 |
+| `packages/client-ui-monitor/build.js` | Client：`src/client.js` → `lib/client.js` |
+| `scripts/test-host.js` | 单测 569 用例（启动时自动检查产物新鲜度并按需重建） |
+| `scripts/verify-client-bundle.js` | Client 产物求值级验证 |
+| `scripts/sync-persona.js` | persona 注入（`system-prompt.md` → `agent.cordis.yml`；`--check` 校验） |
+| `scripts/simulate-exec.js` | 模拟工作流状态流转（GUI 联调演示数据） |
 
-> ⚠️ **已废弃**：`scripts/build-preset.js`（运行即 `exit 1`，防止用陈旧模板覆盖现役 mjs）。
-> **历史遗留待退役**（阶段 3 评估）：`plugins/workflow-host/{index.js,rpc.js,tools.js,dist/}`、`plugins/workflow-client/`、`plugins/workflow-rpc/`、`scripts/build-host.js`、`scripts/*.ps1`、`ui/`。
+> 历史脚本（build-host.js / sync-modules.js / *.ps1 等）集中在 `legacy/scripts/`，见 [`legacy/README.md`](legacy/README.md)。
 
 ## 开发规范
 

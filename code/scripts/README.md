@@ -1,59 +1,40 @@
-# code/scripts/ — 工具脚本
+# code/scripts/ — 构建 / 测试 / 同步脚本
 
-构建、测试、部署等工具脚本。
+> **构建链（阶段 3 起）**：源模块 → `packages/workflow-host/build.js`（单一生成器）→ 交付物。
+> 旧的「sync-modules 同步内联副本」流程已随构建链合并**退役**（脚本移入 `../legacy/scripts/`）。
+> `build-preset.js`（另一个更早的生成器）同样已废弃（运行即 `exit 1`，防覆盖现役文件）。
 
-## 内容约定
+## 现役脚本
 
-- PowerShell 脚本（Windows 安装/部署；**UTF-8 BOM 编码**，供 PowerShell 5.1 正确解析中文）
-- Node.js 辅助脚本（构建/测试/代码生成，跨平台）
+| 脚本 | 用途 | 常用命令 |
+|---|---|---|
+| `module-manifest.js` | **构建清单**：workflow-host 插件的 name/inject 与 14 项有序源模块表 | 被生成器 require（改清单即改产物结构） |
+| `../packages/workflow-host/build.js` | **单一生成器**：源模块 → `lib/index.js`（CJS 交付物）+ `dist/workflow-host.mjs`（ESM 生成物，入库） | `node build.js`（默认 both）；`--format=cjs\|esm\|both`；`--check`（新鲜度，陈旧 exit 1） |
+| `../packages/client-ui-monitor/build.js` | Client 产物：`src/client.js` → `lib/client.js` | `node build.js` |
+| `test-host.js` | 单测 569 用例（解析/引擎/注册表/路由/工具/主从聚合/**产物级回归**）；启动时自动检查产物新鲜度并按需重建 | `node test-host.js` |
+| `verify-client-bundle.js` | Client 产物**求值级**验证（bundle 执行 + apply/inject 导出断言） | `node verify-client-bundle.js` |
+| `sync-persona.js` | `system-prompt.md` → `agent.cordis.yml` persona 块；`--check` 只校验 | `node sync-persona.js [--check]` |
+| `simulate-exec.js` | 模拟工作流状态流转（生成演示 state.json，供 GUI 联调） | `node simulate-exec.js` |
 
----
+## 典型流程
 
-## 新脚本体系（推荐，参数化 + 不硬编码路径）
+```bash
+# Host 改动后
+node code/packages/workflow-host/build.js && node code/scripts/test-host.js
+# → 重启 dsh.service 生效
 
-> 覆盖 desktop 与 web profile，可重复使用。
+# Client 改动后
+node code/packages/client-ui-monitor/build.js && node code/scripts/verify-client-bundle.js
+# → 刷新浏览器页面生效
 
-| 脚本 | 用途 | 用法示例 |
-|------|------|---------|
-| `build-workflow-plugins.ps1` | 构建所有 npm 包插件（输出到各包 lib/） | `.\build-workflow-plugins.ps1 -Package client` |
-| `install-workflow-plugins.ps1` | 安装到指定 profile（含 DSH 运行预检 + 产物验证） | `.\install-workflow-plugins.ps1 -Profile web` |
-| `verify-workflow-plugins.ps1` | 验证已安装插件（版本/路由/fetch，只读） | `.\verify-workflow-plugins.ps1 -Profile desktop` |
-
-**典型流程**：
-
-```powershell
-# 1. 构建
-.\build-workflow-plugins.ps1
-# 2. 安装到 desktop profile（DSH 需已退出；web profile 无此限制）
-.\install-workflow-plugins.ps1 -Profile desktop
-# 3. 验证
-.\verify-workflow-plugins.ps1 -Profile desktop
+# persona 改动后
+node code/scripts/sync-persona.js   # 细则见该文件头注释（3d 迭代计划文件化后退役）
 ```
 
-**参数速查**：
+## 历史脚本（`../legacy/scripts/`）
 
-| 脚本 | 参数 | 默认 |
-|------|------|------|
-| build | `-Package host,client` / `-SkipTest` | 全部构建 + 冒烟验证 |
-| install | `-Profile desktop,web,...` / `-Package` / `-SkipVerify` / `-AllowRunningDSH` | desktop / 全部 / 验证 / 检查 |
-| verify | `-Profile` | desktop |
-
-> 说明：`install` 对 `desktop` profile 会检查 DSH Desktop 是否运行（文件锁问题）；
-> 对 `web`/其它 profile 无此检查。旧版 PowerShell 5.1 请用 `powershell -File` 执行。
-
----
-
-## Node.js 辅助脚本
-
-| 脚本 | 用途 |
-|------|------|
-| `build-host.js` | Host 插件构建（早期动态插件形态） |
-| `build-preset.js` | 生成 `agent-presets/.../workflow-host.mjs`（预设本地插件拼接） |
-| `test-host.js` | Host 单元测试（schema/parser/engine/expandLoop） |
-| `simulate-exec.js` | 模拟工作流执行（状态流转验证） |
-
----
-
-## 现有入口
-
-- `bin/sd-agent` — 项目启动脚本（入口位置保持，后续可软链或拷贝到此目录）
+| 脚本 | 原用途 | 状态 |
+|---|---|---|
+| `build-host.js` | 早期动态插件（cordis_define）形态的 dist 生成器 | 已退役（无引用者） |
+| `sync-modules.js` | 把源模块同步进 workflow-host.mjs 内联 section | 已退役（被单一生成器取代） |
+| `build-workflow-plugins.ps1` / `install-workflow-plugins.ps1` / `verify-workflow-plugins.ps1` | Windows 时代的构建/安装/验证 | 已停用（Linux + `dsh plugin add` + `link:` 取代） |

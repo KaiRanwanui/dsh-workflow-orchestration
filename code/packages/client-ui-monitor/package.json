@@ -1,6 +1,6 @@
 {
   "name": "@workflow-agent/client-ui-monitor",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Workflow Agent DAG 监控面板 - Client UI 插件",
   "main": "lib/index.js",
   "exports": {
@@ -10,7 +10,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.1-rc.1"
+      "dsh": ">=0.1.5-rc.1"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
