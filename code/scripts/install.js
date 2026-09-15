@@ -57,7 +57,7 @@ console.log('')
 // ① 插件包安装（dsh plugin add → profile 内 pnpm；link:/registry 语义均可）
 if (!PRESET_ONLY) {
   const spec = USE_REGISTRY ? PKG : PKG_DIR
-  console.log(`① dsh plugin --profile ${PROFILE} add ${USE_REGISTRY ? PKG : PKG_DIR}`)
+  console.log(`① dsh plugin --profile ${PROFILE} add ${USE_REGISTRY ? PKG : PKG_DIR}（单包：Host 插件 + 面板 bundle）`)
   if (!DRY) {
     const r = spawnSync('dsh', ['plugin', '--profile', PROFILE, 'add', PKG_DIR], { stdio: 'inherit', shell: process.platform === 'win32' })
     if (r.status !== 0) fail('dsh plugin add 失败')

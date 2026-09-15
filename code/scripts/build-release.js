@@ -8,12 +8,12 @@
 //   ② 构建 Client 产物（lib/client.js）+ 产物级验证
 //   ③ 把 preset（code/agent-presets/workflow-orchestrator/，唯一源）暂存进
 //      host 包的 presets/（npm files 已收录；目录本身不入库，见 .gitignore）
-//   ④ npm pack 两包 → release/ 目录
+//   ④ npm pack（单包）→ release/ 目录
 //   ⑤ 内容断言：tarball 内必须含交付物 + preset 三件套；版本矩阵一致性
 //
 // 用法：node code/scripts/build-release.js
 // 产物：release/@workflow-agent-workflow-host-<ver>.tgz
-（单 tgz 发行）
+// （单 tgz 发行）
 // ============================================================================
 
 const { spawnSync } = require('child_process')
@@ -100,5 +100,5 @@ for (const [label, pkgDir] of [['workflow-host', PKG]]) {
 console.log('  注：ESM 形态（dist/workflow-host.mjs）为 --format=esm 按需的本地测试输出，不随发行包')
 
 console.log('')
-console.log('✅ 发行构建完成 → ' + RELEASE_DIR)
+console.log('✅ 发行构建完成 → ' + RELEASE_DIR + '（单包：Host 插件 + 面板 bundle + preset 随包）')
 console.log('   安装：node code/scripts/install.js --profile web   （或 --dry-run 预览）')
