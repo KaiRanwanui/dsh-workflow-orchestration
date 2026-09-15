@@ -9,7 +9,7 @@
 | 脚本 | 用途 | 常用命令 |
 |---|---|---|
 | `module-manifest.js` | **构建清单**：workflow-host 插件的 name/inject 与 14 项有序源模块表 | 被生成器 require（改清单即改产物结构） |
-| `../packages/workflow-host/build.js` | **单一生成器**：源模块 → `lib/index.js`（CJS 交付物）+ `dist/workflow-host.mjs`（ESM 生成物，入库） | `node build.js`（默认 both）；`--format=cjs\|esm\|both`；`--check`（新鲜度，陈旧 exit 1） |
+| `../packages/workflow-host/build.js` | **单一生成器**：源模块 → `lib/index.js`（CJS 交付物，入库）；`--format=esm` 按需产 `dist/workflow-host.mjs`（本地测试输出，不入库不随包；默认 cjs） | `node build.js`；`--format=cjs\|esm`；`--check`（新鲜度，陈旧 exit 1） |
 | `../packages/client-ui-monitor/build.js` | Client 产物：`src/client.js` → `lib/client.js` | `node build.js` |
 | `test-host.js` | 单测 569 用例（解析/引擎/注册表/路由/工具/主从聚合/**产物级回归**）；启动时自动检查产物新鲜度并按需重建 | `node test-host.js` |
 | `verify-client-bundle.js` | Client 产物**求值级**验证（bundle 执行 + apply/inject 导出断言） | `node verify-client-bundle.js` |

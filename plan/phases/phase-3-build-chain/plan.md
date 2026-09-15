@@ -42,7 +42,7 @@
 | 1 | apply 前言源文件（探针 + A1 tap + 注册表装配） | `code/plugins/workflow-host/apply-prologue.js` | 新增（从 mjs 抽出，逐字保真） |
 | 2 | webserver-routes 源文件（全部 `/wf/*` 路由） | `code/plugins/workflow-host/webserver-routes.js` | 新增（同上） |
 | 3 | 模块清单（有序 section 表 + 插件元数据） | `code/scripts/module-manifest.js` | 新增 |
-| 4 | 单一生成器（源模块 → **CJS 交付物 + ESM 生成物**；剥离条件导出块；开关 `--format=cjs\|esm\|both`，默认 both） | `code/packages/workflow-host/build.js` | 重构 |
+| 4 | 单一生成器（源模块 → **CJS 交付物**；剥离条件导出块；开关 `--format=cjs\|esm\|both`，默认 cjs；esm 为按需测试输出不入库） | `code/packages/workflow-host/build.js` | 重构 |
 | 5 | 单测改造（mjs → 产物；legacy → 现役实现；构建新鲜度保障） | `code/scripts/test-host.js` | 改造 |
 | 6 | 产物级回归用例（导出面完好 / 路由往返 / 工具注册数 / 构建新鲜度） | `code/scripts/test-host.js` 新增用例节 | 新增 |
 | 7 | mjs 删除 + 部署/文档同步 | 删除 `code/agent-presets/.../workflow-host.mjs`；更新 `GUIDE.md` §4-5、`code/README.md`、`plan/status.md`、`plan/build/*` | 清理/文档 |
@@ -57,7 +57,7 @@
 |---|---|---|---|
 | **生成器归属** | 改造 `packages/workflow-host/build.js` 为唯一生成器（可被 `require`，`require.main` 时自跑） | 新建 `scripts/build-all.js` 串起 sync+build | A 让"构建"只有一个入口，且 test-host 可直接 `require` 它做新鲜度保障；B 多一层胶水 |
 | **section 作用域** | **模块作用域**（与 ESM 原形一致，顶层常量只初始化一次） | 保持现役"全部嵌进 `apply()`"结构 | 已核实 12 个 section 顶层均为**纯定义**（函数/常量），无副作用；差异仅在初始化时机。若真机冒烟异常，生成器加 flag 回退嵌套（一行开关） |
-| **mjs 处置** | ~~删除~~ **（已拍板）生成器同时产出 CJS 交付物 + ESM 生成物，ESM 入 `packages/workflow-host/dist/workflow-host.mjs` 并入库**；`agent-presets/` 下的旧 mjs 删除 | — | 保留 ESM 形态（应急/preset 本地插件路径不丢），但由生成器统一产出，不再是手编中间物 |
+| **mjs 处置** | ~~保留入库~~ **（2026-09-15 收尾修订）**默认产物仅 CJS 交付物；ESM 形态降级为 `--format=esm` 按需的本地测试输出（`dist/` 不入库、不随发行包）；`agent-presets/` 旧 mjs 删除 | — | 消除一切入库生成物；ESM 能力经开关保留 |
 | **sync-modules.js** | 退役并移入 `code/legacy/`（职责并入生成器） | 保留原地 | 合并后无内联副本可同步 |
 | **版本号** | host **0.22.0**（结构变更）/ client **0.9.2**（仅 `dsh.engines` 对齐 `>=0.1.5-rc.1`） | 不改版本 | 交付物接口（导出面）修复属可感知变更，升 minor 合理 |
 
@@ -71,11 +71,11 @@
 |---|---|---|---|
 | **S1** | 抽取 `apply-prologue.js`（mjs L11–114 逐字搬入） | 与 mjs 原文 `diff` | 逐字一致（除文件头注释） |
 | **S2** | 抽取 `webserver-routes.js`（mjs L5107–6425 逐字搬入） | 同上 | 逐字一致 |
-| **S3** | 建 `module-manifest.js`（14 项有序表 + `name`/`inject`）；改造 `build.js`：默认产出 ① `packages/workflow-host/lib/index.js`（CJS，剥离条件导出块，模块作用域，导出 `registerWebRoutes`/`loadStateFromFile` 供测试）② `packages/workflow-host/dist/workflow-host.mjs`（ESM 生成物，入库）；开关 `--format=cjs\|esm\|both`（默认 both） | 生成后与现役 `lib/index.js` 做结构化 diff；`node -e "require(lib)"` 校验导出；ESM 产物 `import` 校验 | 差异仅限：①剥离的 12 个条件导出块 ②作用域位置 ③导出面新增 2 个测试通道；无其他差异 |
+| **S3** | 建 `module-manifest.js`（14 项有序表 + `name`/`inject`）；改造 `build.js`：默认产出 `packages/workflow-host/lib/index.js`（CJS，剥离条件导出块，模块作用域，导出 `registerWebRoutes`/`loadStateFromFile` 供测试）；`--format=esm` 按需产 `dist/workflow-host.mjs`（**不入库不随包**，默认 cjs） | 生成后 `node -e "require(lib)"` 校验导出；ESM 产物 `import` 校验 | 差异仅限：①剥离的 12 个条件导出块 ②作用域位置 ③导出面新增 2 个测试通道；无其他差异 |
 | **S4** | `test-host.js`：6 处 `import(mjs)` → `require('../packages/workflow-host/lib/index.js')`；`expandLoopTasks` 改从 `tools-preset.js` 导入；启动时按 mtime 校验产物新鲜度（陈旧则调 `build()`） | 跑全量单测 | 全绿（若 expandLoopTasks 用例因实现差异失败 → 逐条定性：更新断言 or 记录现役 bug，**不在本迭代改实现**） |
 | **S5** | 新增产物级回归用例：① `apply()` 后导出面完好（P3 锁死）② `/wf/create`+`/wf/list` 往返 ③ 工具注册数 = 10 ④ 产物新鲜度 | 跑新增用例 | 全绿 |
 | **S6** | **真机冒烟**：部署 → 用户重启 `dsh.service` | `/wf/list` HTTP 200；工具 10 件套；面板 DAG 渲染；Start→Stop 一轮（agent 真实感知） | 全部通过 |
-| **S7** | 删除 `agent-presets/.../workflow-host.mjs`（旧手编中间物）；更新部署清单（preset 目录不再需要 mjs；如需 preset 本地插件形态用 `dist/workflow-host.mjs`）、`GUIDE.md`、`code/README.md`、`plan/status.md` | grep 全库确认无旧 mjs 引用；部署点核对 | 无残留引用；preset 目录 3 文件（preset.yml / agent.cordis.yml / system-prompt.md） |
+| **S7** | 删除 `agent-presets/.../workflow-host.mjs`（旧手编中间物）；更新部署清单（preset 目录不再需要 mjs）、`GUIDE.md`、`code/README.md`、`plan/status.md` | grep 全库确认无旧 mjs 引用；部署点核对 | 无残留引用；preset 目录 3 文件（preset.yml / agent.cordis.yml / system-prompt.md） |
 | **S8（3b）** | legacy **集中归档**（不删除）：`scripts/{build-host.js,sync-modules.js,*.ps1}`、`plugins/workflow-host/{dist/,index.js,rpc.js,tools.js}`、`plugins/workflow-client/`、`plugins/workflow-rpc/`、`ui/`、`probes/` → `code/legacy/`（`git mv`）；新增 `code/legacy/README.md` 说明来历与"非现役"；更新文档引用 | `grep` 确认现役链路无引用；移后跑单测；`code/` 顶层只剩现役目录 | 单测全绿；`code/` 现役/历史界限清晰 |
 
 > **3c（发行工具）/ 3d（persona 文件化）** 为可选子迭代，见 §6 决策点 3/4；若纳入，排在本方案 S1–S8 之后独立执行（各自出小方案）。
@@ -88,7 +88,7 @@
 - [ ] **产物**：`lib/index.js` 中 `typeof module !== 'undefined'` 出现次数 = 0；`apply()` 后 `name/inject/apply` 完好
 - [ ] **真机**：重启后 `/wf/list` 200、10 工具注册、面板 DAG + 四键一轮通过（用户验收）
 - [ ] **构建链**：`node code/packages/workflow-host/build.js` 一条命令从源产出交付物；无 sync 步骤；陈旧产物自动重建
-- [ ] **双产物**：`lib/index.js`（CJS）与 `dist/workflow-host.mjs`（ESM，入库）同源产出；`--format` 三态开关可用
+- [ ] **产物**：`lib/index.js`（CJS 交付物）中 `typeof module !== 'undefined'` 出现次数 = 0；`apply()` 后 `name/inject/apply` 完好；ESM 为按需测试输出（不入库不随包）
 - [ ] **减重**：`agent-presets/` 旧 mjs（6430 行手编中间物）删除；legacy 件集中到 `code/legacy/`（保留可用）
 - [ ] **发行（3c）**：`npm pack` 产物内容断言通过；安装脚本 `--dry-run` + 全新 profile E2E 通过；`client.dsh.engines` 对齐 `>=0.1.5-rc.1`
 - [ ] **文档**：`GUIDE.md` §4-5 与 `code/README.md` 的构建链描述更新；`plan/status.md` 阶段 3 状态回填；迭代报告归档到 `plan/phases/phase-3-build-chain/iterations/`
@@ -100,7 +100,7 @@
 | # | 决策点 | 结论 |
 |---|---|---|
 | 1 | section 作用域 | ✅ **模块作用域**（异常时生成器 flag 一行回退嵌套） |
-| 2 | mjs / dist 处置 | ✅ **保留 dist 生成物、开关可选**；ESM 生成物入库；`agent-presets/` 旧 mjs 删除 |
+| 2 | mjs / dist 处置 | ✅ **2026-09-15 收尾修订**：默认产物仅 CJS；ESM 形态降级为 `--format=esm` 按需的本地测试输出（`dist/` 不入库、不随发行包）；`agent-presets/` 旧 mjs 删除 |
 | 3 | 3c 发行工具 | ✅ **本阶段必须提供**（S1–S8 之后执行，届时出 3c 细案） |
 | 4 | 3d persona 文件化 | ✅ **独立迭代**：先写探针验证（4 项）后实施；记入 `plan/status.md` 阶段 4 候选 |
 | 5 | legacy 处置 | ✅ **代码保留并集中到 `code/legacy/`**；文档同步更新 |

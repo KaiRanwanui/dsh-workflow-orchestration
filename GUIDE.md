@@ -118,13 +118,13 @@ Host（webserver-routes section）
 - profile bundle 列表（`~/.dsh/profiles/web/package.json` = `dsh.profile.bundles`）→ 每个包的 `cordis.patch.yml` 声明 `insert` 行 → dsh 启动时按包 `main` 加载。
 - 本仓库两包以 **`link:`** 依赖进 profile：**构建即生效**，无需重装。
 - **Host 改动 → 重启 `dsh.service`；Client 改动 → 刷新页面**。
-- 阶段 3 起 preset 目录**不再携带 `workflow-host.mjs`**（Host 一律以 npm 包交付；如需 preset 本地插件形态，产物在 `code/packages/workflow-host/dist/workflow-host.mjs`）。
+- 阶段 3 起 preset 目录**不再携带 `workflow-host.mjs`**（Host 一律以 npm 包交付）；`packages/workflow-host/dist/` 仅为 `--format=esm` 按需的本地测试输出（不入库、不随发行包）。
 
 ## 5. 开发流程与构建链（阶段 3 起：单一生成器）
 
 ```
 # Host：改源模块（按 module-manifest 拼入产物）→ 单一生成器 → 单测
-node code/packages/workflow-host/build.js     # 源模块 → lib/index.js（CJS 交付物）+ dist/workflow-host.mjs（ESM）
+node code/packages/workflow-host/build.js     # 源模块 → lib/index.js（CJS 交付物，入库）；--format=esm 按需产 dist/workflow-host.mjs（本地测试）
 node code/scripts/test-host.js                # 569 用例；启动时自动检查产物新鲜度并按需重建
 
 # Client：改 src/client.js → 构建 → 产物级验证

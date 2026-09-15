@@ -70,7 +70,6 @@ for (const [label, pkgDir] of [['host', PKG_HOST], ['client', PKG_CLIENT]]) {
 console.log('── ⑤ 内容断言 ──')
 const MUST_HOST = [
   'package/lib/index.js',
-  'package/dist/workflow-host.mjs',
   'package/cordis.patch.yml',
   'package/package.json',
   ...PRESET_FILES.map((f) => 'package/presets/workflow-orchestrator/' + f),
@@ -101,6 +100,7 @@ for (const [label, pkgDir] of [['host', PKG_HOST], ['client', PKG_CLIENT]]) {
   if (!engines || !/0\.1\.5/.test(engines)) fail(`${label} 的 dsh.engines.dsh 未对齐 0.1.5: ${engines}`)
   console.log(`  ${label}: v${pkg.version} | engines ${engines}`)
 }
+console.log('  注：ESM 形态（dist/workflow-host.mjs）为 --format=esm 按需的本地测试输出，不随发行包')
 
 console.log('')
 console.log('✅ 发行构建完成 → ' + RELEASE_DIR)

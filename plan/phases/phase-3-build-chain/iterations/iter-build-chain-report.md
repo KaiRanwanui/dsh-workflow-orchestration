@@ -15,7 +15,7 @@
 | # | 决策点 | 结论 |
 |---|---|---|
 | 1 | section 作用域 | **模块作用域**（12 个 section 顶层均纯定义，已核实；异常时生成器 flag 回退嵌套） |
-| 2 | mjs / dist | 生成器**双产物**：CJS `lib/index.js` + ESM `dist/workflow-host.mjs`（**入库**）；`--format=cjs\|esm\|both` 开关；`agent-presets/` 旧手编 mjs 删除 |
+| 2 | mjs / dist | 生成器产出 CJS `lib/index.js`（交付物）；ESM `dist/workflow-host.mjs` 为 `--format=esm` **按需测试输出**（2026-09-15 收尾修订：不入库、不随发行包）；`agent-presets/` 旧手编 mjs 删除 |
 | 3 | 3c 发行工具 | **本阶段必须提供**（S1–S8 之后，细案另行确认） |
 | 4 | 3d persona 文件化 | **移出本阶段**，独立迭代先探针验证（4 项前置探针已登记 `plan/status.md` 阶段 4 候选） |
 | 5 | legacy 处置 | **代码保留**，集中 `code/legacy/`（`git mv` 保历史）；文档不再描述为现役 |
@@ -76,7 +76,7 @@
 |---|---|
 | 单测 | **569 全绿**（含用例 31 产物级回归） |
 | 产物 | `lib/index.js` 条件导出块 = 0；`module.exports` 唯一；apply 后导出面完好 |
-| 双产物 | CJS `lib/index.js` + ESM `dist/workflow-host.mjs` 同源产出，均入库 |
+| 交付物 | CJS `lib/index.js` 入库并随包；ESM `dist/workflow-host.mjs` 为按需测试输出（不入库、不随包；2026-09-15 收尾修订） |
 | 构建链 | 单命令生成；`--check`/`--format` 开关；测试自动重建陈旧产物 |
 | 真机 | `/wf/list` 200、materialize ok（资产完整）、面板 DAG 正常、面板 Stop 立即终止主/子会话（用户验收） |
 | 减重 | 删除 6430 行手编 mjs + legacy 集中归档；`code/` 现役/历史界限清晰（`legacy/README.md`） |
@@ -104,8 +104,8 @@
 
 | # | 交付件 | 说明 |
 |---|---|---|
-| 1 | `code/packages/workflow-host/build.js` 双产物 | CJS `lib/index.js` + ESM `dist/workflow-host.mjs`（`--format` 开关，见 §3） |
-| 2 | host 包随包分发 preset | `files` 增加 `presets/workflow-orchestrator/` 与 `dist/workflow-host.mjs`（build-release 暂存，目录不入库见 .gitignore） |
+| 1 | `code/packages/workflow-host/build.js` 单产物交付 + 按需 ESM | CJS `lib/index.js`（交付物，随包）；ESM `dist/workflow-host.mjs` 仅 `--format=esm` 按需（不入库不随包，2026-09-15 收尾修订） |
+| 2 | host 包随包分发 preset | `files` 增加 `presets/workflow-orchestrator/` 三件（build-release 暂存；ESM 不随包） |
 | 3 | `code/scripts/build-release.js` | 一键发行构建：Host 双产物 → Client 产物+求值验证 → preset 暂存（唯一源 `code/agent-presets/`）→ `npm pack`（本地缓存 `--cache`，规避受限环境 EROFS）→ **内容断言**（host 7 项必含：lib/dist/patch/preset 三件套；client 4 项）→ 版本矩阵一致性（两包 engines 对齐 0.1.5-rc.1）→ 产出 `release/*.tgz` |
 | 4 | `code/scripts/install.js` | 安装器：`--profile <名>`（默认 web）+ `dsh plugin add` 两包 + preset 三件套同步到 `~/.dsh/.agent-presets/workflow-orchestrator/`；`--dry-run` 预览、`--preset-only`、`--registry`（registry 包名模式）、幂等；收尾打印重启/刷新提示 |
 

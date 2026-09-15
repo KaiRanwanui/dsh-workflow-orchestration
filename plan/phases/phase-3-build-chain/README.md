@@ -14,7 +14,7 @@
 
 | 能力域 | 交付内容 |
 |---|---|
-| **单一生成器** | `packages/workflow-host/build.js` 按 `scripts/module-manifest.js`（14 项有序清单）从源模块直接产出**双产物**：`lib/index.js`（CJS 交付物）+ `dist/workflow-host.mjs`（ESM 生成物，入库）；`--format=cjs\|esm\|both` + `--check` 新鲜度 |
+| **单一生成器** | `packages/workflow-host/build.js` 按 `scripts/module-manifest.js`（14 项有序清单）从源模块产出 `lib/index.js`（CJS 交付物）；`--format=esm` 按需产 `dist/workflow-host.mjs`（本地测试输出，不入库不随包）+ `--check` 新鲜度 |
 | **源模块化** | 2 段手编区成为真实源文件：`apply-prologue.js`（探针 + 注册表 + A1 tap）、`webserver-routes.js`（`/wf/*` 路由）；同步纪律消失 |
 | **交付物健康** | CJS 产物剥离 12 处条件导出块（修复 apply 后 `module.exports` 被覆盖缺陷）；导出面 = `{name, inject, apply, registerWebRoutes, loadStateFromFile}`（单测可直调路由） |
 | **测试对准** | 单测加载真实交付物（6 处 mjs import 全部替换）+ 产物新鲜度自动重建 + 用例 31 产物级回归（导出面/工具数/路由往返/dist 存在） |
@@ -36,7 +36,7 @@
 源模块（14 项，scripts/module-manifest.js 有序表）
    └── packages/workflow-host/build.js（单一生成器）
          ├── packages/workflow-host/lib/index.js        # CJS 交付物（运行时加载；剥离条件导出块）
-         └── packages/workflow-host/dist/workflow-host.mjs  # ESM 生成物（入库；应急/preset 本地形态）
+         └── packages/workflow-host/dist/workflow-host.mjs  # ESM 形态（**按需测试输出，不入库不随包**；2026-09-15 收尾修订）
 测试 ── require(lib/index.js)（产物新鲜度自动重建）
 部署 ── profile link:（构建即生效；Host 重启 / Client 刷新页面）
 发行 ── scripts/build-release.js → release/*.tgz；scripts/install.js → 一键安装
@@ -45,7 +45,7 @@
 ## 设计决议（用户拍板，详见 `plan.md` §6）
 
 1. section 作用域 = **模块作用域**（12 个 section 顶层均纯定义，已核实）
-2. mjs → **dist 生成物入库**（`--format` 开关可选）；`agent-presets/` 旧手编 mjs 删除
+2. mjs → **退役**；ESM 形态降级为「`--format=esm` 按需的本地测试输出」（`dist/`，不入库、不随发行包）——2026-09-15 收尾修订；`agent-presets/` 旧手编 mjs 删除
 3. 3c 发行工具 **纳入本阶段**
 4. 3d persona 文件化 → **独立迭代**，先探针验证（4 项前置探针见 `plan/status.md` 阶段 4 候选）
 5. legacy 处置 = **代码保留、集中 `code/legacy/`**

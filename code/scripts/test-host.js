@@ -2809,8 +2809,12 @@ async function runCase26() {
     const iid = c.body.instanceId
     const l = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(WS))
     check('c31: /wf/list 可见新建实例', l.code === 200 && (l.body.instances || []).some(i => i.instanceId === iid), 'instanceId=' + iid)
+    // ESM 形态为开关按需输出（本地测试用；不入库、不随发行包）
+    hostBuild.build({ format: 'esm' })
     const esmPath = require('path').join(__dirname, '..', 'packages', 'workflow-host', 'dist', 'workflow-host.mjs')
-    check('c31: dist/workflow-host.mjs 存在（ESM 生成物入库）', nodeFs.existsSync(esmPath), esmPath)
+    const esmOk = nodeFs.existsSync(esmPath)
+    if (esmOk) nodeFs.rmSync(esmPath) // 按需产物，验证后即清理
+    check('c31: --format=esm 按需产出可用（生成后即清理）', esmOk, esmPath)
   }
 
     // ── 用例 8：实例注册表（Iter-10）──

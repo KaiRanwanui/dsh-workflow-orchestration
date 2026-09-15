@@ -4,8 +4,9 @@
 // 文件：code/packages/workflow-host/build.js
 //
 // 输入：code/scripts/module-manifest.js（有序源模块清单）
-// 输出：① lib/index.js                 （CJS 交付物，运行时由 profile 加载，入库）
-//       ② dist/workflow-host.mjs      （ESM 生成物，入库；应急/preset 本地插件形态）
+// 输出：lib/index.js                    （CJS 交付物，运行时由 profile 加载，入库）
+//       dist/workflow-host.mjs          （ESM 形态，**仅本地测试按需输出**：--format=esm/both；
+//                                        不入库、不进发行包。开关见 CLI。）
 //
 // 与旧链的差异（0.1.5 迁移收尾后确立）：
 //   - 不再经过手编中间物 workflow-host.mjs（原 sync-modules + build.js 两步合一）
@@ -52,10 +53,10 @@ function inputPaths() {
   return [MANIFEST_PATH, ...manifest.modules.map((m) => path.join(CODE_DIR, m.path))]
 }
 function needsBuild() {
-  const outs = [LIB_PATH, DIST_ESM_PATH]
-  if (!outs.every((o) => fs.existsSync(o))) return true
+  // 交付物只有 CJS lib；dist ESM 是 --format 按需的本地测试输出，不参与新鲜度判定
+  if (!fs.existsSync(LIB_PATH)) return true
   const newestInput = Math.max(...inputPaths().map((p) => fs.statSync(p).mtimeMs))
-  return outs.some((o) => fs.statSync(o).mtimeMs < newestInput)
+  return fs.statSync(LIB_PATH).mtimeMs < newestInput
 }
 
 // ── 拼接 ────────────────────────────────────────────────────────────────────
@@ -109,7 +110,7 @@ function assemble(format) {
 
 // ── 构建 ────────────────────────────────────────────────────────────────────
 function build(options = {}) {
-  const format = options.format || 'both'
+  const format = options.format || 'cjs'
   const written = []
   if (format === 'cjs' || format === 'both') {
     fs.mkdirSync(path.dirname(LIB_PATH), { recursive: true })
