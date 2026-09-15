@@ -13,7 +13,6 @@
 | `../packages/client-ui-monitor/build.js` | Client 产物：`src/client.js` → `lib/client.js` | `node build.js` |
 | `test-host.js` | 单测 569 用例（解析/引擎/注册表/路由/工具/主从聚合/**产物级回归**）；启动时自动检查产物新鲜度并按需重建 | `node test-host.js` |
 | `verify-client-bundle.js` | Client 产物**求值级**验证（bundle 执行 + apply/inject 导出断言） | `node verify-client-bundle.js` |
-| `sync-persona.js` | `system-prompt.md` → `agent.cordis.yml` persona 块；`--check` 只校验 | `node sync-persona.js [--check]` |
 | `simulate-exec.js` | 模拟工作流状态流转（生成演示 state.json，供 GUI 联调） | `node simulate-exec.js` |
 
 ## 典型流程
@@ -28,7 +27,8 @@ node code/packages/client-ui-monitor/build.js && node code/scripts/verify-client
 # → 刷新浏览器页面生效
 
 # persona 改动后
-node code/scripts/sync-persona.js   # 细则见该文件头注释（3d 迭代计划文件化后退役）
+# （阶段 3g 起 persona 文件化：改 code/agent-presets/workflow-orchestrator/system-prompt.md
+#   后重部署 preset 即生效，运行时由 persona-file.mjs 读取——无需任何构建步骤）
 ```
 
 ## 历史脚本（`../legacy/scripts/`）
