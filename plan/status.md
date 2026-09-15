@@ -16,7 +16,7 @@
 | **阶段 0 · PoC 验证** | 2026-08 中旬前 | 0.1.2-alpha 系列 | 原型（未发行） | 无 | ✅ 已归档 |
 | **阶段 1 · 核心功能开发**（Iter-1 ~ Iter-30 + Iter-SUBA） | 2026-08-26 ~ 09-05 | **0.1.1-rc.2** | host v0.20.1 / client v0.9.0 | 563 单测全绿 | ✅ 已完成并归档 |
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | 2026-09-13（单日完成） | **0.1.5-rc.2** | host **v0.21.0** / client **v0.9.1** | 563 单测全绿 + GUI 回归通过 | ✅ 已完成并归档 |
-| **阶段 3 · 构建链合并重构 + 发行工具 + 单包化** | 2026-09-14 ~ 09-15 | 0.1.5-rc.2 | **host v0.23.0 单包**（Host 插件 + 面板 bundle + preset 随包；client-ui-monitor 退役） | 567 单测全绿 + 真机冒烟 + GUI 验收 | ✅ 已完成并归档（3a–3c + 扩展 3e–3i） |
+| **阶段 3 · 构建链合并重构 + 发行工具 + 单包化** | 2026-09-14 ~ 09-15 | 0.1.5-rc.2 | **host v0.23.0 单包**（Host 插件 + 面板 bundle + preset 随包；client-ui-monitor 退役） | 567 单测全绿 + 真机冒烟 + GUI 验收 + **实物验收**（清除→tgz 重装→基本功能） | ✅ 已完成并归档 |
 
 阶段详情与迭代索引：`phases/README.md`。
 
@@ -51,8 +51,9 @@
 **方案**：[`phases/phase-3-build-chain/plan.md`](phases/phase-3-build-chain/plan.md)（**6 个决策点已全部拍板**：模块作用域 / dist 生成物入库且开关可选 / 3c 发行工具纳入本阶段 / 3d 独立迭代先验证 / legacy 代码集中 `code/legacy/` / host 0.22.0 + client 0.9.2）。
 **进展**：3a（构建链合并）+ 3b（legacy 集中归档）+ 3c（发行工具 `build-release.js` + `install.js`）全部完成；执行中修复缺陷 #7（面板 Stop 空闲主会话不停子会话 → v4 叠加式级联：cancel + 全量枚举 + drain 硬释放 + 逐子 interrupt），用户 GUI 验收通过。
 **收尾产物**：`phases/phase-3-build-chain/README.md`；报告 `phases/phase-3-build-chain/iterations/iter-build-chain-report.md`。
-**扩展（2026-09-15 用户指令）**：✅ 全部完成——3e 单包合并（`@workflow-agent/workflow-host` v0.23.0 单包双端：Host main + `dsh.client` 面板 bundle，子路径行 `…/monitor`；client-ui-monitor 退役入 legacy）、3f 内建资产文件化（`builtin-assets/` 真实文件随包 + 物化复制语义，内置 JS 字符串退役）、3g persona 文件化（`persona-file.mjs` 运行时读 `system-prompt.md`，`sync-persona.js` 退役）、3h npm 发布元数据（暂不发布）、3i build.mjs 改名。报告：`phases/phase-3-build-chain/iterations/iter-single-package-report.md`；方案：`plan.md` §9。
-**阶段 4**：workflow-agent 功能增强（原 Iter-31 backlog：节点详情面板/交互增强/主题适配等），**不再处理构建打包问题**。
+**扩展（2026-09-15 用户指令）**：✅ 全部完成——3e 单包合并（v0.23.0 单包双端：Host main + `dsh.client` 面板 bundle；双行子路径方案因 bundle 注册 id 必须为包名而修订为单行）、3f 内建资产文件化（`builtin-assets/` 真实文件随包 + 物化复制语义）、3g persona 文件化（`persona-file.mjs` 运行时读 `system-prompt.md`，`sync-persona.js` 退役）、3h npm 发布元数据（暂不发布）、3i build.mjs 改名。
+**实物验收（三步）**：构建 tgz → **全量清除零残留（用户审核通过，重启后 GUI 零 workflow 内容）** → tarball 重装（六点核验通过）→ **基本工作流操作正常（用户确认）**。过程中修复 3 起部署异常（bundle 注册 id、安装器 preset 清单缺 persona-file.mjs、persona-file.mjs inject 未导出），详见迭代报告 §10。
+**阶段 4**：workflow-agent 功能增强（原 Iter-31 backlog：节点详情面板/交互增强/主题适配等），**不再处理构建打包问题**。可选增强（未排期）：部署期清单自动校验（install 后自检）。
 `development-plan.md`（阶段 1 详案）已归档，新阶段计划按 `plan/development/iteration-plan-template.md` 撰写。
 
 ---

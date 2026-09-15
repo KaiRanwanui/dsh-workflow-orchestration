@@ -13,7 +13,7 @@
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | `phase-2-dsh-migration/` | 2026-09-13 | 0.1.1-rc.2 → 0.1.5-rc.2 | host v0.21.0 / client v0.9.1 | **5 个阶段任务**（Phase 0–4） |
 | **阶段 3 · 构建链合并重构 + 发行工具** | `phase-3-build-chain/` | 2026-09-14 ~ 09-15 | 0.1.5-rc.2（不变） | host v0.22.0 / client v0.9.2 | **3 个子迭代**（3a/3b/3c）+ 缺陷 #7 修复 |
 
-| **阶段 3 · 构建链合并重构 + 发行工具** | `phase-3-build-chain/` | 2026-09-14 ~ 09-15 | 0.1.5-rc.2（不变） | host v0.22.0 / client v0.9.2 | **3 个子迭代**（3a 构建链合并 / 3b legacy 归档 / 3c 发行工具）+ 缺陷 #7 修复 |
+| **阶段 3 · 构建链合并重构 + 发行工具 + 单包化** | `phase-3-build-chain/` | 2026-09-14 ~ 09-15 | 0.1.5-rc.2（不变） | **host v0.23.0 单包** / client 退役 | **3a/3b/3c + 扩展 3e–3i + 缺陷 #7/#8 修复 + 实物验收** |
 
 阶段 3 详情：方案 [`phase-3-build-chain/plan.md`](phase-3-build-chain/plan.md)、阶段总结 [`phase-3-build-chain/README.md`](phase-3-build-chain/README.md)、报告 [`phase-3-build-chain/iterations/iter-build-chain-report.md`](phase-3-build-chain/iterations/iter-build-chain-report.md)。
 

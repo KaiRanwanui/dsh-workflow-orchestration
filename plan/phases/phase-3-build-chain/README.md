@@ -5,6 +5,7 @@
 - **交付**：`@workflow-agent/workflow-host` **v0.23.0 单包**（Host 插件 + DAG 面板 bundle + preset 随包）；`@workflow-agent/client-ui-monitor` **退役**
 - **测试基线**：**567 单测全绿**（用例 18 重写 / 用例 31 新增）+ 产物级验证 + 真机冒烟 + GUI 验收
 - **状态**：✅ 已完成并冻结（3d persona 文件化移出，见「后续」）
+- **实物验收**：✅ 三步验收通过（构建 tgz → 全量清除零残留[用户审核] → tarball 重装[六点核验] → 基本功能[用户 GUI 确认]；过程异常 3 起均已修复，见报告 §10）
 
 ## 阶段目标
 
@@ -64,4 +65,5 @@
 | persona 文件化遗留探针（async apply） | persona-file.mjs 用同步读取规避；热更新需求出现时再验证 |
 | 门禁 subagent 分支真实链路复跑 | 功能迭代顺带 |
 | `npm publish` | 需 npm 账号具备 `@workflow-agent` scope；元数据已备齐 |
-| 节点详情面板 / 交互增强 / 主题适配（原 Iter-31 backlog） | **阶段 4 功能迭代队列** |
+| 节点详情面板 / 交互增强 / 主题适配（原 Iter-31 backlog） | **阶段 4 功能迭代队列（阶段 4 起仅功能，不再动构建打包）** |
+| 部署期清单自动校验（install 后自检 preset/patch/导出面） | 可选增强，未排期 |
