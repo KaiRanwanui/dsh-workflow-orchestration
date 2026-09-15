@@ -6,7 +6,6 @@
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
-    "./monitor": "./lib/monitor-entry.js",
     "./package.json": "./package.json"
   },
   "dsh": {
@@ -24,8 +23,6 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "lib/monitor-entry.js",
-    "dist/workflow-host.mjs",
     "presets/workflow-orchestrator/",
     "builtin-assets/",
     "src/",

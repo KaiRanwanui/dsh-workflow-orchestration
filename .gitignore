@@ -40,3 +40,6 @@ code/packages/workflow-host/presets/
 
 # ESM 形态为本地产物（--format=esm 按需，本地测试用；不入库不随包）
 code/packages/workflow-host/dist/
+
+# ESM 形态：--format=esm 按需的本地测试输出（不入库、不随包）
+code/packages/workflow-host/dist/

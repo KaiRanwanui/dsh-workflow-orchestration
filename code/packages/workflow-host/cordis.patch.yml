@@ -1,12 +1,8 @@
-# Workflow Agent 插件包 - Bundle Patch（单包双端）
-# 一个 npm 包承载 Host 插件与 Client 面板：
-#   - workflow-host 行：Host 加载（main → lib/index.js：引擎 + workflow_* 工具 + /wf/* 路由）
-#   - ui-workflow-monitor 行：浏览器加载（dsh.client → lib/client.js：conversation.view DAG 面板）；
-#     Host 侧经子路径导出 './monitor'（lib/monitor-entry.js 空入口）无害解析
-# （形态先例：@linxin666/dsh-web-all 单包多行 + 子路径行名；官方 client-ui 包自带空入口 main）
+# Workflow Agent 插件包 - Bundle Patch（单行双端）
+# 一个 npm 包同时承载 Host 插件与 Client 面板：
+#   - Host：main → lib/index.js（引擎 + workflow_* 工具 + /wf/* 路由）
+#   - Client：dsh.client → lib/client.js（conversation.view DAG 面板）——同一行在
+#     浏览器上下文挂载 Client 实现（bundle 注册 id = 包名本身，0.1.5 实证约束）
 - insert:
     - id: workflow-host
       name: '@workflow-agent/workflow-host'
-- insert:
-    - id: ui-workflow-monitor
-      name: '@workflow-agent/workflow-host/monitor'

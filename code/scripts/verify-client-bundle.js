@@ -18,7 +18,7 @@ const fn = new Function('window', 'require', code)
 fn(loaderHolder, fakeRequire)
 
 if (!loadedDef) { console.error('FAIL: __ModuleLoader__.load 未被调用'); process.exit(1) }
-if (loadedDef.id !== '@workflow-agent/workflow-host/monitor') { console.error('FAIL: id 不符: ' + loadedDef.id); process.exit(1) }
+if (loadedDef.id !== '@workflow-agent/workflow-host') { console.error('FAIL: id 不符: ' + loadedDef.id); process.exit(1) }
 
 const mod = loadedDef.factory(fakeRequire)
 if (typeof mod.apply !== 'function' || !Array.isArray(mod.inject)) {

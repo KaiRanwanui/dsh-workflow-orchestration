@@ -75,7 +75,6 @@ const MUST_HOST = [
 ]
 const MUST_CLIENT = [
   'package/lib/client.js',
-  'package/lib/monitor-entry.js',
 ]
 function tarList(tgz) {
   const r = spawnSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
