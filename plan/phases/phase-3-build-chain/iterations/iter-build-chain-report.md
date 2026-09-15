@@ -1,6 +1,6 @@
 # 阶段 3 迭代报告（3a + 3b）— 构建链合并重构
 
-- **状态**：✅ 3a + 3b 完成关闭（2026-09-15，用户 GUI 验收通过）；⏳ 3c 发行工具待细案确认
+- **状态**：✅ 全部完成关闭（2026-09-15，3a+3b+3c；用户 GUI 验收通过）
 - **阶段**：阶段 3（构建链合并重构）
 - **版本**：host **v0.22.0** / client **v0.9.2**（client `dsh.engines` 对齐 `>=0.1.5-rc.1`）
 - **测试**：**569 单测全绿**（563 + 6 条产物级回归）；真机冒烟通过（`/wf/list` 200、materialize ok、资产完整、面板 DAG 正常）
@@ -94,3 +94,34 @@
 
 - 方案：`../plan.md` · 阶段 2 报告：`../../phase-2-dsh-migration/iterations/iter-migration-015rc2-report.md`
 - 关联缺陷：阶段 2 验证报告缺陷 #5（面板 Stop 架构修订）→ 本报告缺陷 #7（空闲主会话场景 + 硬释放）
+
+
+---
+
+## 9. 3c — 发行工具（本阶段必须项，已交付）
+
+### 交付件
+
+| # | 交付件 | 说明 |
+|---|---|---|
+| 1 | `code/packages/workflow-host/build.js` 双产物 | CJS `lib/index.js` + ESM `dist/workflow-host.mjs`（`--format` 开关，见 §3） |
+| 2 | host 包随包分发 preset | `files` 增加 `presets/workflow-orchestrator/` 与 `dist/workflow-host.mjs`（build-release 暂存，目录不入库见 .gitignore） |
+| 3 | `code/scripts/build-release.js` | 一键发行构建：Host 双产物 → Client 产物+求值验证 → preset 暂存（唯一源 `code/agent-presets/`）→ `npm pack`（本地缓存 `--cache`，规避受限环境 EROFS）→ **内容断言**（host 7 项必含：lib/dist/patch/preset 三件套；client 4 项）→ 版本矩阵一致性（两包 engines 对齐 0.1.5-rc.1）→ 产出 `release/*.tgz` |
+| 4 | `code/scripts/install.js` | 安装器：`--profile <名>`（默认 web）+ `dsh plugin add` 两包 + preset 三件套同步到 `~/.dsh/.agent-presets/workflow-orchestrator/`；`--dry-run` 预览、`--preset-only`、`--registry`（registry 包名模式）、幂等；收尾打印重启/刷新提示 |
+
+### 验证
+
+| 验证项 | 结果 |
+|---|---|
+| `build-release.js` 全流程 | ✅ 双 tgz 产出 + 内容断言通过（7+4 项）+ 版本矩阵一致 |
+| preset 三件套随包 | ✅ tgz 内含 `presets/workflow-orchestrator/{agent.cordis.yml,preset.yml,system-prompt.md}` |
+| `install.js --dry-run` | ✅ 计划输出正确（插件 add 两包 + preset 三件） |
+| `install.js --preset-only` 实装 | ✅ 幂等同步；部署副本与源逐字一致（diff 验证） |
+| `dsh plugin add` 全量命令 | ✅ 迁移期已实跑同一命令（link: 幂等）；当前部署已就位 |
+| 单测 | 569 全绿（发行工具不触碰运行时逻辑） |
+
+### 已知注意点
+
+1. `npm pack` 在受限环境（`~/.npm` 只读）会 EROFS → 生成器固定传 `--cache <repo>/.npm-cache-release/`（已 gitignore）。
+2. client `build.js` 为 ESM 语法但包未声明 `type:module`（lib 产物是 CJS/浏览器混合，不能加）→ Node 运行 build.js 时有 reparse 警告（仅性能提示）；若要消除可改名 `build.mjs`，留 3c 后续微清理。
+3. `npm publish`（发布到 registry）需要账号与 registry 决策，**不在 3c 范围**——当前发行形态为本地 tgz + `dsh plugin add <tgz 解包目录或 link:>`/`install.js`。

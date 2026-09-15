@@ -31,3 +31,9 @@ code/legacy/plugins/workflow-client/build-v8.js
 code/legacy/plugins/workflow-client/client-out.txt
 code/legacy/plugins/workflow-client/host-out.txt
 code/legacy/plugins/workflow-client/define.json
+# 发行构建产物（build-release.js 生成，不入库）
+release/
+code/packages/workflow-host/presets/
+
+# 发行构建缓存（build-release.js）
+.npm-cache-release/

@@ -17,6 +17,8 @@
   },
   "files": [
     "lib/index.js",
+    "dist/workflow-host.mjs",
+    "presets/workflow-orchestrator/",
     "cordis.patch.yml"
   ],
   "scripts": {
