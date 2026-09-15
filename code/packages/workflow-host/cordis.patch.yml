@@ -1,7 +1,12 @@
-# Workflow Agent Host Plugin - Bundle Patch
-# 插入工作流引擎插件（工具注册：workflow_begin / workflow_status）
-# 注意：RPC 处理器（wf:status / wf:skill / wf:config）不在此包中，
-# 保留在 agent preset 的 workflow-rpc.mjs 本地插件中。
+# Workflow Agent 插件包 - Bundle Patch（单包双端）
+# 一个 npm 包承载 Host 插件与 Client 面板：
+#   - workflow-host 行：Host 加载（main → lib/index.js：引擎 + workflow_* 工具 + /wf/* 路由）
+#   - ui-workflow-monitor 行：浏览器加载（dsh.client → lib/client.js：conversation.view DAG 面板）；
+#     Host 侧经子路径导出 './monitor'（lib/monitor-entry.js 空入口）无害解析
+# （形态先例：@linxin666/dsh-web-all 单包多行 + 子路径行名；官方 client-ui 包自带空入口 main）
 - insert:
     - id: workflow-host
       name: '@workflow-agent/workflow-host'
+- insert:
+    - id: ui-workflow-monitor
+      name: '@workflow-agent/workflow-host/monitor'

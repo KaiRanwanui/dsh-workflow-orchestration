@@ -13,7 +13,7 @@
 //
 // 用法：node code/scripts/build-release.js
 // 产物：release/@workflow-agent-workflow-host-<ver>.tgz
-//       release/@workflow-agent-client-ui-monitor-<ver>.tgz
+（单 tgz 发行）
 // ============================================================================
 
 const { spawnSync } = require('child_process')
@@ -22,10 +22,9 @@ const path = require('path')
 
 const CODE = path.resolve(__dirname, '..')
 const ROOT = path.resolve(CODE, '..')
-const PKG_HOST = path.join(CODE, 'packages', 'workflow-host')
-const PKG_CLIENT = path.join(CODE, 'packages', 'client-ui-monitor')
+const PKG = path.join(CODE, 'packages', 'workflow-host')
 const PRESET_SRC = path.join(CODE, 'agent-presets', 'workflow-orchestrator')
-const PRESET_STAGE = path.join(PKG_HOST, 'presets', 'workflow-orchestrator')
+const PRESET_STAGE = path.join(PKG, 'presets', 'workflow-orchestrator')
 const RELEASE_DIR = path.join(ROOT, 'release')
 // npm 缓存指向仓库本地（默认 ~/.npm 在受限环境可能只读，导致 pack EROFS）
 const NPM_CACHE = path.join(ROOT, '.npm-cache-release')
@@ -38,11 +37,11 @@ const run = (cmd, args, opts = {}) => {
 }
 
 console.log('── ① Host 双产物 ──')
-const hostBuild = require(path.join(PKG_HOST, 'build.js'))
+const hostBuild = require(path.join(PKG, 'build.js'))
 hostBuild.build({ format: 'both' })
 
 console.log('── ② Client 产物 + 验证 ──')
-run('node', [path.join(PKG_CLIENT, 'build.js')])
+run('node', [path.join(PKG, 'build-client.mjs')])
 run('node', [path.join(CODE, 'scripts', 'verify-client-bundle.js')])
 
 console.log('── ③ preset 暂存（唯一源 → host 包 presets/）──')
@@ -56,7 +55,7 @@ console.log('── ④ npm pack ──')
 fs.rmSync(RELEASE_DIR, { recursive: true, force: true })
 fs.mkdirSync(RELEASE_DIR, { recursive: true })
 const packs = {}
-for (const [label, pkgDir] of [['host', PKG_HOST], ['client', PKG_CLIENT]]) {
+for (const [label, pkgDir] of [['workflow-host', PKG]]) {
   const r = spawnSync('npm', ['pack', '--json', '--cache', NPM_CACHE, '--pack-destination', RELEASE_DIR], {
     cwd: pkgDir, encoding: 'utf8',
   })
@@ -75,17 +74,15 @@ const MUST_HOST = [
   ...PRESET_FILES.map((f) => 'package/presets/workflow-orchestrator/' + f),
 ]
 const MUST_CLIENT = [
-  'package/lib/index.js',
   'package/lib/client.js',
-  'package/cordis.patch.yml',
-  'package/package.json',
+  'package/lib/monitor-entry.js',
 ]
 function tarList(tgz) {
   const r = spawnSync('tar', ['-tzf', tgz], { encoding: 'utf8' })
   if (r.status !== 0) fail(`tar 列表失败: ${tgz}`)
   return r.stdout.trim().split('\n')
 }
-for (const [label, must] of [['host', MUST_HOST], ['client', MUST_CLIENT]]) {
+for (const [label, must] of [['workflow-host', MUST_HOST.concat(MUST_CLIENT)]]) {
   const entries = new Set(tarList(packs[label].tgz))
   for (const f of must) {
     if (!entries.has(f)) fail(`${label} 包缺内容: ${f}`)
@@ -94,7 +91,7 @@ for (const [label, must] of [['host', MUST_HOST], ['client', MUST_CLIENT]]) {
 }
 
 console.log('── ⑥ 版本矩阵一致性 ──')
-for (const [label, pkgDir] of [['host', PKG_HOST], ['client', PKG_CLIENT]]) {
+for (const [label, pkgDir] of [['workflow-host', PKG]]) {
   const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'))
   const engines = pkg.dsh && pkg.dsh.engines && pkg.dsh.engines.dsh
   if (!engines || !/0\.1\.5/.test(engines)) fail(`${label} 的 dsh.engines.dsh 未对齐 0.1.5: ${engines}`)

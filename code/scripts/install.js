@@ -32,37 +32,34 @@ const PRESET_ONLY = argv.includes('--preset-only')
 const USE_REGISTRY = argv.includes('--registry')
 
 const CODE = path.resolve(__dirname, '..')
-const HOST_DIR = path.join(CODE, 'packages', 'workflow-host')
-const CLIENT_DIR = path.join(CODE, 'packages', 'client-ui-monitor')
+const PKG_DIR = path.join(CODE, 'packages', 'workflow-host')
 const PRESET_SRC = path.join(CODE, 'agent-presets', 'workflow-orchestrator')
 const PRESET_DST = path.join(os.homedir(), '.dsh', '.agent-presets', 'workflow-orchestrator')
 const PRESET_FILES = ['preset.yml', 'agent.cordis.yml', 'system-prompt.md']
 
-const PKG_HOST = '@workflow-agent/workflow-host'
-const PKG_CLIENT = '@workflow-agent/client-ui-monitor'
+const PKG = '@workflow-agent/workflow-host'
 const fail = (msg) => { console.error('✗ ' + msg); process.exit(1) }
 
-for (const d of [HOST_DIR, CLIENT_DIR, PRESET_SRC]) {
+for (const d of [PKG_DIR, PRESET_SRC]) {
   if (!fs.existsSync(d)) fail(`缺少目录: ${d}（先运行构建/确认仓库完整）`)
 }
-if (!fs.existsSync(path.join(HOST_DIR, 'lib', 'index.js'))) {
+if (!fs.existsSync(path.join(PKG_DIR, 'lib', 'index.js'))) {
   fail('host 产物缺失：先运行 node code/packages/workflow-host/build.js')
 }
-if (!fs.existsSync(path.join(CLIENT_DIR, 'lib', 'client.js'))) {
-  fail('client 产物缺失：先运行 node code/packages/client-ui-monitor/build.js')
+if (!fs.existsSync(path.join(PKG_DIR, 'lib', 'client.js'))) {
+  fail('client 产物缺失：先运行 node code/packages/workflow-host/build-client.mjs')
 }
 
-const pluginSpec = (dir) => (USE_REGISTRY ? JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')).name : dir)
 
 console.log(`安装目标：profile "${PROFILE}"${DRY ? '（dry-run 预览）' : ''}`)
 console.log('')
 
 // ① 插件包安装（dsh plugin add → profile 内 pnpm；link:/registry 语义均可）
 if (!PRESET_ONLY) {
-  const spec = USE_REGISTRY ? `${pluginSpec(HOST_DIR) && PKG_HOST} ${PKG_CLIENT}` : `${HOST_DIR} ${CLIENT_DIR}`
-  console.log(`① dsh plugin --profile ${PROFILE} add ${USE_REGISTRY ? PKG_HOST + ' ' + PKG_CLIENT : HOST_DIR + ' ' + CLIENT_DIR}`)
+  const spec = USE_REGISTRY ? PKG : PKG_DIR
+  console.log(`① dsh plugin --profile ${PROFILE} add ${USE_REGISTRY ? PKG : PKG_DIR}`)
   if (!DRY) {
-    const r = spawnSync('dsh', ['plugin', '--profile', PROFILE, 'add', HOST_DIR, CLIENT_DIR], { stdio: 'inherit', shell: process.platform === 'win32' })
+    const r = spawnSync('dsh', ['plugin', '--profile', PROFILE, 'add', PKG_DIR], { stdio: 'inherit', shell: process.platform === 'win32' })
     if (r.status !== 0) fail('dsh plugin add 失败')
   }
 } else {

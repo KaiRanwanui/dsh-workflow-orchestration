@@ -1,7 +1,7 @@
 // 临时验证：client bundle 求值 + __ModuleLoader__.load 注册 + factory 导出完整性
 const fs = require('fs')
 const path = require('path')
-const libPath = path.join(__dirname, '..', 'packages', 'client-ui-monitor', 'lib', 'client.js')
+const libPath = path.join(__dirname, '..', 'packages', 'workflow-host', 'lib', 'client.js')
 const code = fs.readFileSync(libPath, 'utf8')
 
 const reactStub = { createElement: function () { return null } }
@@ -18,7 +18,7 @@ const fn = new Function('window', 'require', code)
 fn(loaderHolder, fakeRequire)
 
 if (!loadedDef) { console.error('FAIL: __ModuleLoader__.load 未被调用'); process.exit(1) }
-if (loadedDef.id !== '@workflow-agent/client-ui-monitor') { console.error('FAIL: id 不符: ' + loadedDef.id); process.exit(1) }
+if (loadedDef.id !== '@workflow-agent/workflow-host/monitor') { console.error('FAIL: id 不符: ' + loadedDef.id); process.exit(1) }
 
 const mod = loadedDef.factory(fakeRequire)
 if (typeof mod.apply !== 'function' || !Array.isArray(mod.inject)) {
