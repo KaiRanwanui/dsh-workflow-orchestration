@@ -6122,34 +6122,48 @@ function registerWebRoutes(ctx, registry) {
                 await registry.patchMeta(root, instanceId, { stopReason: 'user-stop' })
                 const sid = args.sessionId
                 const subagents = ctx.get('subagents')
-                // 主通道：sessionController.cancel（0.1.5 原生级联——实证 UI 停止经此通道令子会话
-                // 收到 aborted(parent) 并终止；orchestrator 为根会话，无 subagent owner 不受限）
-                const sessionController = ctx.get('sessionController')
+                const agents = ctx.get('agents')
+                // ① 中止主会话当前回合（0.1.5 原生级联：活子会话收 aborted(parent) 并终止）。
+                //    注意：主会话「空闲」（派发回合已结束、子会话后台执行）时 cancel 为空转成功
+                //    ——这正是阶段 3 实证「子会话未停」的根因，因此后续通道**叠加执行**而非互斥。
                 let cancelled = false
+                const sessionController = ctx.get('sessionController')
                 if (sid && sessionController && typeof sessionController.cancel === 'function') {
-                  try {
-                    const r = await sessionController.cancel({ sessionId: sid })
-                    cancelled = true
-                    stoppedChildren += 1 // 原生级联已覆盖全部活子会话
-                  } catch (e2) {
-                  }
+                  try { await sessionController.cancel({ sessionId: sid }); cancelled = true } catch (e2) { /* 主会话未挂载等 → 走 ②③ */ }
                 }
-                // 兜底通道：cancel 不可用/失败 → 对全部子会话条目下发 interruptByParent
-                // （官方契约：absent/idle/completed 目标为 accepted no-op；不依赖判活）
-                if (!cancelled && sid && subagents && typeof subagents.listChildren === 'function' && typeof subagents.interruptByParent === 'function') {
+                // ② 枚举全部子会话（durable 条目，含已结束者——对结束目标 interrupt/drain 均为 no-op）
+                let childIds = []
+                if (sid && subagents && typeof subagents.listChildren === 'function') {
                   try {
                     const entries = await subagents.listChildren(sid)
-                    const list = Array.isArray(entries) ? entries : []
-                    for (const ch of list) {
-                      if (ch && ch.kind === 'child' && ch.id) {
-                        childIds.push(ch.id)
-                        try { await subagents.interruptByParent(ch.id, sid, 'continuable'); stoppedChildren += 1 } catch (e3) { /* 单子失败不阻断 */ }
-                      }
-                    }
-                  } catch (e2) {
-                    stoppedChildren = 0
+                    childIds = (Array.isArray(entries) ? entries : [])
+                      .filter(c => c && c.kind === 'child' && c.id).map(c => c.id)
+                  } catch (e2) { /* 枚举失败不阻断 */ }
+                }
+                // ③ 硬释放：drain 主会话名下的 resident continuable 激活（不依赖判活；
+                //    absent 目标 no-op）——这是对「后台执行中子会话」的决定性停止手段
+                const parentAgent = sid && agents && typeof agents.get === 'function' ? agents.get(sid) : undefined
+                let drained = false
+                if (parentAgent && subagents && typeof subagents.drainContinuableChildren === 'function') {
+                  try { await subagents.drainContinuableChildren(parentAgent, childIds); drained = true } catch (e2) { /* 失败走 ④ */ }
+                }
+                // ④ 兜底：drain 不可用/失败 → 逐子 interruptByParent（对活子下发 cancel 信号；
+                //    官方契约：absent/idle/completed 目标为 accepted no-op；父会话离线亦可寻址）
+                if (!drained && subagents && typeof subagents.interruptByParent === 'function') {
+                  for (const cid of childIds) {
+                    try { await subagents.interruptByParent(cid, sid, 'continuable') } catch (e3) { /* 单子失败不阻断 */ }
                   }
                 }
+                stoppedChildren = childIds.length
+                // 实例级留痕（运维诊断；logs/ 由 reset 归档清理）
+                try {
+                  const nfz = require('node:fs')
+                  nfz.mkdirSync(entry.dir + '/logs', { recursive: true })
+                  nfz.appendFileSync(entry.dir + '/logs/stop-trace.log',
+                    new Date().toISOString() + ' panel-stop sid=' + sid +
+                    ' cancelled=' + cancelled + ' drained=' + drained +
+                    ' children=' + childIds.length + ' (' + childIds.slice(-3).join(',') + ')' + '\n')
+                } catch (e4) { /* 留痕失败不阻断 */ }
               }
               const inj = await injectSessionCmd(args, root, instanceId, 'stop')
               const snap = entry.engine.snapshot()
