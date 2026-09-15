@@ -143,3 +143,56 @@
 | P3 导出面缺陷 | `scratch/corruption-check.js`：apply 后 `require(lib).apply === undefined` |
 | 两份 `expandLoopTasks` 实现不同 | 逐字 diff：39 行（legacy，无 `vars` 参数）vs 82 行（现役，含 Iter-30 修复） |
 | 12 个条件导出块进入产物 | `grep -c "typeof module !== 'undefined'" packages/workflow-host/lib/index.js` → 12 |
+
+
+---
+
+## 9. 阶段 3 扩展——打包形态与工程收尾（2026-09-15 用户指令）
+
+> 用户指令：构建/打包类改动全部在阶段 3 内闭环；**阶段 4 起仅做 workflow-agent 功能增强，不再处理构建打包问题**。
+> 本节为扩展方案（3e–3i），在 S1–S8 + 3c 基础上追加。
+
+### 9.1 背景与新证据
+
+| 项 | 实证 |
+|---|---|
+| 单包合并可行性 | **官方 client-ui 全系即为「同包双端」结构**：`main`（Host 入口）+ `dsh.client`（浏览器 bundle）+ `exports['./client']`（抽查 `dsh-client-ui-workspace`/`chat` 证实）；且 `@linxin666/dsh-web-all` 一个 npm 包经 patch 插入 **26 行**（自身行 + 子路径行）承载 20 个子插件并与独立安装共存 |
+| 我们自己的先例 | `client-ui-monitor` 包已是「bundle patch + dsh.client + 空入口 main」三合一——合并只是把**空入口换成真 Host 实现** |
+| 内嵌资产痛点 | 4 模板 + 7 技能 + samples/docs 以 JS 字符串内嵌在 `builtin-skills.js`（~800 行，数据占绝对多数），改技能要动 JS、处理转义、diff 不友好 |
+| persona 内联 | 0.1.5-rc.2 的 `dsh-persona` 仍只收内联 `prefix`（官方 4 个发行 preset 也全部内联——这是官方标准形态，非侵入 DSH 文件）；3d 的价值 = 去掉 `sync-persona.js` 构建期同步，让 `system-prompt.md` 成为运行时单一源 |
+
+### 9.2 子迭代定义（执行顺序即依赖顺序）
+
+| 子迭代 | 内容 | 关键点 | 规模 |
+|---|---|---|---|
+| **3e 单包合并** | `client-ui-monitor` 并入 `workflow-host`：单包 = Host `main`（引擎/工具/路由）+ `dsh.client`（DAG 面板 bundle，exports['./client']）+ patch 单行 `workflow-host`（**单行双端**：Host 经 main 挂载、浏览器经 dsh.client bundle 挂载）| 前置探针 P1–P3（见 9.3）；`client-ui-monitor` 包退役入 `code/legacy/`；`build-release.js`/`install.js` 收敛为单包 | 0.5–1d |
+| **3f 内建资产文件化** | 内嵌字符串 → 真实文件 `code/packages/workflow-host/builtin-assets/{skills,templates,samples,docs}/`（单一源，`files` 随包分发）；`materializeBuiltinAssets` 改为从包内目录**复制**到 `~/.dsh/workflow-agent/`（node:fs 读 + ctx.fs 写）；`builtin-skills.js` 瘦身为纯物化逻辑；单测注入虚拟资产目录 | ESM 形态的资产路径由生成器按格式注入（CJS `__dirname` / ESM `import.meta.url`） | 0.5d |
+| **3g persona 文件化** | 先 4 项探针（`plan/status.md` 阶段 4 候选表）→ 通过后实施：preset 本地插件 `persona-file.mjs` 经 `systemPrompt` 服务运行时读取 `system-prompt.md`，替换 `dsh-persona` 行；删除 `sync-persona.js` 与 240 行内联块 | 注意：单包合并后 `system-prompt.md` 位于包内 `presets/workflow-orchestrator/`，运行时读取路径随之确定 | 0.3–0.5d |
+| **3h npm publish** | 包元数据补齐（`repository`/`publishConfig`/`--access public`）；发布前置检查（scope 权限/registry 可达/内容终检）；实际 publish | **需 npm 账号具备 `@workflow-agent` scope 权限**；发布执行方见决策点 3 | 0.2d |
+| **3i build.mjs 改名** | client 构建脚本 `build.js` → `build.mjs`（消除 Node reparse 警告）；同步 `package.json scripts` 与文档 | 微 | 0.1d |
+
+### 9.3 3e 前置探针（P1–P3，通过才实施合并）
+
+| # | 探针 | 判定 |
+|---|---|---|
+| P1 | 试探包（最小 host apply + dsh.client bundle + patch 单行）安装进 scratch profile → Host 挂载一次（工具/路由各一份，无双挂载报错） | Host 单实例 |
+| P2 | 同试探包 → 浏览器加载：dsh.client bundle 被服务并注册，面板行挂载（slot 渲染） | 浏览器单实例 |
+| P3 | Host 改动重启 + Client 改动刷新页面的生效语义在单包下不变 | 行为一致 |
+
+### 9.4 验证标准（扩展部分完成线）
+
+- [ ] 单包：`@workflow-agent/workflow-host` 一个包承载 Host 插件 + DAG 面板；`client-ui-monitor` 退役入 legacy
+- [ ] 发行：`build-release.js` 单 tgz（含 lib/dist/presets/builtin-assets）+ 内容断言；`install.js` 一键安装（插件 + preset + 资产分发）
+- [ ] 资产：技能/模板为真实文件（包内 `builtin-assets/`），物化为复制语义；单测全绿
+- [ ] persona：`system-prompt.md` 运行时单一源（改文件→下轮生效）；`sync-persona.js` 退役
+- [ ] publish：元数据齐备 + dry-run 通过；实际 publish 按决策点执行
+- [ ] 全量：569+ 单测全绿；真机冒烟（重启 + 面板 + 四键）；文档同步
+
+### 9.5 决策点（待拍板）
+
+| # | 决策点 | 选项 | 推荐 |
+|---|---|---|---|
+| 1 | 合并后包名 | ① 保持 `@workflow-agent/workflow-host`（吸收 Client；profile 引用变更最小）② 改名 `@workflow-agent/workflow-agent` | **①** |
+| 2 | Client 行形态 | ① 单行双端（一行，Host main + 浏览器 dsh.client）② 双行子路径（对齐 dsh-web-all 先例） | **①**（P1–P3 探针确认；异常回退 ②） |
+| 3 | npm publish 执行方 | ① 我准备元数据+dry-run，**实际 publish 由你执行**（需 npm 账号具备 @workflow-agent scope）② 提供授权方式由我执行 | **①** |
+| 4 | 资产物化的升级语义 | ① 幂等覆盖（现状语义）② 版本比对后更新 | **①**（与 0.1.1 时代行为一致） |
