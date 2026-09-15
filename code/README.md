@@ -7,7 +7,7 @@
 | 路径 | 角色 | 说明 |
 |---|---|---|
 | `packages/workflow-host/` | **交付物（Host）** | npm 包 `@workflow-agent/workflow-host`：`lib/index.js`（CJS，**运行时真正加载的那份**）+ `cordis.patch.yml`（profile bundle 插入行） |
-| `packages/client-ui-monitor/` | **交付物（Client）** | npm 包 `@workflow-agent/client-ui-monitor`：`src/client.js`（单一源）→ `lib/client.js`（浏览器 bundle）+ `lib/index.js`（Host 侧空入口） |
+| `packages/workflow-host/src/client.js` + `build-client.mjs` | **面板 bundle 源与构建**：产出 `lib/client.js`（浏览器 DAG 面板，单包双端） |
 | `plugins/workflow-host/` | 源模块 | `engine.js`（状态机/并发/循环）、`storage.js`（持久化）、`instance-store.js`（实例注册表/绑定/孤儿回收/归档）、`builtin-materialize.js`（内建资产物化：包内 `builtin-assets/` → 预定义目录复制语义） |
 | `plugins/workflow-host-preset/` | 源模块 | `tools-preset.js`：`workflow_*` 十个工具定义（preset 形态注册） |
 | `shared/` | 源模块 | `workflow-schema.js`、`workflow-parser.js`、`workflow-paths.js`、`workflow-validate.js`、`workflow-edit.js`、`items-extract.js`、`zip-writer.js` |
@@ -21,13 +21,15 @@
 |---|---|
 | `scripts/module-manifest.js` | **构建清单**：name/inject + 14 项有序源模块表 |
 | `packages/workflow-host/build.js` | **单一生成器**：源模块 → `lib/index.js`（CJS 交付物）；`--format=esm` 按需产 `dist/workflow-host.mjs`（本地测试输出，不入库不随包，默认 cjs） |
-| `packages/client-ui-monitor/build.js` | Client：`src/client.js` → `lib/client.js` |
+| `packages/workflow-host/build-client.mjs` | Client：`src/client.js` → `lib/client.js` |
 | `scripts/test-host.js` | 单测 569 用例（启动时自动检查产物新鲜度并按需重建） |
 | `scripts/verify-client-bundle.js` | Client 产物求值级验证 |
-| `scripts/sync-persona.js` | persona 注入（`system-prompt.md` → `agent.cordis.yml`；`--check` 校验） |
+| `scripts/sync-persona.js` | （已退役，阶段 3g persona 文件化；归档于 `legacy/scripts/`） |
 | `scripts/simulate-exec.js` | 模拟工作流状态流转（GUI 联调演示数据） |
 
 > 历史脚本（build-host.js / sync-modules.js / *.ps1 等）集中在 `legacy/scripts/`，见 [`legacy/README.md`](legacy/README.md)。
+
+> **构建/打包/安装完整说明**：[`../plan/build/build-and-release.md`](../plan/build/build-and-release.md)。
 
 ## 开发规范
 

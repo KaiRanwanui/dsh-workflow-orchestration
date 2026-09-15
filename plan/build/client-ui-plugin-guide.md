@@ -59,7 +59,7 @@ export function register(ctx) {
 ### 2. 构建与产物级验证
 
 ```bash
-node code/packages/client-ui-monitor/build.js      # src/client.js → lib/client.js
+node code/packages/workflow-host/build-client.mjs   # src/client.js → lib/client.js
 node code/scripts/verify-client-bundle.js          # 产物求值级验证（必须跑）
 ```
 
@@ -108,7 +108,7 @@ Copy-Item -Path "$src\*" -Destination $dst -Recurse -Force
 
 ```bash
 # 构建 + 产物级验证（Client 改动后必做）
-node code/packages/client-ui-monitor/build.js
+node code/packages/workflow-host/build-client.mjs
 node code/scripts/verify-client-bundle.js
 
 # 生效：profile 以 link: 依赖本包，刷新浏览器页面即可

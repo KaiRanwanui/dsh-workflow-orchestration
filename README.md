@@ -58,7 +58,7 @@ workflow-agent/
 node code/packages/workflow-host/build.js
 
 # 2) 构建 Client 产物并做产物级验证
-node code/packages/client-ui-monitor/build.js
+node code/packages/workflow-host/build.js && node code/packages/workflow-host/build-client.mjs
 node code/scripts/verify-client-bundle.js
 
 # 3) 单测（563 用例）

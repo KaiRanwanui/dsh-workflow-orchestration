@@ -129,11 +129,10 @@ node code/packages/workflow-host/build.js     # 源模块 → lib/index.js（CJS
 node code/scripts/test-host.js                # 569 用例；启动时自动检查产物新鲜度并按需重建
 
 # Client：改 src/client.js → 构建 → 产物级验证
-node code/packages/client-ui-monitor/build.js
+node code/packages/workflow-host/build-client.mjs
 node code/scripts/verify-client-bundle.js
 
-# persona：改 system-prompt.md → 注入 agent.cordis.yml
-node code/scripts/sync-persona.js
+# persona：改 system-prompt.md → 重部署 preset 即生效（3g 起运行时读取，无构建步骤）
 ```
 
 | 你要改的东西 | 编辑文件 | 必跑命令 | 生效方式 |
@@ -143,10 +142,11 @@ node code/scripts/sync-persona.js
 | 工具（`workflow_*`） | `code/plugins/workflow-host-preset/tools-preset.js` | 同上 | 同上 |
 | `/wf/*` 路由、面板 Stop | `code/plugins/workflow-host/webserver-routes.js` | 同上 | 同上 |
 | inject / 探针 / A1 tap | `code/plugins/workflow-host/apply-prologue.js` | 同上 | 同上 |
-| 面板 UI | `code/packages/client-ui-monitor/src/client.js` | client build → verify | 刷新页面 |
-| persona 提示词 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | sync-persona | 新建/重载 preset 会话 |
+| 面板 UI | `code/packages/workflow-host/src/client.js` | client build → verify | 刷新页面 |
+| persona 提示词 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | 改后重部署 preset（install.js --preset-only） | 新建/重载 preset 会话 |
 
 > 构建链历史（sync-modules 两步链、build-preset.js）已退役，脚本在 `code/legacy/scripts/`。
+> **构建/打包/安装完整说明**：[`plan/build/build-and-release.md`](plan/build/build-and-release.md)。
 
 > ⚠️ `code/scripts/build-preset.js` **已废弃**（运行即 exit 1，防止用陈旧模板覆盖现役 mjs）。
 > ⚠️ Host 源码目前是「源模块 + 2 段手编区」混合体 —— **阶段 3 将合并为单一生成器**（详见 `plan/status.md` §3）。
