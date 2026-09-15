@@ -16,7 +16,7 @@
 | **阶段 0 · PoC 验证** | 2026-08 中旬前 | 0.1.2-alpha 系列 | 原型（未发行） | 无 | ✅ 已归档 |
 | **阶段 1 · 核心功能开发**（Iter-1 ~ Iter-30 + Iter-SUBA） | 2026-08-26 ~ 09-05 | **0.1.1-rc.2** | host v0.20.1 / client v0.9.0 | 563 单测全绿 | ✅ 已完成并归档 |
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | 2026-09-13（单日完成） | **0.1.5-rc.2** | host **v0.21.0** / client **v0.9.1** | 563 单测全绿 + GUI 回归通过 | ✅ 已完成并归档 |
-| **阶段 3 · 构建链合并重构** | 2026-09-14 ~ 09-15 | 0.1.5-rc.2 | host v0.22.0 / client v0.9.2 | 569 单测全绿 + GUI 验收 | 🔄 3a+3b 完成；3c 发行工具细案待确认 |
+| **阶段 3 · 构建链合并重构 + 发行工具** | 2026-09-14 ~ 09-15 | 0.1.5-rc.2 | host v0.22.0 / client v0.9.2 | 569 单测全绿 + 真机冒烟 + GUI 验收 | ✅ 已完成并归档 |
 
 阶段详情与迭代索引：`phases/README.md`。
 
@@ -49,8 +49,9 @@
 - 单测改为对准真实产物；消除同步纪律。
 
 **方案**：[`phases/phase-3-build-chain/plan.md`](phases/phase-3-build-chain/plan.md)（**6 个决策点已全部拍板**：模块作用域 / dist 生成物入库且开关可选 / 3c 发行工具纳入本阶段 / 3d 独立迭代先验证 / legacy 代码集中 `code/legacy/` / host 0.22.0 + client 0.9.2）。
-**进展**：3a（构建链合并：抽取 2 段手编区为源文件 + 单一生成器双产物 + 单测对准真实产物）与 3b（legacy 集中 `code/legacy/`）已完成；执行中发现并修复**缺陷 #7**（面板 Stop 在「主会话空闲」时不停止后台子会话——v3 级联互斥设计缺陷，重构为叠加式 v4：cancel + 全量枚举 + `drainContinuableChildren` 硬释放 + 逐子 interrupt 兜底），用户 GUI 验收通过。
-**待办**：3c 发行工具细案（npm 打包 + 安装器 + preset 分发）确认后实施 → 阶段收尾。报告：`phases/phase-3-build-chain/iterations/iter-build-chain-report.md`。
+**进展**：3a（构建链合并）+ 3b（legacy 集中归档）+ 3c（发行工具 `build-release.js` + `install.js`）全部完成；执行中修复缺陷 #7（面板 Stop 空闲主会话不停子会话 → v4 叠加式级联：cancel + 全量枚举 + drain 硬释放 + 逐子 interrupt），用户 GUI 验收通过。
+**收尾产物**：`phases/phase-3-build-chain/README.md`（阶段总结，封版）；报告 `phases/phase-3-build-chain/iterations/iter-build-chain-report.md`。
+**下一阶段**：阶段 4 候选见下表（persona 文件化先探针）；另有功能 backlog（原 Iter-31 节点详情面板等）。
 `development-plan.md`（阶段 1 详案）已归档，新阶段计划按 `plan/development/iteration-plan-template.md` 撰写。
 
 ---
