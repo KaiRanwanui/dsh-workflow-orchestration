@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const name = 'workflow-orchestrator-persona'
-const inject = ['systemPrompt']
+export const name = 'workflow-orchestrator-persona'
+export const inject = ['systemPrompt']
 
 const here = dirname(fileURLToPath(import.meta.url))
 const text = readFileSync(join(here, 'system-prompt.md'), 'utf8')
