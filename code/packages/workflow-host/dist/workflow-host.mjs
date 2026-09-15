@@ -1,9 +1,9 @@
-// @workflow-agent/workflow-host — CJS 产物（AUTO-GENERATED，勿手编）
+// @workflow-agent/workflow-host — ESM 产物（AUTO-GENERATED，勿手编）
 // 生成器：code/packages/workflow-host/build.js；清单：code/scripts/module-manifest.js
 // 源模块：plugins/workflow-host/apply-prologue.js, shared/workflow-schema.js, shared/workflow-parser.js, shared/workflow-paths.js, shared/workflow-validate.js, shared/workflow-edit.js, shared/zip-writer.js, shared/items-extract.js, plugins/workflow-host/engine.js, plugins/workflow-host/storage.js, plugins/workflow-host/instance-store.js, plugins/workflow-host/builtin-skills.js, plugins/workflow-host-preset/tools-preset.js, plugins/workflow-host/webserver-routes.js
 
-const name = "workflow-host"
-const inject = ["fs","tools","subagents","agents","sessionController","sessions"]
+export const name = "workflow-host"
+export const inject = ["fs","tools","subagents","agents","sessionController","sessions"]
 
 // ============================================================================
 // workflow-agent — Host 插件 apply 前言（源模块）
@@ -6381,8 +6381,8 @@ function registerWebRoutes(ctx, registry) {
   })
 }
 
-function apply(ctx) {
+export function apply(ctx) {
   applyInternal(ctx)
 }
 
-module.exports = { name, inject, apply, registerWebRoutes, loadStateFromFile }
+export { registerWebRoutes, loadStateFromFile }

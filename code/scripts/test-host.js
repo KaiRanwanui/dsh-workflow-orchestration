@@ -7,10 +7,16 @@
 const { parseWorkflow } = require('../shared/workflow-parser')
 const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
-const { expandLoopTasks } = require('../plugins/workflow-host/tools.js')
-const { expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
+const { expandLoopTasks, expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
 const { createInstanceRegistry, slugifyName, instanceDirPath, isUserAbortTurnEnd, detectUserAbortFromLog } = require('../plugins/workflow-host/instance-store.js')
 const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
+
+// ── 产物新鲜度（阶段 3）：源模块/清单晚于 lib 产物 → 自动重建（单测始终对准真实交付物）──
+const hostBuild = require('../packages/workflow-host/build.js')
+if (hostBuild.needsBuild()) {
+  console.log('[test-host] 产物陈旧 → 自动重建 lib/index.js + dist/workflow-host.mjs')
+  hostBuild.build()
+}
 
 let pass = 0
 let fail = 0
@@ -145,7 +151,7 @@ tasks:
 // ── 用例 10：HTTP 路由（Iter-13：POST /wf/create + GET /wf/templates）────────
 async function runCase10() {
   console.log('［用例 10］HTTP 路由 — templates / create（POST body）/ 404')
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
 
   const { files, fs: mockFs } = makeMockFs()
   let routeHandler = null
@@ -157,7 +163,7 @@ async function runCase10() {
     },
   }
   const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage })
-  mjs.registerWebRoutes(ctx, registry)
+  host.registerWebRoutes(ctx, registry)
   check('路由注册：/wf prefix handler 已捕获', typeof routeHandler === 'function')
 
   const call = (method, url, body) => new Promise((resolve, reject) => {
@@ -525,7 +531,7 @@ async function runCase14() {
   check('sync:idle(守卫解除) → 实例 STOPPED', e.engine.snapshot().stage === 'STOPPED', e.engine.snapshot().stage)
 
   // 4) create 即绑定（/wf/create 路由带 sessionId → metadata.sessionId）
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
   let routeHandler = null
   const ctx2 = {
     get(n) {
@@ -535,7 +541,7 @@ async function runCase14() {
     },
   }
   const registry2 = createInstanceRegistry(ctx2, deps)
-  mjs.registerWebRoutes(ctx2, registry2)
+  host.registerWebRoutes(ctx2, registry2)
   const call = (body) => new Promise((resolve, reject) => {
     const res = { code: 0, headers: null, payload: '', writeHead(c, h) { this.code = c; this.headers = h }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
     const req = { method: 'POST', url: '/wf/create', headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' },
@@ -614,11 +620,11 @@ async function runCase15() {
   check('R4 list: idle(守卫解除) → 实例 STOPPED', guardOffItem && guardOffItem.stage === 'STOPPED', guardOffItem && guardOffItem.stage)
 
   // 3) /wf/list 路由返回 sessionState（轻量）；/wf/start 路由不置 RUNNING
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
   let routeHandler = null
   const ctx2 = { get(n) { if (n === 'webServer') return { register(def) { routeHandler = def.handler } }; if (n === 'fs') return mockFs; return undefined } }
   const registry2 = createInstanceRegistry(ctx2, deps)
-  mjs.registerWebRoutes(ctx2, registry2)
+  host.registerWebRoutes(ctx2, registry2)
   const call = (method, url, body) => new Promise((resolve, reject) => {
     const res = { code: 0, headers: null, payload: '', writeHead(c, h) { this.code = c; this.headers = h }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
     const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
@@ -1805,7 +1811,7 @@ async function runCase23() {
   delete process.env.DSH_HOME
 
   // 7) /wf/templates 扫描下钻：子目录优先、平铺兼容、同名子目录赢
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
   const { fs: fsD } = makeMockFs()
   let routeHandler = null
   const ctxD = {
@@ -1815,7 +1821,7 @@ async function runCase23() {
       return undefined
     },
   }
-  mjs.registerWebRoutes(ctxD, createInstanceRegistry(ctxD, { createWorkflowEngine, createWorkflowStorage }))
+  host.registerWebRoutes(ctxD, createInstanceRegistry(ctxD, { createWorkflowEngine, createWorkflowStorage }))
   const callD = (method, url) => new Promise((resolve, reject) => {
     const res = { code: 0, payload: '', writeHead(c) { this.code = c }, end(p) { this.payload = p || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(e) } } }
     const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' } }
@@ -2457,7 +2463,7 @@ async function runCase25() {
   check('edit frontmatter: 无块回退目录名', fm2.name === 'mydir' && fm2.version === null, JSON.stringify(fm2))
 
   // ── F. 路由（import mjs + mock fs/webServer）──
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
   const { files, fs: mockFs } = makeMockFs()
   let routeHandler = null
   const ctx = {
@@ -2468,7 +2474,7 @@ async function runCase25() {
     },
   }
   const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage })
-  mjs.registerWebRoutes(ctx, registry)
+  host.registerWebRoutes(ctx, registry)
   const call = (method, url, body) => new Promise((resolve, reject) => {
     const res = {
       code: 0, headers: null, payload: '',
@@ -2628,7 +2634,7 @@ async function runCase26() {
   check('zip: 全条目 CRC 与内容一致', crcOk)
 
   // ── B. 路由（import mjs + mock fs + mock nodeFs）──
-  const mjs = await import('../agent-presets/workflow-orchestrator/workflow-host.mjs')
+  const host = require('../packages/workflow-host/lib/index.js')
   const { files, fs: mockFs } = makeMockFs()
   // mock nodeFs.rm：同步删除 mock files 中该前缀全部条目（模拟真实递归删除）
   const rmCalls = []
@@ -2658,7 +2664,7 @@ async function runCase26() {
     },
   }
   const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, nodeFs: nodeFsMock })
-  mjs.registerWebRoutes(ctx, registry)
+  host.registerWebRoutes(ctx, registry)
   const call = (method, url, body) => new Promise((resolve, reject) => {
     const res = {
       code: 0, headers: null, payload: '',
@@ -2765,6 +2771,46 @@ async function runCase26() {
     check('concurrent: expand 迭代无依赖', cexp.every(t => t.dependsOn.length === 0))
     check('concurrent: expand 组级 max=2 元数据', cexp[0]._concurrentMax === 2 && cexp[0]._concurrentGroup === 'batch')
 
+  // ── 用例 31：产物级回归（阶段 3）— lib 导出面 / apply 篡改防护 / 路由往返 / 工具注册 ──
+  async function runCase31() {
+    console.log('［用例 31］产物级回归 — lib 导出面 / apply 篡改防护 / 路由往返 / 工具注册')
+    const lib = require('../packages/workflow-host/lib/index.js')
+    const nodeFs = require('fs')
+    const { files, fs: mockFs } = makeMockFs()
+    const registered = {}
+    const toolsSvc = { register(t) { registered[t.name] = t } }
+    let handler = null
+    const webServerSvc = { register(d) { handler = d.handler } }
+    const ctx = {
+      fs: mockFs, tools: toolsSvc, webServer: webServerSvc,
+      get(n) { if (n === 'fs') return mockFs; if (n === 'tools') return toolsSvc; if (n === 'webServer') return webServerSvc; return undefined },
+      on() { return () => {} },
+      effect(fn) { try { const d = fn(); return typeof d === 'function' ? d : () => {} } catch (e) { return () => {} } },
+    }
+    lib.apply(ctx)
+    check('c31: apply() 后导出面完好（P3 缺陷锁死：name/inject/apply 不被覆盖）',
+      typeof lib.apply === 'function' && lib.name === 'workflow-host' && Array.isArray(lib.inject),
+      JSON.stringify({ apply: typeof lib.apply, name: lib.name }))
+    check('c31: 工具注册数 = 10', Object.keys(registered).length === 10, Object.keys(registered).join(','))
+    check('c31: webServer 路由已注册', typeof handler === 'function', typeof handler)
+
+    files.set('/x/a/SKILL.md', 'skill a')
+    const WS = '/tmp/c31-ws'
+    const WF = 'name: c31-demo\nversion: "1.0"\ndescription: d\ntasks:\n  - id: a\n    name: A\n    processor: /x/a/SKILL.md\n    outputs: ["/tmp/c31-ws/output/a.md"]\n    depends-on: []\n'
+    const call = (method, url, body) => new Promise((resolve, reject) => {
+      const res = { code: 0, payload: '', writeHead(cc) { this.code = cc }, end(pp) { this.payload = pp || ''; try { resolve({ code: this.code, body: JSON.parse(this.payload) }) } catch (e) { reject(new Error('bad json')) } } }
+      const req = { method, url, headers: { host: '127.0.0.1:3080' }, socket: { remoteAddress: '127.0.0.1' }, on(ev, fn) { if (ev === 'data' && body !== undefined) fn(Buffer.from(JSON.stringify(body))); if (ev === 'end') fn() } }
+      handler(req, res)
+    })
+    const c = await call('POST', '/wf/create', { workspaceRoot: WS, workflowText: WF })
+    check('c31: /wf/create 200', c.code === 200 && !!c.body.instanceId, JSON.stringify(c.body).slice(0, 90))
+    const iid = c.body.instanceId
+    const l = await call('GET', '/wf/list?workspaceRoot=' + encodeURIComponent(WS))
+    check('c31: /wf/list 可见新建实例', l.code === 200 && (l.body.instances || []).some(i => i.instanceId === iid), 'instanceId=' + iid)
+    const esmPath = require('path').join(__dirname, '..', 'packages', 'workflow-host', 'dist', 'workflow-host.mjs')
+    check('c31: dist/workflow-host.mjs 存在（ESM 生成物入库）', nodeFs.existsSync(esmPath), esmPath)
+  }
+
     // ── 用例 8：实例注册表（Iter-10）──
     await runCase8()
     // ── 用例 9：实例操控工具（Iter-11）──
@@ -2801,6 +2847,8 @@ async function runCase26() {
     await runCase25()
     // ── 用例 26：实例管理（Iter-29：zip-writer/归档/删除/下载）──
     await runCase26()
+    // ── 用例 31：产物级回归（阶段 3）──
+    await runCase31()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
