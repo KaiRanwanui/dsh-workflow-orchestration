@@ -39,5 +39,12 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KaiRanwanui/dsh-workflow-orchestration.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }
