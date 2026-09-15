@@ -189,9 +189,9 @@ async function runCase10() {
   await mockFs.writeText({ path: '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml' }, 'name: disk-tpl\n')
   let r = await call('GET', '/wf/templates?workspaceRoot=/ws/t13')
   check('templates: 预定义磁盘版扫描到（无 fallback 标记）', r.code === 200 && r.body.predefined[0].name === 'disk-tpl' && r.body.predefined[0].fallback === undefined && r.body.predefined[0].path === '/ws/t13-pre/workflow-agent/templates/disk-tpl.yaml', JSON.stringify(r.body.predefined))
-  check('templates: 内建兜底补缺（同名去重，磁盘版赢）', r.body.predefined.length === 5 && r.body.predefined.filter(x => x.fallback).map(x => x.name).join(',') === 'default-demo,serial-demo,items-demo,runtime-items-demo', JSON.stringify(r.body.predefined.map(x => x.name)))
-  check('templates: builtin 字段保留（兼容）', Array.isArray(r.body.builtin) && r.body.builtin.length === 4 && r.body.builtin[0].yaml.includes('name: default-demo') && r.body.builtin[2].yaml.includes('name: items-demo') && r.body.builtin[3].yaml.includes('name: runtime-items-demo'))
-  check('templates: default-demo 集成依赖深度分析（防止深挖变旁路孤岛回归）', r.body.builtin[0].yaml.includes('depends-on: [write-spec, prep-data, deep-analysis]') && r.body.builtin[0].yaml.includes('analysis: "output/analysis.md"'))
+  // 阶段 3f：内建模板已文件化并随物化落盘 → 兜底合并与 builtin 兼容字段移除
+  check('templates: 内建兜底移除（仅磁盘版）', r.body.predefined.length === 1 && !Array.isArray(r.body.builtin), JSON.stringify(r.body.predefined))
+  check('templates: default-demo 集成依赖深度分析（资产文件本体）', require('fs').readFileSync(require('path').join(__dirname, '../packages/workflow-host/builtin-assets/templates/default-demo/default-demo.yaml'), 'utf8').includes('depends-on: [write-spec, prep-data, deep-analysis]'))
   process.env.DSH_HOME = savedDsh
 
   // create：workflowText 成功路径
@@ -775,9 +775,23 @@ async function runCase16() {
 // ── 用例 17：方向 A 手工停权威停止（Iter-23 A1/A2）────────────────────────
 // ── 用例 18：预定义目录物化（Iter-24）──
 async function runCase18() {
-  console.log('［用例 18］预定义目录物化 — 技能/模板/骨架幂等覆盖 + 根定位')
-  const { BUILTIN_SKILLS, BUILTIN_TEMPLATE_FILES, detectPredefinedRoot, materializeBuiltinAssets } = require('../plugins/workflow-host/builtin-skills.js')
+  console.log('［用例 18］预定义目录物化 — 资产文件复制（幂等覆盖）+ 根定位')
+  const { detectPredefinedRoot, materializeBuiltinAssets } = require('../plugins/workflow-host/builtin-materialize.js')
+  const nodeFs = require('fs')
+  const nodePath = require('path')
   const { files, fs: mockFs } = makeMockFs()
+
+  // 资产源目录：真实包内 builtin-assets（复制语义的读取源）
+  const assetsDir = nodePath.join(__dirname, '..', 'packages', 'workflow-host', 'builtin-assets')
+  const rels = []
+  ;(function walk(dir, rel) {
+    for (const ent of nodeFs.readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? rel + '/' + ent.name : ent.name
+      if (ent.isDirectory()) walk(nodePath.join(dir, ent.name), r)
+      else rels.push(r)
+    }
+  })(assetsDir, '')
+  check('c18 前置: 资产源非空', rels.length >= 20, rels.length)
 
   // 1) 根定位：DSH_HOME 优先，缺省 HOME/.dsh
   const savedEnv = { DSH_HOME: process.env.DSH_HOME, HOME: process.env.HOME }
@@ -792,37 +806,28 @@ async function runCase18() {
     if (savedEnv.HOME !== undefined) process.env.HOME = savedEnv.HOME
   }
 
-  // 2) 首次物化：模板+技能+骨架全部写出
-  const templates = [
-    { name: 'tpl-a', description: 'x', yaml: 'name: tpl-a\n' },
-    { name: 'tpl-b', description: 'x', yaml: 'name: tpl-b\n' },
-  ]
-  const r = await materializeBuiltinAssets(mockFs, templates)
+  // 2) 首次物化：全量复制（幂等覆盖语义——含 README/docs）
+  const r = await materializeBuiltinAssets(mockFs, { assetsDir })
   check('c18 物化: ok', r.ok === true)
   check('c18 物化: 根路径回传', r.root === detectPredefinedRoot())
-  check('c18 物化: 技能 5 个全写', BUILTIN_SKILLS.every((s) => r.written.indexOf('skills/' + s.id + '/SKILL.md') >= 0))
-  // Iter-27a：模板写子目录布局 templates/<name>/<name>.yaml
-  check('c18 物化: 模板写入（子目录布局）', r.written.indexOf('templates/tpl-a/tpl-a.yaml') >= 0 && r.written.indexOf('templates/tpl-b/tpl-b.yaml') >= 0)
-  check('c18 物化: 骨架 README 写出', r.written.indexOf('samples/README.md') >= 0 && r.written.indexOf('docs/README.md') >= 0)
-  const skillPath = r.root + '/skills/deep-analysis/SKILL.md'
-  check('c18 技能: 内容含 frontmatter name', String(files.get(skillPath)).startsWith('---\nname: deep-analysis\n---'))
-  check('c18 技能: 正文原样保留', String(files.get(skillPath)).indexOf('## 任务目标') > 0)
-  // Iter-27a：items-demo 静态文件工作副本迁入模板子目录 + templates README（子目录布局说明）
-  check('c18 物化: items-demo 静态文件迁入模板子目录', BUILTIN_TEMPLATE_FILES.every((f) => r.written.indexOf(f.path) >= 0), JSON.stringify(r.written))
-  check('c18 物化: templates/README.md 写出（子目录布局说明）', r.written.indexOf('templates/README.md') >= 0 && String(files.get(r.root + '/templates/README.md')).indexOf('子目录') >= 0)
+  check('c18 物化: 全量复制（文件数一致）', r.written.length === rels.length, r.written.length + ' vs ' + rels.length)
+  check('c18 物化: 技能写出', r.written.some((p) => p.indexOf('skills/deep-analysis/SKILL.md') >= 0))
+  check('c18 物化: 模板写出（子目录布局）', r.written.some((p) => p.indexOf('templates/serial-demo/serial-demo.yaml') >= 0))
+  check('c18 物化: README 写出', r.written.some((p) => p.indexOf('docs/README.md') >= 0))
+  const skillPath = r.root + '/skills/spec-writer/SKILL.md'
+  check('c18 技能: 内容含 frontmatter name', String(files.get(skillPath)).startsWith('---\nname: spec-writer\n---'))
 
-  // 3) 幂等覆盖：改写模板/技能后再物化 → 覆盖回规范内容；用户 README 不被覆盖
-  files.set(r.root + '/templates/tpl-a/tpl-a.yaml', 'name: user-edited\n')
+  // 3) 幂等覆盖：用户改写后再物化 → 覆盖回包内规范内容（幂等覆盖语义：README 也覆盖）
   files.set(r.root + '/skills/spec-writer/SKILL.md', 'user edited\n')
-  files.set(r.root + '/samples/README.md', 'user custom samples readme\n')
-  const r2 = await materializeBuiltinAssets(mockFs, templates)
+  files.set(r.root + '/docs/README.md', 'user custom\n')
+  const srcSpec = nodeFs.readFileSync(nodePath.join(assetsDir, 'skills/spec-writer/SKILL.md'), 'utf8')
+  const r2 = await materializeBuiltinAssets(mockFs, { assetsDir })
   check('c18 幂等: ok', r2.ok === true)
-  check('c18 幂等: 模板覆盖回规范内容', files.get(r.root + '/templates/tpl-a/tpl-a.yaml') === 'name: tpl-a\n')
-  check('c18 幂等: 技能覆盖回规范内容', String(files.get(r.root + '/skills/spec-writer/SKILL.md')).startsWith('---\nname: spec-writer\n---'))
-  check('c18 幂等: 用户 samples/README.md 不被覆盖', files.get(r.root + '/samples/README.md') === 'user custom samples readme\n')
+  check('c18 幂等: 用户改写被包内规范内容覆盖', String(files.get(r.root + '/skills/spec-writer/SKILL.md')).startsWith('---\nname: spec-writer\n---'))
+  check('c18 幂等: docs/README 覆盖回包内内容', String(files.get(r.root + '/docs/README.md')) === nodeFs.readFileSync(nodePath.join(assetsDir, 'docs/README.md'), 'utf8'))
 
   // 4) fs 不可用 / 根不可定位降级
-  const rNoFs = await materializeBuiltinAssets(null, templates)
+  const rNoFs = await materializeBuiltinAssets(null, { assetsDir })
   check('c18 降级: fs 缺失 → ok:false + reason', rNoFs.ok === false && !!rNoFs.reason)
 }
 
@@ -1355,18 +1360,19 @@ async function runCase21() {
     })())
   }
 
-  // 9) items-demo 模板与样例登记（mjs 文本级断言；模板 parse 逻辑与 workflow_begin 同链路）
+  // 9) 内建资产文件化（阶段 3f）：模板/技能/样例为真实文件 —— 对准资产文件本体断言
   {
-    // 阶段 3：模板登记在 webserver-routes 源（BUILTIN_TEMPLATES 引用）；资产定义在内建技能源（BUILTIN_TEMPLATES/SAMPLES）
-    const mjsSrc = require('fs').readFileSync(require('path').join(__dirname, '../plugins/workflow-host/webserver-routes.js'), 'utf8')
-    const builtinSrc = require('fs').readFileSync(require('path').join(__dirname, '../plugins/workflow-host/builtin-skills.js'), 'utf8')
-    check('c21 items-demo: 模板登记（BUILTIN_TEMPLATES，items 源=模板子目录 inputs/items/）', mjsSrc.includes("name: 'items-demo'") && mjsSrc.includes('inputs/items/modules-table.md') && mjsSrc.includes('${mod.slug}'))
-    // Iter-27a 后补丁（用户拍板）：items-from 与 inputs 互斥——模板六任务不再把
-    // items 文件声明进 inputs；processor 换专用逐 item 技能（含 runtime analyze 共 7 处）
-    check('c21 items-demo: 六任务 items-from 保留（items-demo×6+runtime×1=7）', (mjsSrc.match(/'    items-from: /g) || []).length === 7 && !mjsSrc.includes('并发归档（${mod.slug}'))
-    check('c21 items-demo: inputs 重复声明清零 + processor 换 item-processor（×7）', (mjsSrc.match(/items: "inputs\/items\//g) || []).length === 0 && (mjsSrc.match(/processor: skills\/item-processor\/SKILL\.md/g) || []).length === 7)
-    check('c21 items-demo: default-demo integrator 两输入汇总场景不被误伤', (mjsSrc.match(/processor: skills\/integrator\/SKILL\.md/g) || []).length === 2 && mjsSrc.includes('spec: "output/spec.md"'))
-    check('c21 items-demo: 样例物化登记（BUILTIN_SAMPLES 四格式）', builtinSrc.includes('samples/items/modules.md') && builtinSrc.includes('samples/items/components.json') && builtinSrc.includes('samples/items/features.yaml'))
+    const A = (rel) => require('fs').readFileSync(require('path').join(__dirname, '../packages/workflow-host/builtin-assets', rel), 'utf8')
+    const Aexists = (rel) => require('fs').existsSync(require('path').join(__dirname, '../packages/workflow-host/builtin-assets', rel))
+    const itemsYaml = A('templates/items-demo/items-demo.yaml')
+    const runtimeYaml = A('templates/runtime-items-demo/runtime-items-demo.yaml')
+    const defaultYaml = A('templates/default-demo/default-demo.yaml')
+    check('c21 资产: items-demo 六任务 items-from 保留', (itemsYaml.match(/items-from: /g) || []).length === 6)
+    check('c21 资产: items-demo processor=item-processor ×6', (itemsYaml.match(/item-processor/g) || []).length === 6)
+    check('c21 资产: runtime-items processor=item-processor ×1', (runtimeYaml.match(/item-processor/g) || []).length === 1)
+    check('c21 资产: items-from 与 inputs 互斥保持（无重复声明）', !/items: "inputs\/items\//.test(itemsYaml + runtimeYaml))
+    check('c21 资产: default-demo integrator 两输入汇总保持', (defaultYaml.match(/skills\/integrator\/SKILL\.md/g) || []).length === 1 && defaultYaml.includes('spec: "output/spec.md"'))
+    check('c21 资产: 样例四格式真实文件在位', Aexists('samples/items/modules.md') && Aexists('samples/items/components.json') && Aexists('samples/items/features.yaml') && Aexists('templates/items-demo/inputs/items/modules-table.md'))
   }
 }
 
@@ -2860,7 +2866,7 @@ async function runCase26() {
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')
     process.exit(fail > 0 ? 1 : 0)
   }).catch((e) => {
-    console.log('  ✘ expandConcurrentTasks 异常: ' + e.message)
+    console.log('  ✘ expandConcurrentTasks 异常: ' + e.message); console.log(e.stack)
     fail++
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

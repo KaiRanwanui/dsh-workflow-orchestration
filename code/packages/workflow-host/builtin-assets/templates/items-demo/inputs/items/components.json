@@ -1,0 +1,12 @@
+[
+  {
+    "id": "api",
+    "name": "API 网关",
+    "slug": "api-gateway"
+  },
+  {
+    "id": "auth",
+    "name": "认证中心",
+    "slug": "auth-core"
+  }
+]

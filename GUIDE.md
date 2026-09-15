@@ -44,6 +44,7 @@ workflow-agent/
 │   │   ├── workflow-host/                 #   Host 插件：lib/index.js（CJS，运行时加载）+ cordis.patch.yml
 │   │   └── client-ui-monitor/             #   Client 插件：src/client.js → lib/client.js（浏览器 bundle）
 │   ├── plugins/                           # 源模块（由 module-manifest 拼入 Host 产物）
+│   │   └── workflow-host/builtin-assets/  #   内建资产真实文件（4 模板+7 技能+samples/docs；物化=复制到 ~/.dsh/workflow-agent/）
 │   │   ├── workflow-host/                 #   apply-prologue.js（探针+A1 tap）、engine.js、storage.js、
 │   │   │                                  #   instance-store.js、builtin-skills.js、webserver-routes.js（/wf/*）
 │   │   └── workflow-host-preset/          #   tools-preset.js（workflow_* 十个工具）

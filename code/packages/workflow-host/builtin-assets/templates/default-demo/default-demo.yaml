@@ -1,0 +1,34 @@
+# 延长版：含 deep-analysis（≥2500 字）长任务，给 STOP/RESUME 留出反应窗口。依赖工作区 skills/ 下 spec-writer/data-prep/integrator/integrator-checker/deep-analysis
+name: default-demo
+version: "1.0"
+description: "默认可执行模板·延长版：深度分析 + 并发两任务 + 汇总 + 门禁"
+max-concurrency: 2
+tasks:
+  - id: deep-analysis
+    name: "深度分析"
+    processor: skills/deep-analysis/SKILL.md
+    outputs: ["output/analysis.md"]
+
+  - id: write-spec
+    name: "编写规格说明"
+    processor: skills/spec-writer/SKILL.md
+    outputs: ["output/spec.md"]
+
+  - id: prep-data
+    name: "准备测试数据"
+    processor: skills/data-prep/SKILL.md
+    outputs: ["output/data.md"]
+
+  - id: integrate
+    name: "汇总集成"
+    processor: skills/integrator/SKILL.md
+    inputs:
+      spec: "output/spec.md"
+      data: "output/data.md"
+      analysis: "output/analysis.md"
+    outputs: ["output/summary.md"]
+    depends-on: [write-spec, prep-data, deep-analysis]
+    quality-gate:
+      checker: skills/integrator-checker/SKILL.md
+      on-failure: retry
+      max-retries: 2

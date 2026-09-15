@@ -1,0 +1,3 @@
+# 特性清单（YAML 并列 map：键=id 字段，标量值=name 字段）
+search: 搜索服务
+export: 导出服务

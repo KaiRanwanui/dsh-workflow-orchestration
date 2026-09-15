@@ -8,10 +8,10 @@
 |---|---|---|
 | `packages/workflow-host/` | **交付物（Host）** | npm 包 `@workflow-agent/workflow-host`：`lib/index.js`（CJS，**运行时真正加载的那份**）+ `cordis.patch.yml`（profile bundle 插入行） |
 | `packages/client-ui-monitor/` | **交付物（Client）** | npm 包 `@workflow-agent/client-ui-monitor`：`src/client.js`（单一源）→ `lib/client.js`（浏览器 bundle）+ `lib/index.js`（Host 侧空入口） |
-| `plugins/workflow-host/` | 源模块 | `engine.js`（状态机/并发/循环）、`storage.js`（持久化）、`instance-store.js`（实例注册表/绑定/孤儿回收/归档）、`builtin-skills.js`（内建模板与技能） |
+| `plugins/workflow-host/` | 源模块 | `engine.js`（状态机/并发/循环）、`storage.js`（持久化）、`instance-store.js`（实例注册表/绑定/孤儿回收/归档）、`builtin-materialize.js`（内建资产物化：包内 `builtin-assets/` → 预定义目录复制语义） |
 | `plugins/workflow-host-preset/` | 源模块 | `tools-preset.js`：`workflow_*` 十个工具定义（preset 形态注册） |
 | `shared/` | 源模块 | `workflow-schema.js`、`workflow-parser.js`、`workflow-paths.js`、`workflow-validate.js`、`workflow-edit.js`、`items-extract.js`、`zip-writer.js` |
-| `agent-presets/workflow-orchestrator/` | Agent Preset | `preset.yml`、`agent.cordis.yml`（composition）、`system-prompt.md`（persona 单一源）、`workflow-host.mjs`（构建中间产物，当前未被挂载） |
+| `agent-presets/workflow-orchestrator/` | Agent Preset | `preset.yml`、`agent.cordis.yml`（composition）、`system-prompt.md`（persona 单一源） |
 | `scripts/` | 构建与测试 | 见下表 |
 | `probes/` | 历史探针 | Iter-SUBA / Iter-23 的实证探针脚本（留档） |
 

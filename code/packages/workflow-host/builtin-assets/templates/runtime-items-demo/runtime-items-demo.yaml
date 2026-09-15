@@ -1,0 +1,25 @@
+# Iter-26R 运行时 items 展开演示
+# 场景：上游 collect 任务写模块清单到 output/modules.txt，下游 loop 任务按清单展开为 N 个迭代
+# 启动时 output/modules.txt 不存在 → analyze 显示为占位组框（虚线琥珀色"⏳ 等待 items..."）
+# collect 完成后 → Host 自动读取 items 文件 → 占位展开为 3 个迭代 → 逐个执行 → 全部完成
+# 验收要点：面板观察占位组框→展开→迭代执行→下游放行
+name: runtime-items-demo
+version: "1.0"
+description: "Iter-26R 运行时 items 展开：collect→loop 延迟展开"
+tasks:
+  - id: collect
+    name: "收集模块清单"
+    processor: skills/list-collector/SKILL.md
+    outputs:
+      - output/modules.txt
+
+  - id: analyze
+    name: "逐模块分析"
+    type: loop
+    processor: skills/item-processor/SKILL.md
+    items-from: output/modules.txt
+    item-var: mod
+    outputs:
+      - "output/analyze/${mod}.md"
+    depends-on:
+      - collect

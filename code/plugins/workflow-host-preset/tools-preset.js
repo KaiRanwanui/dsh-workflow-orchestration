@@ -41,7 +41,7 @@ let E_deferDisposition = typeof deferDisposition !== 'undefined' ? deferDisposit
 // Node 直测（require 本源文件）时 builtin-skills 不在同作用域——require 兜底；
 // mjs 内联作用域有 detectPredefinedRoot（builtin-skills section 在前），走 typeof 分支。
 function fallbackPredefinedRoot() {
-  try { return require('../workflow-host/builtin-skills').detectPredefinedRoot() } catch (e) { return null }
+  try { return require('../workflow-host/builtin-materialize').detectPredefinedRoot() } catch (e) { return null }
 }
 // Iter-27a：预定义根定位统一入口（mjs 内联走同作用域 detectPredefinedRoot，Node 直测走 require 兜底）
 function detectPredefinedRootSafe() {
@@ -681,8 +681,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // ~/.dsh/ 的写能力与物化结果。fire-and-forget，不等待。
   if (fs) {
     try {
-      const tpl = (typeof BUILTIN_TEMPLATES !== 'undefined') ? BUILTIN_TEMPLATES : []
-      materializeBuiltinAssets(fs, tpl)
+      materializeBuiltinAssets(fs)
         .then((r) => {
           if (r && r.ok) console.log('[workflow-agent] materialize ok root=' + r.root + ' written=' + r.written.length + (r.failed.length ? ' FAILED=' + r.failed.join('; ') : ''))
           else console.log('[workflow-agent] materialize skip: ' + ((r && r.reason) || 'unknown') + (r && r.failed && r.failed.length ? ' failed=' + r.failed.join('; ') : ''))

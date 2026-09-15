@@ -30,7 +30,7 @@ module.exports = {
     { id: 'engine', path: 'plugins/workflow-host/engine.js' },
     { id: 'storage', path: 'plugins/workflow-host/storage.js' },
     { id: 'instance-store', path: 'plugins/workflow-host/instance-store.js' },
-    { id: 'builtin-skills', path: 'plugins/workflow-host/builtin-skills.js' },
+    { id: 'builtin-materialize', path: 'plugins/workflow-host/builtin-materialize.js' },
     { id: 'tools-preset', path: 'plugins/workflow-host-preset/tools-preset.js' },
     // webServer 路由（/wf/*）——必须最后（引用前置 section 的 parser/validate/模板表等）
     { id: 'webserver-routes', path: 'plugins/workflow-host/webserver-routes.js' },
