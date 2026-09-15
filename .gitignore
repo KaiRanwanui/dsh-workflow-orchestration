@@ -24,10 +24,10 @@ code/legacy/plugins/workflow-client/_full-*
 code/legacy/plugins/workflow-client/_host-*
 code/legacy/plugins/workflow-client/_payload-*
 code/legacy/plugins/workflow-client/_test-*
-code/plugins/workflow-client/build-client.js
-code/plugins/workflow-client/build-json.js
-code/plugins/workflow-client/build-payload.js
-code/plugins/workflow-client/build-v8.js
-code/plugins/workflow-client/client-out.txt
-code/plugins/workflow-client/host-out.txt
-code/plugins/workflow-client/define.json
+code/legacy/plugins/workflow-client/build-client.js
+code/legacy/plugins/workflow-client/build-json.js
+code/legacy/plugins/workflow-client/build-payload.js
+code/legacy/plugins/workflow-client/build-v8.js
+code/legacy/plugins/workflow-client/client-out.txt
+code/legacy/plugins/workflow-client/host-out.txt
+code/legacy/plugins/workflow-client/define.json
