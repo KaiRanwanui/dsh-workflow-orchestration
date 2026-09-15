@@ -45,7 +45,7 @@ const CODE = path.resolve(__dirname, '..')
 const PKG_DIR = path.join(CODE, 'packages', 'workflow-host')
 const PRESET_SRC = path.join(CODE, 'agent-presets', 'workflow-orchestrator')
 const PRESET_DST = path.join(os.homedir(), '.dsh', '.agent-presets', 'workflow-orchestrator')
-const PRESET_FILES = ['preset.yml', 'agent.cordis.yml', 'system-prompt.md']
+const PRESET_FILES = ['preset.yml', 'agent.cordis.yml', 'system-prompt.md', 'persona-file.mjs']
 const PKG = '@workflow-agent/workflow-host'
 
 const fail = (msg) => { console.error('✗ ' + msg); process.exit(1) }
