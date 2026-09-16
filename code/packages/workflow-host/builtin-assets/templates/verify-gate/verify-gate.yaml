@@ -1,0 +1,34 @@
+# 验证模板：质量门禁三变体（Iter-32，配套阶段 4 缺陷 #8「gateChecker 未执行」的复跑诊断）
+# 三任务相互独立、并发执行，分别覆盖：PASS→DONE(retry) / FAIL→SKIPPED(skip) / FAIL→阻断(block)。
+# 配套探针技能 skills/never-pass（恒判 FAIL）。观察点：门禁任务是否有独立 subagent 会话、
+# gateResult 是否落快照（DAG 状态条 G: 与任务角标）、FAIL 后按 on-failure 处置是否正确。
+name: verify-gate
+version: "1.0"
+description: "验证质量门禁三变体：PASS→DONE / skip→SKIPPED / block→FAILED（配套 never-pass 探针技能）"
+max-concurrency: 3
+tasks:
+  - id: gate-pass
+    name: "门禁 PASS 变体（retry）"
+    processor: skills/integrator-checker/SKILL.md
+    outputs: ["output/gate-pass.md"]
+    quality-gate:
+      checker: skills/integrator-checker/SKILL.md
+      on-failure: retry
+      max-retries: 1
+
+  - id: gate-skip
+    name: "门禁 skip 变体（预期 FAIL→SKIPPED）"
+    processor: skills/item-processor/SKILL.md
+    outputs: ["output/gate-skip.md"]
+    quality-gate:
+      checker: skills/never-pass/SKILL.md
+      on-failure: skip
+      max-retries: 1
+
+  - id: gate-block
+    name: "门禁 block 变体（预期 FAIL→工作流阻断）"
+    processor: skills/item-processor/SKILL.md
+    outputs: ["output/gate-block.md"]
+    quality-gate:
+      checker: skills/never-pass/SKILL.md
+      on-failure: block

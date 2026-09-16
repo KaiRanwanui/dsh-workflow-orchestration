@@ -1,0 +1,20 @@
+# 验证模板：items 空提取（Iter-32，补验「空提取 → 占位形态 (0)」）
+# items 文件仅含注释行与空行（lines 格式提取语义：trim 后忽略空行与 # 注释）→
+# 提取结果 0 条 → 循环任务保持占位节点（组盒渲染 (0)），依赖链完整、不派发迭代。
+name: verify-empty-items
+version: "1.0"
+description: "验证 items 空提取：0 条目占位形态（items 文件仅注释与空行）"
+tasks:
+  - id: empty-loop
+    name: "空提取循环"
+    type: loop
+    processor: skills/item-processor/SKILL.md
+    items-from: inputs/empty-list.txt
+    item-var: item
+    outputs: ["output/empty-loop/${item}.md"]
+
+  - id: downstream
+    name: "下游任务（空提取后仍应放行）"
+    processor: skills/data-prep/SKILL.md
+    outputs: ["output/downstream.md"]
+    depends-on: [empty-loop]

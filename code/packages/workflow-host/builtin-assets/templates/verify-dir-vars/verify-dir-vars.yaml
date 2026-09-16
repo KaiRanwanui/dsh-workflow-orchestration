@@ -1,0 +1,17 @@
+# 验证模板：目录变量全量注入（Iter-32，补验「目录变量两阶段注入」）
+# 覆盖四变量：${workspace}/${skills}（阶段1，展开期注入）、${wf_dir}/${skill_dir}（阶段2，
+# 实例目录就绪后注入；${skill_dir}=processor 所在目录）。三个 marker 输入均为真实在场的
+# 文件/目录，data-prep 技能应能在产出中如实陈述各路径可达性——四个变量任一未注入
+# （字面 ${xxx} 残留）即视为缺陷。
+name: verify-dir-vars
+version: "1.0"
+description: "验证目录变量两阶段注入：${workspace}/${skills}/${wf_dir}/${skill_dir} 四变量全量覆盖"
+tasks:
+  - id: vars-probe
+    name: "目录变量探针"
+    processor: ${skills}/data-prep/SKILL.md
+    inputs:
+      ws_root_marker: "${workspace}/.workflow-agent"
+      wf_dir_marker: "${wf_dir}/instance.yaml"
+      skill_dir_marker: "${skill_dir}/SKILL.md"
+    outputs: ["output/dir-vars-report.md"]

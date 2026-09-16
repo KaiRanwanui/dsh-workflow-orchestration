@@ -1,0 +1,30 @@
+# 校验探针样例（Iter-32）——仅供「文本创建」粘贴验证语义校验，**勿用于执行**
+# 预期结果（创建/启动关口硬拦 + 警告同屏）：
+#   E-DEP-CYCLE          — a→b→a 循环依赖
+#   E-PROCESSOR-MISSING  — 任务 b 缺 processor
+#   W-ITEMS-INPUT-DUP    — 任务 w 的 items-from 与 inputs 声明同一文件（警告不硬拦）
+# 预期界面：红色错误清单逐条 `[code] 任务 "id" 字段: 原因`；创建被拦。
+name: validation-probe-sample
+version: "1.0"
+description: "语义校验探针：2 硬拦错误 + 1 警告（验证用，勿执行）"
+tasks:
+  - id: a
+    name: "环依赖 A"
+    processor: skills/data-prep/SKILL.md
+    depends-on: [b]
+    outputs: ["output/a.md"]
+
+  - id: b
+    name: "环依赖 B（且缺 processor）"
+    depends-on: [a]
+    outputs: ["output/b.md"]
+
+  - id: w
+    name: "警告示例（items-from 与 inputs 重复声明）"
+    type: loop
+    processor: skills/item-processor/SKILL.md
+    items-from: "output/a.md"
+    item-var: item
+    inputs:
+      list: "output/a.md"
+    outputs: ["output/w.md"]

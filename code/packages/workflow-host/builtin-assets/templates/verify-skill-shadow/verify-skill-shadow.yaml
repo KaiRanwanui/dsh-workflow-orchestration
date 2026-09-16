@@ -1,0 +1,13 @@
+# 验证模板：技能工作区覆盖（Iter-32，补验「两级链同名工作区优先」）
+# 操作步骤（验证时执行）：
+#   1. 把 samples/skill-shadow/data-prep/SKILL.md 复制为 <工作区>/skills/data-prep/SKILL.md
+#   2. 跑本模板 → shadow-probe 输出应含「SHADOW-COPY」标记（工作区版顶替预定义版）
+#   3. 验证完成后删除工作区副本（否则默认模板链里 data-prep 亦被顶替）
+name: verify-skill-shadow
+version: "1.0"
+description: "验证工作区 skills/ 同名覆盖预定义技能（两级链：工作区优先顶替；配 samples/skill-shadow 影子副本）"
+tasks:
+  - id: shadow-probe
+    name: "技能覆盖探针"
+    processor: skills/data-prep/SKILL.md
+    outputs: ["output/shadow-probe.md"]

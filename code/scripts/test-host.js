@@ -1375,6 +1375,16 @@ async function runCase21() {
     check('c21 资产: runtime-items processor=item-processor ×1', (runtimeYaml.match(/item-processor/g) || []).length === 1)
     check('c21 资产: items-from 与 inputs 互斥保持（无重复声明）', !/items: "inputs\/items\//.test(itemsYaml + runtimeYaml))
     check('c21 资产: default-demo integrator 两输入汇总保持', (defaultYaml.match(/skills\/integrator\/SKILL\.md/g) || []).length === 1 && defaultYaml.includes('spec: "output/spec.md"'))
+    // Iter-32：verify-* 验证测试资产（对准资产文件本体）
+    const gateYaml = A('templates/verify-gate/verify-gate.yaml')
+    const dirVarsYaml = A('templates/verify-dir-vars/verify-dir-vars.yaml')
+    const shadowYaml = A('templates/verify-skill-shadow/verify-skill-shadow.yaml')
+    check('c21 资产: verify-gate 三 on-failure 变体齐备（retry/skip/block）', gateYaml.includes('on-failure: retry') && gateYaml.includes('on-failure: skip') && gateYaml.includes('on-failure: block'))
+    check('c21 资产: verify-gate 探针技能 never-pass 真实文件在位', Aexists('skills/never-pass/SKILL.md') && A('skills/never-pass/SKILL.md').includes('name: never-pass'))
+    check('c21 资产: verify-dir-vars 四目录变量全覆盖', dirVarsYaml.includes('${workspace}') && dirVarsYaml.includes('${skills}') && dirVarsYaml.includes('${wf_dir}') && dirVarsYaml.includes('${skill_dir}'))
+    check('c21 资产: verify-skill-shadow 引用 data-prep 且影子副本在位', shadowYaml.includes('skills/data-prep/SKILL.md') && Aexists('samples/skill-shadow/data-prep/SKILL.md') && A('samples/skill-shadow/data-prep/SKILL.md').includes('SHADOW-COPY'))
+    check('c21 资产: verify-empty-items 空提取 items 文件在位', Aexists('templates/verify-empty-items/inputs/empty-list.txt') && !/\S/.test(A('templates/verify-empty-items/inputs/empty-list.txt').split('\n').filter(l => l.trim() && !l.trim().startsWith('#')).join('')))
+    check('c21 资产: 校验探针样例在位（E/W 断言可粘贴）', Aexists('samples/validation-probe.sample.yaml') && A('samples/validation-probe.sample.yaml').includes('depends-on: [b]') && A('samples/validation-probe.sample.yaml').includes('items-from: "output/a.md"'))
     check('c21 资产: 样例四格式真实文件在位', Aexists('samples/items/modules.md') && Aexists('samples/items/components.json') && Aexists('samples/items/features.yaml') && Aexists('templates/items-demo/inputs/items/modules-table.md'))
   }
 }
