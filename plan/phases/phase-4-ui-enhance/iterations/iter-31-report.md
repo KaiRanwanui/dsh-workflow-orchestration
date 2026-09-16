@@ -59,6 +59,9 @@
 | # | 现象 | 根因 | 修复 | 证据 |
 |---|---|---|---|---|
 | 1 | 首跑单测 566/567，S4「注入文案含全新运行语义」失败 | 用例断言的是**被本迭代有意移除的旧语义**（「按全新工作流继续执行」）——正是缺陷 #1 的根因文案 | 断言重写为新语义四要点（含 PENDING/等待指令/无续跑指示/清理契约） | §4 步骤 4 |
+| 2 | 真机首验 reset 仍自动执行、提示条仍在（用户反馈收到旧文案） | **部署形态自阶段 3 实物验收起为 tgz 真实副本**（profile `package.json` 钉 `file:...0.23.0.tgz`），非早期 `link:`——仓库重建不生效，必须走发行重装 | `build-release.js` 产 v0.24.0 tgz → 修 profile 清单指向新 tgz → `pnpm install`（PNPM_HOME 对齐 `~/.npm-global/pnpm`）→ 部署核验：v0.24.0、功能文本仅新文案（旧文案仅存于注释引用）、stopHint 0、client bundle 已更新 | 本节上方部署核验记录 |
+
+**部署形态结论（后续迭代通用）**：Host 改动交付链 = `build.js` + `build-client.mjs` + 单测 → `build-release.js` → 重装（pnpm 需 `PNPM_HOME=~/.npm-global/pnpm`；profile 清单 `file:` 版本号随 tgz 升版）→ 用户重启 `dsh.service`。GUIDE §4.4「构建即生效」描述的是阶段 3 前的 link: 形态，已不适用（阶段 4 收尾时统一修订 GUIDE）。
 
 ## 7. 遗留与后续
 
