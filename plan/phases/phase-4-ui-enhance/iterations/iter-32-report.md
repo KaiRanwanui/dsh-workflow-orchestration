@@ -67,11 +67,26 @@
 | 5 | `samples/validation-probe.sample.yaml` 全文粘贴到创建弹窗文本创建 | 硬拦：E-DEP-CYCLE / E-PROCESSOR-MISSING 结构化清单；W-ITEMS-INPUT-DUP 警告同屏 | 文本创建 / 校验硬拦 / 警告类 |
 | 6 | GUI 删除一个绑定实例的会话 | 实例解绑回池（或先停后解绑），/wf/list 可见 | 会话删除解绑 |
 
+### 7.1 补验结果回填（2026-09-16，用户执行）
+
+| # | 结果 | 说明 |
+|---|---|---|
+| 1 verify-gate | ✅ 链路通 | never-pass 探针被真实派发（用户观察到并询问）= 门禁 checker 独立会话执行的直接证据；三变体处置表现待用户确认细节（gate-pass PASS / gate-skip SKIPPED / gate-block 阻断） |
+| 2 verify-dir-vars | ✅ 已跑 | 用户未报异常 |
+| 3 verify-skill-shadow | ⏸ 未完成 | 工作区无同名技能——**需手动复制影子副本**（samples/skill-shadow/data-prep/SKILL.md → `<工作区>/skills/data-prep/SKILL.md`）后再跑；覆盖判定=比对放副本前后产出首行 SHADOW-COPY 标记 |
+| 4 verify-empty-items | ✅ 已跑（观察=设计行为） | 空列表仍派发 1 个占位迭代（「（items 为空）」）并产出文件——**这正是阶段 1 Q1-b 拍板的设计**（「正常派发，skill 识别空 items」），本报告 §7-4 原预期「零派发」写错；「是否改为零提取不派发」作为设计决策点提交用户（见 §8） |
+| 5 校验样例粘贴 | ⏳ 待执行 | |
+| 6 删除绑定会话 | ✅ 回收正确 + **连带发现严重缺陷 #9** | 删除会话 → 该实例解绑回池正确；但发现管理列表中其他实例显示「未绑定」→ 根因=`isSessionLive` 用 `sessions.get`（驻留语义），重启/关会话后「存在但未打开」会话的实例被孤儿回收批量误解绑（实证 dsh_wf_ws 14 实例 13 个 sessionId 被清）→ **归 Iter-33 修复**（plan.md 分诊 #9） |
+
+**UI 呈现问题（用户裁定归后续 UI 迭代）**：U1 门禁角点执行后消失 → Iter-39；U2 模板下拉只显说明 → Iter-36。
+
 ## 8. 遗留与后续
 
 | 遗留 | 去向 |
 |---|---|
 | 分支条件（precondition）实现 | 阶段 5 候选（新能力） |
+| 孤儿回收误判（补验发现 #9，严重） | Iter-33 |
+| 空提取「占位迭代派发」（Q1-b）是否改为零提取不派发 | 设计决策点，待用户拍板 |
 | 缺陷 #3~#8 | Iter-33 ~ 38（plan.md 队列） |
 | 根 README「4 模板 + 7 技能」计数过时 | 阶段 4 收尾统一修订（现 8 模板 + 8 技能） |
 

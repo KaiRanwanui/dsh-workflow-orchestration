@@ -24,13 +24,13 @@
 |---|---|---|---|---|
 | **Iter-31** | 后台 | 面板控制指令语义 | reset 后停 PENDING（注入文案改纯通知）+ stopHint 提示条移除 | 0.25 天 |
 | **Iter-32** | 资产/验证 | 验证测试资产与补验 | 预置测试工作流模板（分支/目录变量/技能覆盖/门禁/空提取）+ 校验错误样例 + 执行补验 | 0.5~0.75 天 |
-| **Iter-33** | 后台 | 实例完整性与采纳关口 | 采纳时可用性校验（不完整实例拒绝+原因）+ 已绑定 CREATED 实例面板明示 + archive 门禁放开 CREATED | 0.75 天 |
+| **Iter-33** | 后台 | 实例完整性与采纳关口 | 采纳时可用性校验（不完整实例拒绝+原因）+ 已绑定 CREATED 实例面板明示 + archive 门禁放开 CREATED + **孤儿回收误判修复**（补验实证：`isSessionLive` 用 `sessions.get` 驻留语义，重启/关会话后「存在但未打开」会话的实例被批量误解绑——dsh_wf_ws 实证 14 实例 13 个 sessionId 被清；修复方向=`sessions.list()` 成员资格判定，先探针 list 形态） | 1.25 天 |
 | **Iter-34** | 后台 | 门禁真实执行 | 诊断先行（**复用 Iter-32 verify-gate 模板**；数据链完整，疑 Agent 遵循度）→ 修复至 checker 独立 subagent 执行、PASS/FAIL 按 onFailure/maxRetries 处置 | 1 天 |
 | **Iter-35** | 前台 | 定义全文编辑 | 编辑器 YAML 源码模式（双栏表单 ↔ 源码两态切换；保存走既有语义校验关口） | 1 天 |
-| **Iter-36** | 前台 | 编辑器表单补全 | items-from 字段 + 完整属性呈现（不可编辑项只读）+ 下拉配色修复 | 1 天 |
+| **Iter-36** | 前台 | 编辑器表单补全 | items-from 字段 + 完整属性呈现（不可编辑项只读）+ 下拉配色修复 + 创建弹窗模板下拉展示「名称+说明」（补验 U2） | 1 天 |
 | **Iter-37** | 前台 | 全局参数编辑 | 编辑器 params 区 + 后端 meta patch 通道（仅 STOPPED/PENDING 开放） | 0.5 天 |
 | **Iter-38** | UI | 页签动态门控 | 探针 `ctx.sessions` 快照 → 按当前会话 preset 动态注册/注销 conversation.view slot | 0.5 天 |
-| **Iter-39** | UI | RUNNING 运行视觉 | RUNNING 脉冲（呼吸动画）+ 自动跟随（视口外才滚、每指纹一次） | 0.5 天 |
+| **Iter-39** | UI | RUNNING 运行视觉 | RUNNING 脉冲（呼吸动画）+ 自动跟随（视口外才滚、每指纹一次）+ 门禁角点执行后消失修复（补验 U1） | 0.75 天 |
 | **Iter-40** | UI | 节点详情与文件预览 | 节点详情面板 + 文件内容预览（**方案待 Iter-35 全文编辑效果评估后确定**） | 1 天 |
 | **Iter-41** | UI | 主题适配 | 173 处 style → 13 CSS token（含 39/40 新增 UI） | 待定 |
 
@@ -51,6 +51,9 @@
 | 6 | items-from 未开放配置 | 编辑器任务表单无该字段 | 36 |
 | 7 | 创建后全局 params 无法修改 | params 存 `metadata.json`（`meta.params`）；编辑器无 params 区，保存走 `instance-yaml` POST 不触 meta | 37 |
 | 8 | gateChecker 未执行 | 数据链完整（快照 `tasks[].gate` 齐备 + persona §5 流程完备）→ 疑 Agent 遵循度或定义写法，诊断先行 | 34 |
+| 9 | 孤儿回收误判：重启/关会话后存活会话的实例被批量误解绑（补验新发现，2026-09-16） | `isSessionLive`=`!!sessions.get(sid)` 是**驻留**语义（未打开≠删除）；`scanOrphans` 每轮 /wf/list 触发 → 误回收 stop+sessionId 置 null（实证 dsh_wf_ws 14 实例 13 个被清） | 33 |
+| U1 | 门禁角点：任务执行后右上角门禁小圆点消失（补验 UI 发现） | DagCanvas 门禁角标渲染条件待查（疑似仅创建态渲染） | 39 |
+| U2 | 创建弹窗模板下拉只显示工作流说明，应显示名称+说明（补验 UI 发现） | 下拉 label 构造待查 | 36 |
 
 **补验项**（→ **Iter-32 独立迭代**，配预置测试模板）：分支 SKIPPED / 目录变量全量 / 技能工作区覆盖 / 会话删除解绑；顺带覆盖：文本创建 / 校验硬拦 / 警告类 / items 空提取（校验清单其余无法构造项）。
 
