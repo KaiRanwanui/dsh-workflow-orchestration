@@ -55,6 +55,7 @@
 | # | 现象 | 根因 | 处置 |
 |---|---|---|---|
 | 1 | 「分支条件 SKIPPED」无法构造数据 | 分支条件（precondition）**未实现**（schema 标注后续迭代），非操作问题 | 模板改覆盖已实现的 SKIPPED 路径（gate-skip / loop break）；分支条件列阶段 5 候选 |
+| 2 | **空提取下游不放行（缺陷 #10，本迭代模板暴露的真引擎缺陷）**：empty-loop/empty 已 DONE，downstream（dependsOn: empty-loop）不入 runnable | 静态展开（begin 期 items 可解析）用迭代替换组任务、组锚点不存在 → 下游组 id 依赖悬空；`getRunnableTasks` 依赖判定为纯 id 匹配、无组解析。延迟展开路径有占位锚点不受影响——现有模板无「下游依赖循环组」用例，故首次由 verify-empty-items 暴露 | 引擎修复：`isDepSatisfied` 补组语义（依赖 id 无对应任务时，按组内全部迭代 DONE/SKIPPED 判定，FAILED 不放行）；用例 32 四场景（空提取/未全终态/FAILED/并发组）锁死；host v0.25.2 |
 
 ## 7. 补验执行清单（用户 GUI，重启 dsh 后）
 

@@ -2836,6 +2836,62 @@ async function runCase26() {
     check('c31: --format=esm 按需产出可用（生成后即清理）', esmOk, esmPath)
   }
 
+  // ── 用例 32：静态循环组下游放行（Iter-32 补验缺陷 #10）──
+  // 缺陷：静态展开（begin 期 items 可解析）用迭代替换组任务，组锚点不存在 →
+  // 下游 dependsOn 组 id 悬空、永不放行。修复=getRunnableTasks 依赖解析补组语义。
+  async function runCase32() {
+    console.log('［用例 32］静态循环组下游放行 — 组 id 依赖解析（缺陷 #10）')
+    // begin() 会将任务状态归一为 PENDING → 迭代状态一律用 updateTask 推进
+    const mkIteration = (gid, suffix) => ({
+      id: gid + '/' + suffix, name: suffix, type: 'llm-task', processor: '/x/skills/b/SKILL.md',
+      outputs: [], dependsOn: [], _loopGroup: gid, _loopGroupName: gid, _loopItem: suffix, _loopIndex: 0,
+      _concurrentGroup: null, _onError: null,
+    })
+    // 场景 1（空提取形态）：唯一迭代 empty-loop/empty DONE → downstream（dependsOn 组 id）放行
+    const e1 = createWorkflowEngine()
+    e1.begin({ name: 'v32a', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [
+      mkIteration('empty-loop', 'empty'),
+      { id: 'downstream', name: '下游', type: 'llm-task', processor: '/x/skills/a/SKILL.md', outputs: [], dependsOn: ['empty-loop'], _loopGroup: null, _concurrentGroup: null },
+    ] })
+    e1.start()
+    e1.updateTask('empty-loop/empty', { status: 'DONE' })
+    const r1 = e1.snapshot().runnable
+    check('c32: 空提取迭代 DONE 后下游（组 id 依赖）放行', r1.length === 1 && r1[0].id === 'downstream', r1.map(t => t.id).join(','))
+    // 场景 2（正常多迭代）：部分 DONE 不放行，全部终态才放行
+    const e2 = createWorkflowEngine()
+    e2.begin({ name: 'v32b', version: '1', description: null, params: {}, maxConcurrency: 3, tasks: [
+      mkIteration('loop-a', 'i1'), mkIteration('loop-a', 'i2'),
+      { id: 'after', name: '下游', type: 'llm-task', processor: '/x/skills/a/SKILL.md', outputs: [], dependsOn: ['loop-a'], _loopGroup: null, _concurrentGroup: null },
+    ] })
+    e2.start()
+    e2.updateTask('loop-a/i1', { status: 'DONE' })
+    e2.updateTask('loop-a/i2', { status: 'RUNNING' })
+    check('c32: 组内未全终态时下游不放行', e2.snapshot().runnable.length === 0)
+    e2.updateTask('loop-a/i2', { status: 'DONE' })
+    const r2 = e2.snapshot().runnable
+    check('c32: 组内全终态后下游放行', r2.length === 1 && r2[0].id === 'after', r2.map(t => t.id).join(','))
+    // 场景 3（FAILED 不放行，语义同「前驱 FAILED 不放行」）
+    const e3 = createWorkflowEngine()
+    e3.begin({ name: 'v32c', version: '1', description: null, params: {}, maxConcurrency: 3, tasks: [
+      mkIteration('loop-b', 'i1'), mkIteration('loop-b', 'i2'),
+      { id: 'after2', name: '下游', type: 'llm-task', processor: '/x/skills/a/SKILL.md', outputs: [], dependsOn: ['loop-b'], _loopGroup: null, _concurrentGroup: null },
+    ] })
+    e3.start()
+    e3.updateTask('loop-b/i1', { status: 'DONE' })
+    e3.updateTask('loop-b/i2', { status: 'FAILED' })
+    check('c32: 组内 FAILED 迭代不放行下游', e3.snapshot().runnable.length === 0)
+    // 场景 4（并发组同语义）
+    const e4 = createWorkflowEngine()
+    e4.begin({ name: 'v32d', version: '1', description: null, params: {}, maxConcurrency: 3, tasks: [
+      { id: 'conc-a/i1', name: 'i1', type: 'llm-task', processor: '/x/skills/b/SKILL.md', outputs: [], dependsOn: [], _loopGroup: null, _loopGroupName: null, _loopItem: null, _loopIndex: 0, _concurrentGroup: 'conc-a', _concurrentGroupName: 'conc-a', _concurrentItem: 'i1', _concurrentIndex: 0, _concurrentMax: 2, _onError: null },
+      { id: 'after3', name: '下游', type: 'llm-task', processor: '/x/skills/a/SKILL.md', outputs: [], dependsOn: ['conc-a'], _loopGroup: null, _concurrentGroup: null },
+    ] })
+    e4.start()
+    e4.updateTask('conc-a/i1', { status: 'DONE' })
+    const r4 = e4.snapshot().runnable
+    check('c32: 并发组 id 依赖同语义放行', r4.length === 1 && r4[0].id === 'after3', r4.map(t => t.id).join(','))
+  }
+
     // ── 用例 8：实例注册表（Iter-10）──
     await runCase8()
     // ── 用例 9：实例操控工具（Iter-11）──
@@ -2874,6 +2930,8 @@ async function runCase26() {
     await runCase26()
     // ── 用例 31：产物级回归（阶段 3）──
     await runCase31()
+    // ── 用例 32：静态循环组下游放行（Iter-32 补验缺陷 #10）──
+    await runCase32()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

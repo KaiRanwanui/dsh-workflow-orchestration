@@ -53,6 +53,7 @@
 | 7 | 创建后全局 params 无法修改 | params 存 `metadata.json`（`meta.params`）；编辑器无 params 区，保存走 `instance-yaml` POST 不触 meta | 37 |
 | 8 | gateChecker 未执行 | 数据链完整（快照 `tasks[].gate` 齐备 + persona §5 流程完备）→ 疑 Agent 遵循度或定义写法，诊断先行 | 34 |
 | 9 | 孤儿回收误判：重启/关会话后存活会话的实例被批量误解绑（补验新发现，2026-09-16） | `isSessionLive`=`!!sessions.get(sid)` 是**驻留**语义（未打开≠删除）；`scanOrphans` 每轮 /wf/list 触发 → 误回收 stop+sessionId 置 null（实证 dsh_wf_ws 14 实例 13 个被清） | 33 |
+| 10 | 静态循环组下游不放行：空提取/正常循环迭代全终态后，dependsOn 组 id 的下游永不就绪（verify-empty-items 补验发现，2026-09-16） | 静态展开用迭代替换组任务、组锚点消失 → 组 id 依赖悬空；`getRunnableTasks` 纯 id 匹配无组解析 | ✅ **Iter-32 内已修**（`isDepSatisfied` 补组语义 + 用例 32 四场景，host v0.25.2） |
 | U1 | 门禁角点：任务执行后右上角门禁小圆点消失（补验 UI 发现） | DagCanvas 门禁角标渲染条件待查（疑似仅创建态渲染） | 39 |
 | U2 | 创建弹窗模板下拉只显示工作流说明，应显示名称+说明（补验 UI 发现） | 下拉 label 构造待查 | 36 |
 

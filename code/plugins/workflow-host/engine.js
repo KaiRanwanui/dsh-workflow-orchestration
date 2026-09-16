@@ -209,6 +209,17 @@ function createWorkflowEngine() {
       gRun.set(t._concurrentGroup, (gRun.get(t._concurrentGroup) || 0) + (t.status === E_TASK_STATUS.RUNNING ? 1 : 0))
       if (!gMax.has(t._concurrentGroup)) gMax.set(t._concurrentGroup, t._concurrentMax || 1)
     })
+    // Iter-32 补验（缺陷 #10）：依赖解析补组语义——静态展开（begin 期 items 可解析）直接用
+    // 迭代替换组任务，组锚点不存在，下游 dependsOn 组 id 成悬空依赖、永不放行（verify-empty-items
+    // 实证）。依赖 id 无对应任务时，按组内全部迭代终态（DONE/SKIPPED；FAILED 不放行，语义同
+    // 「前驱 FAILED 不放行」）判定；延迟展开路径有占位节点锚点，不受影响。
+    const isDepSatisfied = (d) => {
+      if (finished.has(d)) return true
+      if (state.tasks.some((t) => t.id === d)) return false // 任务在但未终态
+      const iters = state.tasks.filter((t) => t._loopGroup === d || t._concurrentGroup === d)
+      if (iters.length === 0) return false
+      return iters.every((t) => t.status === E_TASK_STATUS.DONE || t.status === E_TASK_STATUS.SKIPPED)
+    }
     const result = []
     for (const t of state.tasks) {
       if (result.length >= slots) break
@@ -217,7 +228,7 @@ function createWorkflowEngine() {
       // 出现在 runnable 会让编排侧拿到 processor=null 的假任务（GUI 验收实证泄漏）。
       if (t._pendingItems) continue
       const deps = t.dependsOn || []
-      if (!deps.every((d) => finished.has(d))) continue
+      if (!deps.every((d) => isDepSatisfied(d))) continue
       // Iter-8：并发组组级槽位——组内 RUNNING + 该组已列入 result 的数量 >= 组级 max 则不放行
       if (t._concurrentGroup) {
         const gInResult = result.filter((x) => x._concurrentGroup === t._concurrentGroup).length
