@@ -25,7 +25,7 @@
 |---|---|---|---|---|
 | **Iter-31** | 后台 | 面板控制指令语义 | reset 后停 PENDING（注入文案改纯通知）+ stopHint 提示条移除 | 0.25 天 |
 | **Iter-32** | 资产/验证 | 验证测试资产与补验 | 预置测试工作流模板（分支/目录变量/技能覆盖/门禁/空提取）+ 校验错误样例 + 执行补验 | 0.5~0.75 天 |
-| **Iter-33** | 后台 | 实例完整性与采纳关口 | 采纳时可用性校验（不完整实例拒绝+原因）+ 已绑定 CREATED 实例面板明示 + archive 门禁放开 CREATED + **孤儿回收误判修复**（补验实证：`isSessionLive` 用 `sessions.get` 驻留语义，重启/关会话后「存在但未打开」会话的实例被批量误解绑——dsh_wf_ws 实证 14 实例 13 个 sessionId 被清；修复方向=`sessions.list()` 成员资格判定，先探针 list 形态） | 1.25 天 |
+| **Iter-33** | 后台 | 实例完整性与采纳关口 | 采纳时可用性校验（不完整实例拒绝+原因）+ 已绑定 CREATED 实例面板明示 + archive 门禁放开 CREATED + **孤儿回收误判修复**（补验实证：`isSessionLive` 用 `sessions.get` 驻留语义，重启/关会话后「存在但未打开」会话的实例被批量误解绑——dsh_wf_ws 实证 14 实例 13 个 sessionId 被清；修复方向=`sessions.list()` 成员资格判定，先探针 list 形态）+ **面板 reset 展开缺上下文修复**（缺陷 #11：reset 路由用简化版 `expandInstanceDef`，缺 wfDir/defDir/workspaceRoot，凡引用模板静态文件或 ${wf_dir} 的实例面板 reset 必失败——实证 verify-empty-items reset 报 `~/.dsh/workflow-agent/inputs/empty-list.txt` not found；修复=L955 换用完整版 `expandInstanceDefinition`，跨段可见性有 expandDefinition 先例） | 1.5 天 |
 | **Iter-34** | 后台 | 门禁真实执行 | 诊断先行（**复用 Iter-32 verify-gate 模板**；数据链完整，疑 Agent 遵循度）→ 修复至 checker 独立 subagent 执行、PASS/FAIL 按 onFailure/maxRetries 处置 | 1 天 |
 | **Iter-35** | 前台 | 定义全文编辑 | 编辑器 YAML 源码模式（双栏表单 ↔ 源码两态切换；保存走既有语义校验关口） | 1 天 |
 | **Iter-36** | 前台 | 编辑器表单补全 | items-from 字段 + 完整属性呈现（不可编辑项只读）+ 下拉配色修复 + 创建弹窗模板下拉展示「名称+说明」（补验 U2） | 1 天 |
@@ -54,6 +54,7 @@
 | 8 | gateChecker 未执行 | 数据链完整（快照 `tasks[].gate` 齐备 + persona §5 流程完备）→ 疑 Agent 遵循度或定义写法，诊断先行 | 34 |
 | 9 | 孤儿回收误判：重启/关会话后存活会话的实例被批量误解绑（补验新发现，2026-09-16） | `isSessionLive`=`!!sessions.get(sid)` 是**驻留**语义（未打开≠删除）；`scanOrphans` 每轮 /wf/list 触发 → 误回收 stop+sessionId 置 null（实证 dsh_wf_ws 14 实例 13 个被清） | 33 |
 | 10 | 静态循环组下游不放行：空提取/正常循环迭代全终态后，dependsOn 组 id 的下游永不就绪（verify-empty-items 补验发现，2026-09-16） | 静态展开用迭代替换组任务、组锚点消失 → 组 id 依赖悬空；`getRunnableTasks` 纯 id 匹配无组解析 | ✅ **Iter-32 内已修**（`isDepSatisfied` 补组语义 + 用例 32 四场景，host v0.25.2） |
+| 11 | 面板 reset 失败：`cannot read "~/.dsh/workflow-agent/inputs/empty-list.txt": not found`（verify-empty-items reset 发现，2026-09-16） | reset 路由用简化版 `expandInstanceDef`（缺 wfDir/defDir/workspaceRoot + finalizeDataflow + inputs 物化），静态引用解析退化到预定义根；编排侧 reset 工具用完整版不受影响——面板/工具不对称 | 33 |
 | U1 | 门禁角点：任务执行后右上角门禁小圆点消失（补验 UI 发现） | DagCanvas 门禁角标渲染条件待查（疑似仅创建态渲染） | 39 |
 | U2 | 创建弹窗模板下拉只显示工作流说明，应显示名称+说明（补验 UI 发现） | 下拉 label 构造待查 | 36 |
 
