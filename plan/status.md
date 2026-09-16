@@ -4,8 +4,7 @@
 > **维护频率：每阶段一次**（阶段启动/收尾时更新）。迭代级状态写在各自迭代报告里，**不回写本文件、不回写阶段 README**。
 > 历史过程记录见 `phases/progress-record.md`（已冻结）。
 
-**最后更新**：2026-09-14（阶段 2 收尾后；同日完成**文档归档整理**并输出**阶段 3 迭代方案**——按阶段重组 `plan/`，
-根目录 PoC 残留移入 `PoC/legacy-root/`，重写入口文档与文档地图，取消逐迭代打钩式状态维护）
+**最后更新**：2026-09-16（阶段 4 启动——全功能人工验证完成（39 过/3 未过/7 无法构造/2 部分），8 缺陷代码级分诊，迭代计划定稿 v6（11 个聚焦迭代）：`phases/phase-4-ui-enhance/plan.md`）
 
 ---
 
@@ -17,6 +16,7 @@
 | **阶段 1 · 核心功能开发**（Iter-1 ~ Iter-30 + Iter-SUBA） | 2026-08-26 ~ 09-05 | **0.1.1-rc.2** | host v0.20.1 / client v0.9.0 | 563 单测全绿 | ✅ 已完成并归档 |
 | **阶段 2 · DSH 0.1.5-rc.2 迁移** | 2026-09-13（单日完成） | **0.1.5-rc.2** | host **v0.21.0** / client **v0.9.1** | 563 单测全绿 + GUI 回归通过 | ✅ 已完成并归档 |
 | **阶段 3 · 构建链合并重构 + 发行工具 + 单包化** | 2026-09-14 ~ 09-15 | 0.1.5-rc.2 | **host v0.23.0 单包**（Host 插件 + 面板 bundle + preset 随包；client-ui-monitor 退役） | 567 单测全绿 + 真机冒烟 + GUI 验收 + **实物验收**（清除→tgz 重装→基本功能） | ✅ 已完成并归档 |
+| **阶段 4 · 现有功能修复**（Iter-31 ~ 41） | 2026-09-16 ~ | 0.1.5-rc.2（不变） | **host v0.24.0 起**（单包形态延续） | 567 单测全绿 | 🚧 进行中 |
 
 阶段详情与迭代索引：`phases/README.md`。
 
@@ -37,34 +37,26 @@
 
 ---
 
-## 3. 下一步：阶段 3 — 构建链合并重构
+## 3. 当前与下一步：阶段 4 — 现有功能修复（🚧 进行中）
 
-**问题**（阶段 2 收尾时发现，已打桩验证可行）：
-1. `workflow-host.mjs` 是「12 源模块同步副本 + 2 段手编区」的混合体，靠 `sync-modules.js` 人工同步维持（历史多次因漏同步翻车）；
-2. 单测入口依赖 mjs 而非真实交付物 `lib/index.js`；
-3. 现役 `lib/index.js` 存在**导出面被篡改**缺陷：源模块尾部的条件导出块未剥离，`apply()` 执行后 `module.exports` 被最后一个 section 覆盖（`name/inject/apply` 丢失）。
+> 阶段 3 已完成归档：`phases/phase-3-build-chain/README.md`（构建链合并 / 单包化 / 资产与 persona 文件化 / 发行工具 / 实物验收）。
 
-**方案**（可行性已用原型验证，见阶段 3 设计文档）：
-- 抽取 2 段手编区为真实源文件 → 单一生成器直接从源模块产出 CJS 交付物 → mjs 降级为生成物或取消；
-- 单测改为对准真实产物；消除同步纪律。
+**定位**（用户拍板 2026-09-16）：修复现有功能问题，**不增加新工作流能力**——真 skill 使用 / output→input 串联 / 变量引用 → 阶段 5。
+**输入**：全功能人工验证（[`phases/phase-4-ui-enhance/verification-checklist.md`](phases/phase-4-ui-enhance/verification-checklist.md)：39 过 / 3 未过 / 7 无法构造 / 2 部分）开单 8 缺陷 + 6 改进项，已全部完成代码级根因分诊。
+**方案**：[`phases/phase-4-ui-enhance/plan.md`](phases/phase-4-ui-enhance/plan.md)（v6，**11 个聚焦迭代**，后台 → 前台 → UI 交互排序；阶段合计约 7 人天）：
 
-**方案**：[`phases/phase-3-build-chain/plan.md`](phases/phase-3-build-chain/plan.md)（**6 个决策点已全部拍板**：模块作用域 / dist 生成物入库且开关可选 / 3c 发行工具纳入本阶段 / 3d 独立迭代先验证 / legacy 代码集中 `code/legacy/` / host 0.22.0 + client 0.9.2）。
-**进展**：3a（构建链合并）+ 3b（legacy 集中归档）+ 3c（发行工具 `build-release.js` + `install.js`）全部完成；执行中修复缺陷 #7（面板 Stop 空闲主会话不停子会话 → v4 叠加式级联：cancel + 全量枚举 + drain 硬释放 + 逐子 interrupt），用户 GUI 验收通过。
-**收尾产物**：`phases/phase-3-build-chain/README.md`；报告 `phases/phase-3-build-chain/iterations/iter-build-chain-report.md`。
-**扩展（2026-09-15 用户指令）**：✅ 全部完成——3e 单包合并（v0.23.0 单包双端：Host main + `dsh.client` 面板 bundle；双行子路径方案因 bundle 注册 id 必须为包名而修订为单行）、3f 内建资产文件化（`builtin-assets/` 真实文件随包 + 物化复制语义）、3g persona 文件化（`persona-file.mjs` 运行时读 `system-prompt.md`，`sync-persona.js` 退役）、3h npm 发布元数据（暂不发布）、3i build.mjs 改名。
-**实物验收（三步）**：构建 tgz → **全量清除零残留（用户审核通过，重启后 GUI 零 workflow 内容）** → tarball 重装（六点核验通过）→ **基本工作流操作正常（用户确认）**。过程中修复 3 起部署异常（bundle 注册 id、安装器 preset 清单缺 persona-file.mjs、persona-file.mjs inject 未导出），详见迭代报告 §10。
-**阶段 4**：workflow-agent 功能增强（原 Iter-31 backlog：节点详情面板/交互增强/主题适配等），**不再处理构建打包问题**。可选增强（未排期）：部署期清单自动校验（install 后自检）。
-`development-plan.md`（阶段 1 详案）已归档，新阶段计划按 `plan/development/iteration-plan-template.md` 撰写。
+| 迭代 | 主题 | 状态 |
+|---|---|---|
+| Iter-31 | 面板控制指令语义（reset 停 PENDING + stopHint 移除） | 🚧 进行中 |
+| Iter-32 | 验证测试资产与补验（预置测试工作流模板 + 校验样例） | 待启动 |
+| Iter-33 | 实例完整性与采纳关口（不完整实例拒绝正常采纳 + CREATED 明示） | 待启动 |
+| Iter-34 | 门禁真实执行（诊断先行；复用 Iter-32 verify-gate 模板） | 待启动 |
+| Iter-35 ~ 37 | 定义全文编辑 / 编辑器表单补全 / 全局参数编辑 | 待启动 |
+| Iter-38 ~ 41 | 页签动态门控 / RUNNING 运行视觉 / 节点详情与文件预览 / 主题适配 | 待启动 |
+
+**已拍板关键决策**：reset 后停留 PENDING 等用户手动 Start（注入文案改纯通知）；stopHint 提示条移除（Stop v4 后两通道等效）；采纳关口校验（缺失文件/不完整实例不允许正常采纳）；补验项独立成迭代并预置测试模板；详情+预览方案待全文编辑（Iter-35）效果评估后确定；Iter-31 = host **v0.24.0**。
 
 ---
-
-### 阶段 4 候选（已立项方向，先验证后实施）
-
-| 候选 | 内容 | 前置验证（探针，4 项） |
-|---|---|---|
-| **persona 文件化** | 用 preset 本地插件（`persona-file.mjs`）经 `systemPrompt` 服务运行时读取 `system-prompt.md`，替换 `dsh-persona` 行；删除 `sync-persona.js` 与 `agent.cordis.yml` 中 240 行内联块 | ① preset 作用域内 `inject:['systemPrompt']` 与 `ctx.get('fs')` 可用 ② `apply` 是否支持 async（否则改用 `system-prompt/assemble` 瀑布）③ 同级文件路径解析（`import.meta.url`）④ 惰性 `text` provider 与 `{{}}` 插值行为 |
-
-> 触发条件：阶段 3 收尾后启动；探针全部通过才实施（团队约定 §A4「先打桩验证新模式」）。
 
 ## 4. 已知限制（明确不做，留档）
 

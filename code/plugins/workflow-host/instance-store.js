@@ -967,8 +967,8 @@ function createInstanceRegistry(ctx, deps) {
     deleteArchive,    // Iter-29：删除归档（/wf/delete-archive）
     syncInstanceState,
     handleSessionUserStop, // Iter-23(A1)：mjs session/event tap 调用
-    isAgentRunning,        // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
-    listRunningChildren,   // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
+    isAgentRunning,        // 判活（池自愈/孤儿回收内部用；原 Iter-23(A3) stopHint 已于 Iter-31 移除）
+    listRunningChildren,   // 子会话枚举（停止级联/自愈内部用；原 stopHint 用途已于 Iter-31 移除）
     get,
     activeIdFor,
     sessionIdOf,

@@ -97,7 +97,8 @@ function applyInternal(ctx) {
   // Iter-23(A1)：session/event 全局事件 tap——绑定会话回合被"用户中止"（UI 停止按钮 →
   // sessions.cancel → 回合 aborted(user)，探针实证唯一可读的权威停止信号）→ 即时权威停止：
   // wf STOPPED(user-stop) + 级联 interrupt 子会话。fire-and-return；幂等（非 RUNNING/未绑定跳过）。
-  // Case I（agent 空闲时停）零痕迹不触发本 tap——由 A3 面板提示条覆盖（/wf/list stopHint）。
+  // Case I（agent 空闲时停）零痕迹不触发本 tap——原由 A3 面板提示条覆盖；Iter-31（D3）该提示
+  // 已随 stopHint 一并移除（Stop v4 后两通道等效，用户真机验证通过），Case I 无提示为预期行为。
   const offUserAbortTap = (() => {
     try {
       if (typeof ctx.on !== 'function') return null

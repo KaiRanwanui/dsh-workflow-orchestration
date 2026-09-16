@@ -660,7 +660,10 @@ async function runCase15() {
   const healedState = JSON.parse(files.get(cwd + '/.workflow-agent/instances/' + poll.instanceId + '/state.json'))
   check('S3 自愈(D4): 磁盘 state.json 已落盘 STOPPED 且保 DONE', healedState.stage === 'STOPPED' && healedState.tasks.some(t => t.id === 'b' && t.status === 'DONE'), healedState.stage)
 
-  // 3c) Iter-22(S4)：/wf/reset 注入"已重置"通知（queue 模式，含全新运行语义文案）
+  // 3c) Iter-22(S4)：/wf/reset 注入"已重置"通知（queue 模式）。
+  // Iter-31（用户 D2 拍板）语义修订：reset 停留 PENDING 等用户手动 Start——文案必须含
+  // "已重置至 PENDING" + "等待用户发出启动指令"，且不得再含旧"按全新工作流继续执行"续跑指示；
+  // 清理契约（extraText/pendingCleanup）仍随行。
   // 0.1.5 迁移：apiProxy.sessions.prompt → sessionController.prompt（requestId 拍平、返回 {accepted:true}）
   const promptCalls = []
   ctx2.get = (n) => {
@@ -673,7 +676,7 @@ async function runCase15() {
   const lastPrompt = promptCalls[promptCalls.length - 1]
   const lastText = lastPrompt && Array.isArray(lastPrompt.content) && lastPrompt.content[0] ? lastPrompt.content[0].text : ''
   check('S4 /wf/reset: 状态重置为 PENDING + 注入已重置消息', rr.code === 200 && rr.body.stage === 'PENDING' && rr.body.messageInjected === true, JSON.stringify({ code: rr.code, stage: rr.body.stage, mi: rr.body.messageInjected, error: rr.body.error }))
-  check('S4 /wf/reset: 注入文案含"已重置"+全新运行语义 + queue', /已重置/.test(lastText) && /全新工作流/.test(lastText) && lastPrompt.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.mode, text: String(lastText).slice(0, 80) }))
+  check('S4 /wf/reset: 文案含"已重置至 PENDING"+"等待启动指令"、无续跑指示、含清理契约 + queue', /已重置至 PENDING/.test(lastText) && /等待用户发出启动指令/.test(lastText) && !/按全新工作流继续执行/.test(lastText) && /清理契约/.test(lastText) && lastPrompt.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.mode, text: String(lastText).slice(0, 80) }))
 
   // 4) forSession 根修复：未绑定会话 → undefined（绝不取工作区最新实例）；已绑定 → 返回本会话实例
   const r1 = await registry.forSession({ agent: { session: { header: { id: 'sess-zzz', cwd } } } })

@@ -104,7 +104,8 @@ function applyInternal(ctx) {
   // Iter-23(A1)：session/event 全局事件 tap——绑定会话回合被"用户中止"（UI 停止按钮 →
   // sessions.cancel → 回合 aborted(user)，探针实证唯一可读的权威停止信号）→ 即时权威停止：
   // wf STOPPED(user-stop) + 级联 interrupt 子会话。fire-and-return；幂等（非 RUNNING/未绑定跳过）。
-  // Case I（agent 空闲时停）零痕迹不触发本 tap——由 A3 面板提示条覆盖（/wf/list stopHint）。
+  // Case I（agent 空闲时停）零痕迹不触发本 tap——原由 A3 面板提示条覆盖；Iter-31（D3）该提示
+  // 已随 stopHint 一并移除（Stop v4 后两通道等效，用户真机验证通过），Case I 无提示为预期行为。
   const offUserAbortTap = (() => {
     try {
       if (typeof ctx.on !== 'function') return null
@@ -3182,8 +3183,8 @@ function createInstanceRegistry(ctx, deps) {
     deleteArchive,    // Iter-29：删除归档（/wf/delete-archive）
     syncInstanceState,
     handleSessionUserStop, // Iter-23(A1)：mjs session/event tap 调用
-    isAgentRunning,        // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
-    listRunningChildren,   // Iter-23(A3)：/wf/list stopHint 判定（webserver 路由用）
+    isAgentRunning,        // 判活（池自愈/孤儿回收内部用；原 Iter-23(A3) stopHint 已于 Iter-31 移除）
+    listRunningChildren,   // 子会话枚举（停止级联/自愈内部用；原 stopHint 用途已于 Iter-31 移除）
     get,
     activeIdFor,
     sessionIdOf,
@@ -5003,22 +5004,10 @@ function registerWebRoutes(ctx, registry) {
             it.poolNote = '未启动'
           }
         }
-        // Iter-23(A3)：Case I 停止无效提示——本会话绑定实例 RUNNING + 主会话 agent 空闲 + 有 running
-        // 子会话。该状态下"会话内停止按钮"无效（探针 Case I 零痕迹），提示条引导用户用面板 Stop。
-        // 触发条件是状态组合而非点击事件（点击本身无信号）；状态解除后字段熄灭，提示条随之消失。
-        let stopHint = null
-        if (sessionId) {
-          try {
-            const boundRunning = instances.some((it) => it && it.sessionId === sessionId && it.phase === 'READY' && it.stage === 'RUNNING')
-            if (boundRunning && registry.isAgentRunning(sessionId) === false) {
-              const kids = await registry.listRunningChildren(sessionId)
-              if (kids && kids.length > 0) {
-                stopHint = { active: true, reason: 'session-idle-with-running-children', message: '编排会话空闲等待中：会话内的停止按钮此刻无效。后台任务执行中——要停止工作流请点面板 Stop' }
-              }
-            }
-          } catch (e) { stopHint = null }
-        }
-        writeJson(res, 200, { workspaceRoot: root, instances, sessionState: sessionState && sessionState.state ? sessionState : null, recoveredOrphans, stopHint })
+        // Iter-31（用户 D3 拍板）：stopHint 提示移除——Stop v4 后会话 UI 停止与面板 Stop 已等效
+        // （用户两时序真机验证通过），原 Iter-23(A3) Case I 提示失去存在前提；
+        // /wf/list 不再返回 stopHint 字段（旧客户端字段缺失时按 null 处理，兼容无害）。
+        writeJson(res, 200, { workspaceRoot: root, instances, sessionState: sessionState && sessionState.state ? sessionState : null, recoveredOrphans })
         return
       }
 
@@ -5558,7 +5547,9 @@ function registerWebRoutes(ctx, registry) {
               const subagents = ctx.get('subagents')
               const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
                 : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
-                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准，按全新工作流继续执行。${extraText ? '\n\n' + extraText : ''}`
+                // Iter-31（用户 D2 拍板）：reset 后停留 PENDING 等用户手动 Start——通知不得指示续跑；
+                // extraText（清理契约）仍需会话执行清理命令，清理完毕即待命。
+                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置至 PENDING（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准。请勿自行 begin 或启动工作流；清理契约（如有）执行完毕后即待命，等待用户发出启动指令。${extraText ? '\n\n' + extraText : ''}`
                 : `请继续工作流实例 ${instanceId}，工作区：${root}`
               // 停止是紧急指令：agent 正在执行任务，队列消息会等本轮结束——用 steer 打断当前轮让 LLM 尽快响应；
               // start/resume 在 agent 空闲/暂停时投递，用 queue。
@@ -5745,12 +5736,12 @@ function registerWebRoutes(ctx, registry) {
                 cmd: 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs'),
               }
               snap.resetNote = 'state reset; output/logs backed up to ' + backupDir + ', run pendingCleanup.cmd now'
-              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知——agent 确认并按全新工作流执行，
-              // 不复述/回溯旧状态（与 stop/resume 注入同模式；queue 投递，reset 时 agent 通常空闲）。
-              // Iter-26：通知必须携带 pendingCleanup.cmd（fs 无删除 API，清空由会话 bash 执行——
-              // 固定文案不含命令会导致 agent 无从清理、旧产物残留）。
+              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递，reset 时 agent 通常空闲）。
+              // Iter-31（用户 D2 拍板）：通知改纯告知——reset 停留 PENDING 等用户手动 Start，不再指示
+              // "按全新工作流继续执行"；pendingCleanup 清理契约仍随行（Iter-26：fs 无删除 API，清空由
+              // 会话 bash 执行），但明确"仅清理、不含启动指令"。
               const injReset = await injectSessionCmd(args, root, instanceId, 'reset',
-                '[清理契约] 实例 output/logs 产物已归档备份至 ' + backupDir + '，请立即用 bash 执行以下命令清空后再推进：\n' + snap.pendingCleanup.cmd)
+                '[清理契约] 实例 output/logs 产物已归档备份至 ' + backupDir + '，请立即用 bash 执行以下命令清空（仅清理，不含启动指令）：\n' + snap.pendingCleanup.cmd)
               snap.messageInjected = injReset.messageInjected
               if (injReset.error) snap.messageInjectionError = injReset.error
               writeJson(res, 200, snap)
