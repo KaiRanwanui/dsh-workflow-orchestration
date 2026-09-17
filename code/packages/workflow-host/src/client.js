@@ -227,13 +227,17 @@ export function register(ctx) {
       }
 
       // Iter-35：技能全文只读浏览（GET /wf/skill；skills 不物化进实例，仅浏览不编辑）
+      // v0.26.7 修正：下拉值是相对路径（skills/<名>/SKILL.md）——/wf/skill 的 fs.resolve
+      // 相对解析不到，须拼 workspaceRoot 成绝对路径（已是绝对路径则原样）
       const openSkillView = (p) => {
         if (!p) return
-        setSkillView({ path: p, text: null, err: null })
-        fetch('/wf/skill?path=' + encodeURIComponent(p))
+        const isAbs = p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)
+        const abs = isAbs ? p : String(workspaceRoot || '').replace(/\/+$/, '') + '/' + p
+        setSkillView({ path: abs, text: null, err: null })
+        fetch('/wf/skill?path=' + encodeURIComponent(abs))
           .then(r => r.json())
-          .then(r => setSkillView({ path: p, text: r && r.text, err: r && r.error ? r.error : '' }))
-          .catch(e => setSkillView({ path: p, text: null, err: e && e.message ? e.message : String(e) }))
+          .then(r => setSkillView({ path: abs, text: r && r.text, err: r && r.error ? r.error : '' }))
+          .catch(e => setSkillView({ path: abs, text: null, err: e && e.message ? e.message : String(e) }))
       }
 
       const inputStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 5, padding: '3px 7px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
@@ -392,6 +396,9 @@ export function register(ctx) {
           React.createElement('div', { key: 'src', style: { display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 380 } }, [
             React.createElement('div', { key: 'hint', style: { fontSize: 11, color: '#9ca3af' } },
               'YAML 源码（instance.yaml 定义全文；顶部注释头保留）。保存走语义校验关口：errors 非空不落盘。'),
+            // Iter-35 修复（v0.26.7）：校验/保存结果区在源码态同样渲染（首版只在表单态渲染，
+            // 保存失败时用户看不到错误清单）
+            valResEl,
             React.createElement('textarea', {
               key: 'ta', value: srcText, spellCheck: false,
               readOnly: dis(editable.definition),
