@@ -1754,8 +1754,19 @@ function lgAggStatus(items) {
               formOverlay,
             adoptOverlay,
               mgmtView ? mgmtView : React.createElement('div', {
-                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)' }
-              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...'))
+                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)', flexDirection: 'column', gap: 6, textAlign: 'center', padding: 16 }
+              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (function () {
+                // Iter-33（缺陷 #3）：绑定实例 phase=CREATED（有目录无 state.json，begin 未完成）→
+                // 明示状态与出路，替代无差别的 "Waiting for workflow..." 永久等待
+                const boundCreated = (wfInstances || []).find(it => it && it.sessionId === wfSessionId && it.phase === 'CREATED')
+                if (boundCreated) {
+                  return [
+                    React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#e2e8f0' } }, '实例已创建未启动（CREATED）· ' + String(boundCreated.instanceId).slice(-8)),
+                    React.createElement('div', { key: 'd', style: { fontSize: 12 } }, '定义尚未执行。点击「启动」开始执行；若实例异常，可通过「管理」归档清理。'),
+                  ]
+                }
+                return (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...')
+              })())
             )
           }
 

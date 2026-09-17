@@ -235,7 +235,8 @@ function registerWebRoutes(ctx, registry) {
             else if (it.stage === 'RUNNING') it.poolNote = '运行中（异常残留，不可采用）'
           } else if (it.sessionId === null || it.sessionId === undefined) {
             it.adoptable = true
-            it.poolNote = '未启动'
+            // Iter-33：CREATED（有目录无 state.json）池内轻量标注；完整校验在 adopt 点击时执行
+            it.poolNote = it.phase === 'CREATED' ? '已创建未启动（采纳时校验完整性）' : '未启动'
           }
         }
         // Iter-31（用户 D3 拍板）：stopHint 提示移除——Stop v4 后会话 UI 停止与面板 Stop 已等效
@@ -761,13 +762,23 @@ function registerWebRoutes(ctx, registry) {
             if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
             
             // 辅助函数：展开实例定义（从 instance.yaml 读取并解析）
+            // Iter-33（缺陷 #11）：原简化版 expandInstanceDef（仅 text+base+params）缺 wfDir/defDir/
+            // workspaceRoot 上下文，静态引用（items-from/inputs）解析退化到预定义根 → 面板 reset 对
+            // 引用模板静态文件的实例必失败（verify-empty-items 实证）。此处按编排侧 reset 工具同源
+            // 语义做完整展开（expandInstanceDefinition 嵌套于 tools-preset 子作用域不可跨段引用，
+            // 故用段级原语等价实现；所需符号均为 0 缩进段级定义，可见性经核实）：
+            // wfDir（实例目录）+ defDir（模板子目录锚点）+ workspaceRoot 全量 + finalizeDataflow
+            // （阶段 2 数据流注入）+ inputs 物化。简化版删除（唯一使用点已替换）。
             async function expandInstanceDef(entry) {
               const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
               const text = stripInstanceHeader(raw)
               const params = (entry.meta && entry.meta.params) || {}
-              const sp = entry.meta && entry.meta.sourcePath
-              const base = (sp && sp !== '(inline workflowText)') ? sp.replace(/[\\/][^\\/]*$/, '') : undefined
-              return expandDefinition(fs, { text, base }, params)
+              const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
+              const defDir = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe()) || undefined
+              const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params, { wfDir: entry.dir, defDir })
+              parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
+              parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
+              return parsed
             }
             
             // Iter-21：面板控制统一经 session 注入指令（与 Start 一致——此前 Stop/Resume 只改实例态而 session 不感知，导致按钮"无效"）
@@ -963,19 +974,31 @@ function registerWebRoutes(ctx, registry) {
               snap.resetBackup = backupDir
               // Iter-26（重置重来拍板）：备份后清空 output/logs。fs 服务无删除 API →
               // 返回 pendingCleanup 命令，由编排会话按 persona 契约立即用 bash 执行。
+              // Iter-33（用户拍板「reset 语义=从模板全新建立」）：清空范围扩展到 inputs/——
+              // 运行期物化残留（上游产物副本）一并清除；有模板来源（defDir 锚点 + 模板子目录
+              // 存在 inputs/）时用 cp -r 恢复模板初始 inputs；inline/手工实例退化为仅清 output/logs。
               const q21 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+              const nfz33 = require('node:fs')
+              const defDir33 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
+              const tplInputs33 = defDir33 ? defDir33 + '/inputs' : null
+              const hasTplInputs33 = !!(tplInputs33 && nfz33.existsSync(tplInputs33))
+              let cmd33 = 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
+                + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
+              if (hasTplInputs33) cmd33 += ' && cp -R ' + q21(tplInputs33 + '/.') + ' ' + q21(entry.dir + '/inputs/')
               snap.pendingCleanup = {
                 outputDir: entry.dir + '/output',
                 logsDir: entry.dir + '/logs',
-                cmd: 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs'),
+                inputsDir: entry.dir + '/inputs',
+                inputsRestoredFrom: hasTplInputs33 ? tplInputs33 : null,
+                cmd: cmd33,
               }
-              snap.resetNote = 'state reset; output/logs backed up to ' + backupDir + ', run pendingCleanup.cmd now'
+              snap.resetNote = 'state reset; instance dir (output/logs/inputs) backed up to ' + backupDir + ', run pendingCleanup.cmd now'
               // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递，reset 时 agent 通常空闲）。
               // Iter-31（用户 D2 拍板）：通知改纯告知——reset 停留 PENDING 等用户手动 Start，不再指示
               // "按全新工作流继续执行"；pendingCleanup 清理契约仍随行（Iter-26：fs 无删除 API，清空由
               // 会话 bash 执行），但明确"仅清理、不含启动指令"。
               const injReset = await injectSessionCmd(args, root, instanceId, 'reset',
-                '[清理契约] 实例 output/logs 产物已归档备份至 ' + backupDir + '，请立即用 bash 执行以下命令清空（仅清理，不含启动指令）：\n' + snap.pendingCleanup.cmd)
+                '[清理契约] 实例 output/logs/inputs 已归档备份至 ' + backupDir + (hasTplInputs33 ? '，inputs 将从模板初始内容恢复' : '') + '，请立即用 bash 执行以下命令（仅清理与恢复，不含启动指令）：\n' + snap.pendingCleanup.cmd)
               snap.messageInjected = injReset.messageInjected
               if (injReset.error) snap.messageInjectionError = injReset.error
               writeJson(res, 200, snap)
@@ -998,6 +1021,34 @@ function registerWebRoutes(ctx, registry) {
             
             if (action === 'adopt') {
               if (!args.sessionId) { writeJson(res, 400, { error: 'adopt 须带 sessionId' }); return }
+              // Iter-33（用户 D4 拍板）：采纳关口——可用性校验。「缺失文件/定义不完整导致采纳后
+              // 无法使用」的实例不允许正常采纳（400 + 结构化原因）；RUNNING 沿用 adoptInstance 内部拒绝。
+              // validateInstanceEntry 嵌套于 tools-preset 子作用域不可跨段引用 → 段级原语等价实现。
+              const gateRaw33 = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+              const gateParsed33 = E_parseWorkflow(stripInstanceHeader(gateRaw33))
+              const gateMeta33 = entry.meta || {}
+              let gateErrs33 = gateParsed33.errors || []
+              if (gateErrs33.length === 0) {
+                const gateDefDir33 = E_presetTemplateDirOf(gateMeta33.sourcePath, detectPredefinedRootSafe()) || undefined
+                const gateVRes33 = await E_validateWorkflow({
+                  parsed: gateParsed33,
+                  params: gateMeta33.params || {},
+                  workspaceRoot: gateMeta33.sessionCwd || undefined,
+                  predefinedRoot: detectPredefinedRootSafe(),
+                  defDir: gateDefDir33,
+                  wfDir: entry.dir,
+                  context: 'instance',
+                  fs,
+                })
+                gateErrs33 = gateVRes33.errors || []
+              }
+              if (gateErrs33.length > 0) {
+                writeJson(res, 400, {
+                  error: '实例不完整，拒绝采纳（' + gateErrs33.length + ' 项）: ' + gateErrs33.map(E_formatValidationItem).join('；'),
+                  errors: gateErrs33,
+                })
+                return
+              }
               const adopted = await registry.adoptInstance(root, args.sessionId, instanceId)
               const snap = adopted.engine.snapshot()
               snap.instanceId = adopted.instanceId

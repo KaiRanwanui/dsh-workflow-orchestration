@@ -396,7 +396,7 @@ async function runCase13() {
     tools: { register(t) { bag[t.name] = t } },
     get(n) { if (n === 'fs') return mockFs; if (n === 'tools') return { register(t) { bag[t.name] = t } }; return undefined },
   })
-  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive }
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, sessionExists: (sid) => live.has(sid) }
   const registry = createInstanceRegistry(ctx(registered), deps)
   registerWorkflowToolsPreset(ctx(registered), null, null, registry)
 
@@ -475,7 +475,7 @@ async function runCase14() {
   const isSessionLive = (sid) => live.has(sid)
   const isAgentRunning = (sid) => runningAgents.has(sid)
   const isAgentPending = (sid) => pendingAgents.has(sid)
-  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning, isAgentPending }
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive, sessionExists: (sid) => live.has(sid), isAgentRunning, isAgentPending }
   const registered = {}
   const ctx = (bag) => ({
     tools: { register(t) { bag[t.name] = t } },
@@ -575,7 +575,7 @@ async function runCase15() {
   const live = new Set(['sess-a'])
   const runningAgents = new Set(['sess-a'])
   const pendingAgents = new Set()
-  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive: (s) => live.has(s), isAgentRunning: (s) => runningAgents.has(s), isAgentPending: (s) => pendingAgents.has(s) }
+  const deps = { createWorkflowEngine, createWorkflowStorage, isSessionLive: (s) => live.has(s), sessionExists: (s) => live.has(s), isAgentRunning: (s) => runningAgents.has(s), isAgentPending: (s) => pendingAgents.has(s) }
   const registry = createInstanceRegistry({ get() { return mockFs } }, deps)
   const cwd = '/ws/c15'
 
@@ -2892,6 +2892,34 @@ async function runCase26() {
     check('c32: 并发组 id 依赖同语义放行', r4.length === 1 && r4[0].id === 'after3', r4.map(t => t.id).join(','))
   }
 
+  // ── 用例 33：孤儿判定对照 — 会话「存在 vs 驻留」分离（Iter-33 缺陷 #9）──
+  // 旧缺口：mock 把「已删除」等同于「sessions.get 无返回」，从未模拟「存在但未驻留」
+  // （真实重启/关会话形态）→ 误回收在全绿测试下漏网。现 mock 拆两集合做对照断言。
+  async function runCase33() {
+    console.log('［用例 33］孤儿判定对照 — 存在 vs 驻留分离（缺陷 #9）')
+    const { fs: mockFs } = makeMockFs()
+    const existing = new Set(['sess-keep', 'sess-dead']) // 持久化存在的会话（sessionQuery.listSessions 语义）
+    const resident = new Set(['sess-keep'])              // 当前驻留（打开）的会话（sessions.get 语义）
+    const deps = {
+      createWorkflowEngine, createWorkflowStorage,
+      sessionExists: async (sid) => existing.has(sid),
+      isSessionLive: (sid) => resident.has(sid),
+    }
+    const registry = createInstanceRegistry({ get() { return mockFs } }, deps)
+    const cwd = '/ws/c33'
+    const inst = await registry.beginInstance({ cwd, sessionId: 'sess-keep', workflowName: 'w33', sourceText: 'name: w33\n', sourcePath: null, params: {} })
+    // 形态 A：会话存在但未驻留（模拟重启后未打开）→ 不得回收（#9 回归锁死）
+    resident.delete('sess-keep')
+    let orphans = await registry.scanOrphans(cwd)
+    check('c33: 会话存在未驻留 → 不回收（#9 回归）', orphans.length === 0, JSON.stringify(orphans))
+    // 形态 B：会话已删除（不在持久化库）→ 回收
+    existing.delete('sess-keep')
+    orphans = await registry.scanOrphans(cwd)
+    check('c33: 会话已删除 → 识别为孤儿', orphans.length === 1 && orphans[0].id === inst.instanceId, JSON.stringify(orphans))
+    const rec = await registry.recoverOrphan(cwd, inst.instanceId)
+    check('c33: 回收后解绑回池', !rec.meta.sessionId, JSON.stringify(rec.meta.sessionId))
+  }
+
     // ── 用例 8：实例注册表（Iter-10）──
     await runCase8()
     // ── 用例 9：实例操控工具（Iter-11）──
@@ -2932,6 +2960,8 @@ async function runCase26() {
     await runCase31()
     // ── 用例 32：静态循环组下游放行（Iter-32 补验缺陷 #10）──
     await runCase32()
+    // ── 用例 33：孤儿判定对照（Iter-33 缺陷 #9）──
+    await runCase33()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

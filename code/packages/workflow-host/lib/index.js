@@ -25,6 +25,25 @@ function applyInternal(ctx) {
     if (!sessions || typeof sessions.get !== 'function') return true
     return !!(sid && sessions.get(sid))
   }
+  // Iter-33（缺陷 #9）：会话「存在性」判定——与驻留语义分离。
+  // 探针结论（iter-33-probe）：sessions.get/list 均为 live（驻留）语义，无法回答
+  // 「会话存在但未打开」；持久化会话索引用 sessionQuery 服务（web profile 经
+  // session-query-sqlite 挂载，官方 api-session-controller 以 ctx.sessionQuery 消费）：
+  // listSessions(): Promise<SessionRecord[]> 覆盖含未驻留在内的全部持久化会话。
+  // 孤儿判定改用 sessionExists：listSessions 成员资格（驻留命中走快路径）；
+  // 服务不可用/查询异常 → 保守返回 true（宁可漏回收，不可误回收——#9 实证误回收代价大）。
+  const sessionQuery = ctx.get('sessionQuery')
+  const sessionExists = async (sid) => {
+    if (!sid) return false
+    if (sessions && typeof sessions.get === 'function' && sessions.get(sid)) return true
+    if (!sessionQuery || typeof sessionQuery.listSessions !== 'function') return true
+    try {
+      const records = await sessionQuery.listSessions()
+      return (records || []).some((r) => r && (r.id === sid || r.sessionId === sid))
+    } catch (e) {
+      return true
+    }
+  }
   // Iter-19：注入会话 agent 运行判定（Session 启停同步用；agents.get(sid).status === 'running'）
   const agents = ctx.get('agents')
   const isAgentRunning = (sid) => {
@@ -88,7 +107,7 @@ function applyInternal(ctx) {
       return detectUserAbortFromLog(log)
     } catch (e) { return undefined }
   }
-  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning, isAgentPending, listRunningChildren, interruptChild, detectUserAbort })
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, sessionExists, isAgentRunning, isAgentPending, listRunningChildren, interruptChild, detectUserAbort })
   // 单实例兼容绑定（显式 statePath/workspaceRoot 参数或无会话上下文时回退）
   const engine = createWorkflowEngine()
   const storage = createWorkflowStorage(ctx, engine)
@@ -2355,6 +2374,9 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-18：会话存活判定（孤儿识别依赖）。生产由 apply 注入 sessions 服务包装，
   // 测试注入可控 stub；缺省恒 true（不误判孤儿，保持既有行为）。
   const isSessionLive = typeof deps.isSessionLive === 'function' ? deps.isSessionLive : (() => true)
+  // Iter-33（缺陷 #9）：会话「存在性」（持久化库成员资格，含未驻留）——孤儿判定专用。
+  // 缺省恒 true（服务不可用 → 保守不回收：宁可漏回收，不可误回收）。
+  const sessionExists = typeof deps.sessionExists === 'function' ? deps.sessionExists : (async () => true)
   // Iter-19：会话 agent 是否运行中（Session 启停同步依赖）。生产由 apply 注入 agents 服务包装；
   // 缺省返回 undefined（无法判定 → 不触发同步，保持既有行为）。
   const isAgentRunning = typeof deps.isAgentRunning === 'function' ? deps.isAgentRunning : (() => undefined)
@@ -2880,7 +2902,9 @@ function createInstanceRegistry(ctx, deps) {
     const orphans = []
     for (const inst of integ.instances) {
       const sid = inst.meta.sessionId
-      if (sid && !isSessionLive(sid)) orphans.push({ id: inst.id, sessionId: sid })
+      // Iter-33（缺陷 #9）：孤儿判定改用「存在性」（持久化库成员资格，含未驻留会话）——
+      // 旧 isSessionLive（驻留语义）把「存在但未打开」误判为死会话，重启/关会话后批量误解绑。
+      if (sid && !(await sessionExists(sid))) orphans.push({ id: inst.id, sessionId: sid })
     }
     return orphans
   }
@@ -2891,7 +2915,8 @@ function createInstanceRegistry(ctx, deps) {
     if (!entry) throw new Error('实例不存在: ' + instanceId)
     const sid = entry.meta.sessionId
     if (!sid) throw new Error('实例 ' + instanceId + ' 无绑定，非孤儿')
-    if (isSessionLive(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
+    // Iter-33（缺陷 #9）：守卫同步改用「存在性」判定（见 scanOrphans 注释）
+    if (await sessionExists(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
     // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
     // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
     try {
@@ -3044,8 +3069,10 @@ function createInstanceRegistry(ctx, deps) {
     }
     if (!stage) stage = 'CREATED'
     if (stage === 'RUNNING') throw new Error('实例运行中，须先停止再归档')
-    if (stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
-      throw new Error('实例阶段 ' + stage + ' 无执行内容，不支持归档（仅 STOPPED/COMPLETED/FAILED）')
+    // Iter-33（缺陷 #3）：CREATED 允许归档——此前门禁不含 CREATED，创建后未启动/卡死的实例
+    // 既无法渲染也无清理出口（44d0d90b 场景实证）。CREATED 有目录+definition，备份语义完整。
+    if (stage !== 'CREATED' && stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
+      throw new Error('实例阶段 ' + stage + ' 不支持归档（仅 CREATED/STOPPED/COMPLETED/FAILED；RUNNING 须先停止）')
     }
     const meta = await tryReadMeta(cwd, iid)
     if (!meta) throw new Error('实例不存在或 metadata 损坏: ' + iid)
@@ -5012,7 +5039,8 @@ function registerWebRoutes(ctx, registry) {
             else if (it.stage === 'RUNNING') it.poolNote = '运行中（异常残留，不可采用）'
           } else if (it.sessionId === null || it.sessionId === undefined) {
             it.adoptable = true
-            it.poolNote = '未启动'
+            // Iter-33：CREATED（有目录无 state.json）池内轻量标注；完整校验在 adopt 点击时执行
+            it.poolNote = it.phase === 'CREATED' ? '已创建未启动（采纳时校验完整性）' : '未启动'
           }
         }
         // Iter-31（用户 D3 拍板）：stopHint 提示移除——Stop v4 后会话 UI 停止与面板 Stop 已等效
@@ -5538,13 +5566,23 @@ function registerWebRoutes(ctx, registry) {
             if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
             
             // 辅助函数：展开实例定义（从 instance.yaml 读取并解析）
+            // Iter-33（缺陷 #11）：原简化版 expandInstanceDef（仅 text+base+params）缺 wfDir/defDir/
+            // workspaceRoot 上下文，静态引用（items-from/inputs）解析退化到预定义根 → 面板 reset 对
+            // 引用模板静态文件的实例必失败（verify-empty-items 实证）。此处按编排侧 reset 工具同源
+            // 语义做完整展开（expandInstanceDefinition 嵌套于 tools-preset 子作用域不可跨段引用，
+            // 故用段级原语等价实现；所需符号均为 0 缩进段级定义，可见性经核实）：
+            // wfDir（实例目录）+ defDir（模板子目录锚点）+ workspaceRoot 全量 + finalizeDataflow
+            // （阶段 2 数据流注入）+ inputs 物化。简化版删除（唯一使用点已替换）。
             async function expandInstanceDef(entry) {
               const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
               const text = stripInstanceHeader(raw)
               const params = (entry.meta && entry.meta.params) || {}
-              const sp = entry.meta && entry.meta.sourcePath
-              const base = (sp && sp !== '(inline workflowText)') ? sp.replace(/[\\/][^\\/]*$/, '') : undefined
-              return expandDefinition(fs, { text, base }, params)
+              const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
+              const defDir = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe()) || undefined
+              const parsed = await expandDefinition(fs, { text, workspaceRoot: wsRoot }, params, { wfDir: entry.dir, defDir })
+              parsed.tasks = finalizeDataflow(parsed.tasks, { wfDir: entry.dir })
+              parsed.tasks = await materializeInputsIntoInstance(fs, parsed.tasks, entry.dir, wsRoot)
+              return parsed
             }
             
             // Iter-21：面板控制统一经 session 注入指令（与 Start 一致——此前 Stop/Resume 只改实例态而 session 不感知，导致按钮"无效"）
@@ -5740,19 +5778,31 @@ function registerWebRoutes(ctx, registry) {
               snap.resetBackup = backupDir
               // Iter-26（重置重来拍板）：备份后清空 output/logs。fs 服务无删除 API →
               // 返回 pendingCleanup 命令，由编排会话按 persona 契约立即用 bash 执行。
+              // Iter-33（用户拍板「reset 语义=从模板全新建立」）：清空范围扩展到 inputs/——
+              // 运行期物化残留（上游产物副本）一并清除；有模板来源（defDir 锚点 + 模板子目录
+              // 存在 inputs/）时用 cp -r 恢复模板初始 inputs；inline/手工实例退化为仅清 output/logs。
               const q21 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+              const nfz33 = require('node:fs')
+              const defDir33 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
+              const tplInputs33 = defDir33 ? defDir33 + '/inputs' : null
+              const hasTplInputs33 = !!(tplInputs33 && nfz33.existsSync(tplInputs33))
+              let cmd33 = 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
+                + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
+              if (hasTplInputs33) cmd33 += ' && cp -R ' + q21(tplInputs33 + '/.') + ' ' + q21(entry.dir + '/inputs/')
               snap.pendingCleanup = {
                 outputDir: entry.dir + '/output',
                 logsDir: entry.dir + '/logs',
-                cmd: 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs'),
+                inputsDir: entry.dir + '/inputs',
+                inputsRestoredFrom: hasTplInputs33 ? tplInputs33 : null,
+                cmd: cmd33,
               }
-              snap.resetNote = 'state reset; output/logs backed up to ' + backupDir + ', run pendingCleanup.cmd now'
+              snap.resetNote = 'state reset; instance dir (output/logs/inputs) backed up to ' + backupDir + ', run pendingCleanup.cmd now'
               // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递，reset 时 agent 通常空闲）。
               // Iter-31（用户 D2 拍板）：通知改纯告知——reset 停留 PENDING 等用户手动 Start，不再指示
               // "按全新工作流继续执行"；pendingCleanup 清理契约仍随行（Iter-26：fs 无删除 API，清空由
               // 会话 bash 执行），但明确"仅清理、不含启动指令"。
               const injReset = await injectSessionCmd(args, root, instanceId, 'reset',
-                '[清理契约] 实例 output/logs 产物已归档备份至 ' + backupDir + '，请立即用 bash 执行以下命令清空（仅清理，不含启动指令）：\n' + snap.pendingCleanup.cmd)
+                '[清理契约] 实例 output/logs/inputs 已归档备份至 ' + backupDir + (hasTplInputs33 ? '，inputs 将从模板初始内容恢复' : '') + '，请立即用 bash 执行以下命令（仅清理与恢复，不含启动指令）：\n' + snap.pendingCleanup.cmd)
               snap.messageInjected = injReset.messageInjected
               if (injReset.error) snap.messageInjectionError = injReset.error
               writeJson(res, 200, snap)
@@ -5775,6 +5825,34 @@ function registerWebRoutes(ctx, registry) {
             
             if (action === 'adopt') {
               if (!args.sessionId) { writeJson(res, 400, { error: 'adopt 须带 sessionId' }); return }
+              // Iter-33（用户 D4 拍板）：采纳关口——可用性校验。「缺失文件/定义不完整导致采纳后
+              // 无法使用」的实例不允许正常采纳（400 + 结构化原因）；RUNNING 沿用 adoptInstance 内部拒绝。
+              // validateInstanceEntry 嵌套于 tools-preset 子作用域不可跨段引用 → 段级原语等价实现。
+              const gateRaw33 = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+              const gateParsed33 = E_parseWorkflow(stripInstanceHeader(gateRaw33))
+              const gateMeta33 = entry.meta || {}
+              let gateErrs33 = gateParsed33.errors || []
+              if (gateErrs33.length === 0) {
+                const gateDefDir33 = E_presetTemplateDirOf(gateMeta33.sourcePath, detectPredefinedRootSafe()) || undefined
+                const gateVRes33 = await E_validateWorkflow({
+                  parsed: gateParsed33,
+                  params: gateMeta33.params || {},
+                  workspaceRoot: gateMeta33.sessionCwd || undefined,
+                  predefinedRoot: detectPredefinedRootSafe(),
+                  defDir: gateDefDir33,
+                  wfDir: entry.dir,
+                  context: 'instance',
+                  fs,
+                })
+                gateErrs33 = gateVRes33.errors || []
+              }
+              if (gateErrs33.length > 0) {
+                writeJson(res, 400, {
+                  error: '实例不完整，拒绝采纳（' + gateErrs33.length + ' 项）: ' + gateErrs33.map(E_formatValidationItem).join('；'),
+                  errors: gateErrs33,
+                })
+                return
+              }
               const adopted = await registry.adoptInstance(root, args.sessionId, instanceId)
               const snap = adopted.engine.snapshot()
               snap.instanceId = adopted.instanceId

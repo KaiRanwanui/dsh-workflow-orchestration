@@ -128,6 +128,9 @@ function createInstanceRegistry(ctx, deps) {
   // Iter-18：会话存活判定（孤儿识别依赖）。生产由 apply 注入 sessions 服务包装，
   // 测试注入可控 stub；缺省恒 true（不误判孤儿，保持既有行为）。
   const isSessionLive = typeof deps.isSessionLive === 'function' ? deps.isSessionLive : (() => true)
+  // Iter-33（缺陷 #9）：会话「存在性」（持久化库成员资格，含未驻留）——孤儿判定专用。
+  // 缺省恒 true（服务不可用 → 保守不回收：宁可漏回收，不可误回收）。
+  const sessionExists = typeof deps.sessionExists === 'function' ? deps.sessionExists : (async () => true)
   // Iter-19：会话 agent 是否运行中（Session 启停同步依赖）。生产由 apply 注入 agents 服务包装；
   // 缺省返回 undefined（无法判定 → 不触发同步，保持既有行为）。
   const isAgentRunning = typeof deps.isAgentRunning === 'function' ? deps.isAgentRunning : (() => undefined)
@@ -653,7 +656,9 @@ function createInstanceRegistry(ctx, deps) {
     const orphans = []
     for (const inst of integ.instances) {
       const sid = inst.meta.sessionId
-      if (sid && !isSessionLive(sid)) orphans.push({ id: inst.id, sessionId: sid })
+      // Iter-33（缺陷 #9）：孤儿判定改用「存在性」（持久化库成员资格，含未驻留会话）——
+      // 旧 isSessionLive（驻留语义）把「存在但未打开」误判为死会话，重启/关会话后批量误解绑。
+      if (sid && !(await sessionExists(sid))) orphans.push({ id: inst.id, sessionId: sid })
     }
     return orphans
   }
@@ -664,7 +669,8 @@ function createInstanceRegistry(ctx, deps) {
     if (!entry) throw new Error('实例不存在: ' + instanceId)
     const sid = entry.meta.sessionId
     if (!sid) throw new Error('实例 ' + instanceId + ' 无绑定，非孤儿')
-    if (isSessionLive(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
+    // Iter-33（缺陷 #9）：守卫同步改用「存在性」判定（见 scanOrphans 注释）
+    if (await sessionExists(sid)) throw new Error('实例 ' + instanceId + ' 绑定会话仍存活，非孤儿')
     // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
     // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
     try {
@@ -817,8 +823,10 @@ function createInstanceRegistry(ctx, deps) {
     }
     if (!stage) stage = 'CREATED'
     if (stage === 'RUNNING') throw new Error('实例运行中，须先停止再归档')
-    if (stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
-      throw new Error('实例阶段 ' + stage + ' 无执行内容，不支持归档（仅 STOPPED/COMPLETED/FAILED）')
+    // Iter-33（缺陷 #3）：CREATED 允许归档——此前门禁不含 CREATED，创建后未启动/卡死的实例
+    // 既无法渲染也无清理出口（44d0d90b 场景实证）。CREATED 有目录+definition，备份语义完整。
+    if (stage !== 'CREATED' && stage !== 'STOPPED' && stage !== 'COMPLETED' && stage !== 'FAILED') {
+      throw new Error('实例阶段 ' + stage + ' 不支持归档（仅 CREATED/STOPPED/COMPLETED/FAILED；RUNNING 须先停止）')
     }
     const meta = await tryReadMeta(cwd, iid)
     if (!meta) throw new Error('实例不存在或 metadata 损坏: ' + iid)

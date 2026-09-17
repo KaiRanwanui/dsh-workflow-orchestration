@@ -18,6 +18,25 @@ function applyInternal(ctx) {
     if (!sessions || typeof sessions.get !== 'function') return true
     return !!(sid && sessions.get(sid))
   }
+  // Iter-33（缺陷 #9）：会话「存在性」判定——与驻留语义分离。
+  // 探针结论（iter-33-probe）：sessions.get/list 均为 live（驻留）语义，无法回答
+  // 「会话存在但未打开」；持久化会话索引用 sessionQuery 服务（web profile 经
+  // session-query-sqlite 挂载，官方 api-session-controller 以 ctx.sessionQuery 消费）：
+  // listSessions(): Promise<SessionRecord[]> 覆盖含未驻留在内的全部持久化会话。
+  // 孤儿判定改用 sessionExists：listSessions 成员资格（驻留命中走快路径）；
+  // 服务不可用/查询异常 → 保守返回 true（宁可漏回收，不可误回收——#9 实证误回收代价大）。
+  const sessionQuery = ctx.get('sessionQuery')
+  const sessionExists = async (sid) => {
+    if (!sid) return false
+    if (sessions && typeof sessions.get === 'function' && sessions.get(sid)) return true
+    if (!sessionQuery || typeof sessionQuery.listSessions !== 'function') return true
+    try {
+      const records = await sessionQuery.listSessions()
+      return (records || []).some((r) => r && (r.id === sid || r.sessionId === sid))
+    } catch (e) {
+      return true
+    }
+  }
   // Iter-19：注入会话 agent 运行判定（Session 启停同步用；agents.get(sid).status === 'running'）
   const agents = ctx.get('agents')
   const isAgentRunning = (sid) => {
@@ -81,7 +100,7 @@ function applyInternal(ctx) {
       return detectUserAbortFromLog(log)
     } catch (e) { return undefined }
   }
-  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, isAgentRunning, isAgentPending, listRunningChildren, interruptChild, detectUserAbort })
+  const registry = createInstanceRegistry(ctx, { createWorkflowEngine, createWorkflowStorage, isSessionLive, sessionExists, isAgentRunning, isAgentPending, listRunningChildren, interruptChild, detectUserAbort })
   // 单实例兼容绑定（显式 statePath/workspaceRoot 参数或无会话上下文时回退）
   const engine = createWorkflowEngine()
   const storage = createWorkflowStorage(ctx, engine)
