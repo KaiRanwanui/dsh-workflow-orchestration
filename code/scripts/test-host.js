@@ -2264,9 +2264,11 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   check('fingerprint 含 login/order/payment', snap3.fingerprint.indexOf('module-review/login:PENDING') !== -1 &&
     snap3.fingerprint.indexOf('module-review/order:PENDING') !== -1)
 
-  engine3.updateTask('module-review/login', { status: 'DONE' })
+  // Iter-34：门禁任务 DONE 必须附带 gateResult（软强制护栏生效的正面用例）
+  engine3.updateTask('module-review/login', { status: 'DONE', gateResult: 'PASS', gateNote: '评审通过' })
   const snap4 = engine3.snapshot()
   check('updateTask 用展开 ID', snap4.tasks[0].status === 'DONE')
+  check('门禁任务 DONE 携带 gateResult/gateNote', snap4.tasks[0].gateResult === 'PASS' && snap4.tasks[0].gateNote === '评审通过')
 
   // ── 用例 5：循环错误处理（Iter-6：onError=break/continue + hydrate 元数据 + begin 清 logs） ──
   console.log('［用例 5］循环错误处理 — onError break/continue')
@@ -2392,7 +2394,8 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   eConc.updateTask('batch/order', { status: 'RUNNING' })
   check('concurrent: 2个RUNNING后组级占满', eConc.snapshot().runnable.length === 0)
 
-  eConc.updateTask('batch/login', { status: 'DONE' })
+  // Iter-34：门禁任务 DONE 附 gateResult（batch 迭代配置了 checker，软强制生效）
+  eConc.updateTask('batch/login', { status: 'DONE', gateResult: 'PASS', gateNote: '通过' })
   concR = eConc.snapshot().runnable
   check('concurrent: login DONE 后释放槽位启下一个', concR.length === 1 && concR[0].id === 'batch/payment', concR.map(t => t.id).join(','))
 
@@ -2920,6 +2923,42 @@ async function runCase26() {
     check('c33: 回收后解绑回池', !rec.meta.sessionId, JSON.stringify(rec.meta.sessionId))
   }
 
+  // ── 用例 34：门禁强制执行 — 软强制 + pendingGates（Iter-34 缺陷 #8 闭环）──
+  async function runCase34() {
+    console.log('［用例 34］门禁强制执行 — 软强制 + pendingGates（缺陷 #8）')
+    const mk = (id, gate) => ({ id, name: id, type: 'llm-task', processor: '/x/skills/a/SKILL.md', outputs: [], dependsOn: [], gate: gate || null })
+    const GATE = { checker: '/x/skills/never-pass/SKILL.md', onFailure: 'retry', maxRetries: 2 }
+    // 场景 1：无门禁任务 → 直接 DONE 放行（未定义门禁不检查）
+    const e1 = createWorkflowEngine()
+    e1.begin({ name: 'v34a', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [mk('t1')] })
+    e1.start()
+    let threw1 = ''
+    try { e1.updateTask('t1', { status: 'DONE' }) } catch (e) { threw1 = e.message }
+    check('c34: 无门禁任务直接 DONE 放行', !threw1 && e1.snapshot().tasks[0].status === 'DONE', threw1)
+    // 场景 2：有门禁无 gateResult → DONE 被拒 + 文案含指引；pendingGates 列出
+    const e2 = createWorkflowEngine()
+    e2.begin({ name: 'v34b', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [mk('g1', GATE)] })
+    e2.start()
+    let threw2 = ''
+    try { e2.updateTask('g1', { status: 'DONE' }) } catch (e) { threw2 = e.message }
+    check('c34: 有门禁无 gateResult 标 DONE 被拒且文案含指引', threw2.includes('质量门禁') && threw2.includes('gateResult') && threw2.includes('onFailure=retry'), threw2.slice(0, 80))
+    check('c34: pendingGates 列出待执行门禁任务', e2.snapshot().pendingGates.length === 1 && e2.snapshot().pendingGates[0].task === 'g1' && e2.snapshot().pendingGates[0].checker === GATE.checker, JSON.stringify(e2.snapshot().pendingGates))
+    // 场景 3：gateResult=FAIL → DONE 仍拒（指引按 onFailure 处置）；SKIPPED+FAIL+gateNote → 过且留存
+    let threw3 = ''
+    try { e2.updateTask('g1', { status: 'DONE', gateResult: 'FAIL' }) } catch (e) { threw3 = e.message }
+    check('c34: gateResult=FAIL 标 DONE 被拒且指引按 onFailure 处置', threw3.includes('FAIL') && threw3.includes('onFailure=retry'), threw3.slice(0, 80))
+    e2.updateTask('g1', { status: 'SKIPPED', gateResult: 'FAIL', gateNote: '探针恒败' })
+    check('c34: SKIPPED+FAIL+gateNote 放行且 gateNote 留存快照', e2.snapshot().tasks[0].status === 'SKIPPED' && e2.snapshot().tasks[0].gateNote === '探针恒败' && e2.snapshot().pendingGates.length === 0, JSON.stringify(e2.snapshot().tasks[0].gateNote))
+    // 场景 4：gateResult=PASS 同批传入 → DONE 放行、pendingGates 清空
+    const e3 = createWorkflowEngine()
+    e3.begin({ name: 'v34c', version: '1', description: null, params: {}, maxConcurrency: 2, tasks: [mk('g2', GATE)] })
+    e3.start()
+    let threw4 = ''
+    try { e3.updateTask('g2', { status: 'DONE', gateResult: 'PASS', gateNote: '结论摘要' }) } catch (e) { threw4 = e.message }
+    const s3 = e3.snapshot()
+    check('c34: gateResult=PASS 同批 DONE 放行、pendingGates 清空', !threw4 && s3.tasks[0].status === 'DONE' && s3.tasks[0].gateNote === '结论摘要' && s3.pendingGates.length === 0, threw4 || JSON.stringify(s3.pendingGates))
+  }
+
     // ── 用例 8：实例注册表（Iter-10）──
     await runCase8()
     // ── 用例 9：实例操控工具（Iter-11）──
@@ -2962,6 +3001,8 @@ async function runCase26() {
     await runCase32()
     // ── 用例 33：孤儿判定对照（Iter-33 缺陷 #9）──
     await runCase33()
+    // ── 用例 34：门禁强制执行（Iter-34 缺陷 #8）──
+    await runCase34()
 
     console.log('')
     console.log('结果: ' + pass + ' 通过, ' + fail + ' 失败')

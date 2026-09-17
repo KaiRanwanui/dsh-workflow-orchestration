@@ -101,27 +101,34 @@ quality-gate 的 Task 再用一个独立 subagent 会话做质量门禁；每步
    （DONE/SKIPPED/FAILED）就重新读 `workflow_status` 快照的 `runnable`，
    立即启动下一个就绪 Task。
 
-5. **质量门禁**（若配置了 quality-gate）：
-   a. `workflow_status({task: <id>, taskStatus: "RUNNING", gateResult: undefined})` 保持任务状态。
+5. **质量门禁**（若配置了 quality-gate；Iter-34 起引擎强制执行——未出 gateResult 的
+   门禁任务标 DONE 会被拒绝，收到拒绝错误后按其中指引操作即可）：
+   a. 每次读 `workflow_status` 快照时**先看 `pendingGates` 清单**——列出的任务是
+      必须完成门禁检查的，遗漏会被引擎拒绝。
    b. **（Iter-25 护栏，27b 后仅兜 legacy 实例）若 `gate.checker` 为 null**
       （配置了门禁但未指定检查技能——Iter-27b 起创建关口已拦截，仅旧实例可能命中）：
       按未配置门禁处理——输出校验通过后直接标 DONE，不虚构门禁。
-   c. 读取 `gate.checker` 技能文件全文。
-   d. 构造独立 subagent prompt（**不共享 Task 会话**）：
+   c. 任务 processor 完成后**不要立即标 DONE**：读取 `gate.checker` 技能文件全文，
+      构造独立 subagent prompt（**不共享 Task 会话**）：
       - 粘贴 checker 技能全文；
       - **（Iter-25，R16）让它读取该 Task 的 inputs 命名字典中全部文件与
         outputs 列表中全部文件**（输入+输出一并交给门禁检查，判定才完整）；
-      - 要求它只输出 `PASS` 或 `FAIL`，FAIL 时给出理由。
-   d. 读 gate 结果判定：
-      - **PASS** → `workflow_status({task: <id>, taskStatus: "DONE", gateResult: "PASS"})`，
-        继续下一个就绪 Task。
+      - 要求它输出 `PASS` 或 `FAIL`，FAIL 时给出具体理由。
+   d. 读 gate 结果判定（**gateNote 必填**——门禁结论摘要，FAIL 时=失败理由，
+      引擎留存于任务快照，重试派发必须引用）：
+      - **PASS** → `workflow_status({task: <id>, taskStatus: "DONE",
+        gateResult: "PASS", gateNote: <结论摘要>})`，继续下一个就绪 Task。
       - **FAIL**：
-        - `on-failure: retry` → 重执行该 Task（回到步骤 4），每次重试
-          `workflow_status({task: <id>, taskStatus: "FAILED", retries: <已重试次数>})`
-          记录；达到 `max-retries` 上限后标记 FAILED 并 **block**（见步骤 6）。
-        - `on-failure: block` → 标记 FAILED 并阻断（见步骤 6）。
+        - `on-failure: retry` → **重执行该 Task（回到步骤 4），重派发 subagent 的
+          prompt 中必须附上门禁失败理由（gateNote）与修正要求**——让执行者据此
+          修正错误再产出；每次重试记录
+          `workflow_status({task: <id>, taskStatus: "FAILED", retries: <已重试次数>,
+          gateNote: <本轮失败理由>})`；达到 `max-retries` 上限仍 FAIL →
+          `workflow_status({task: <id>, taskStatus: "FAILED"})` 标记 FAILED 并 block。
+        - `on-failure: block` → `workflow_status({task: <id>, taskStatus: "FAILED",
+          gateResult: "FAIL", gateNote: <失败理由>})` 标记 FAILED 并阻断（见步骤 6）。
         - `on-failure: skip` → `workflow_status({task: <id>, taskStatus: "SKIPPED",
-          gateResult: "FAIL"})`，跳过该 Task 继续。
+          gateResult: "FAIL", gateNote: <失败理由>})`，跳过该 Task 继续。
 
 6. **失败阻断**：某 Task FAILED 且策略为 block（或重试耗尽）时：
    - `workflow_status({stage: "FAILED"})`

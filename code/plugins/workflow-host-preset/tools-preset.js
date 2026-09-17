@@ -859,7 +859,8 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
       additionalProperties: true,
       properties: {
         stage: { type: 'string', description: '全局阶段' },
-        gateResult: { type: 'string', description: '门禁结果 PASS 或 FAIL' },
+        gateResult: { type: 'string', description: '门禁结果 PASS 或 FAIL（配置了 quality-gate 的任务标 DONE 前必须先出 gateResult）' },
+        gateNote: { type: 'string', description: '门禁结论摘要（FAIL 时必填=失败理由；重试派发必须引用该理由驱动修正）' },
         task: { type: 'string', description: '要更新的任务 id' },
         taskStatus: { type: 'string', description: '该任务状态' },
         retries: { type: 'number', description: '失败重试计数' },
@@ -881,7 +882,12 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (typeof args.retries === 'number') b.engine.setRetries(args.retries)
         if (args.error !== undefined) b.engine.setError(args.error ? String(args.error) : null)
         if (args.task && args.taskStatus) {
-          b.engine.updateTask(String(args.task), { status: String(args.taskStatus) })
+          // Iter-34：per-task gateResult/gateNote 接通（此前工具层未传，任务级门禁结果恒空）
+          b.engine.updateTask(String(args.task), {
+            status: String(args.taskStatus),
+            gateResult: args.gateResult !== undefined ? String(args.gateResult) : undefined,
+            gateNote: args.gateNote !== undefined ? String(args.gateNote) : undefined,
+          })
         }
         // Iter-26R（D4）：延迟展开前置检查——占位节点前驱就绪时展开为迭代
         if (b.entry) {

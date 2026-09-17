@@ -1649,6 +1649,7 @@ function taskSnapshot(t) {
     outputs: t.outputs || [],             // Iter-25：展开后输出列表（绝对路径）
     gateChecker: (t.gate && t.gate.checker) || null, // 门禁技能绝对路径
     gateResult: t.gateResult || null,
+    gateNote: t.gateNote || null, // Iter-34：门禁结论摘要（FAIL 时为失败理由，重试派发必须引用）
     gateOnFailure: t.gateOnFailure || null,
     retries: t.retries || 0,
     _loopGroup: t._loopGroup || null,
@@ -1694,6 +1695,11 @@ function createWorkflowEngine() {
   }
 
   function snapshot() {
+    // Iter-34：待执行门禁摘要——配置了 gate 且尚无 gateResult、且未走到终态的任务清单
+    // （供编排 Agent 与面板直接看到「哪些任务的门禁还没做」）
+    const pendingGates = state.tasks
+      .filter((t) => t.gate && !t.gateResult && t.status !== E_TASK_STATUS.SKIPPED && t.status !== E_TASK_STATUS.FAILED)
+      .map((t) => ({ task: t.id, checker: t.gate.checker, onFailure: t.gate.onFailure, maxRetries: t.gate.maxRetries || 0, taskStatus: t.status }))
     return {
       workflow: state.workflow,
       version: state.version,
@@ -1702,6 +1708,7 @@ function createWorkflowEngine() {
       active: state.active,
       stage: state.stage,
       tasks: state.tasks.map(taskSnapshot),
+      pendingGates,
       gateResult: state.gateResult,
       retries: state.retries,
       error: state.error,
@@ -1763,8 +1770,27 @@ function createWorkflowEngine() {
   function updateTask(taskId, patch) {
     const t = state.tasks.find((x) => x.id === taskId)
     if (!t) return false
+    // Iter-34（缺陷 #8 闭环，用户拍板「gateChecker 一旦设置必须强制执行」）：门禁软强制——
+    // 配置了 quality-gate 的任务，未出 gateResult 前拒绝直接置 DONE（把「Agent 忘了走门禁」
+    // 从静默错误变成硬错误）；gateResult=FAIL 时拒绝 DONE（FAIL 不是完成），错误文案指引按
+    // onFailure 处置（retry 重派发并携带 gateNote 失败理由 / block→FAILED / skip→SKIPPED）。
+    // 未定义门禁技能的任务不检查（用户确认语义）。gateResult 可与本 patch 同批传入（PASS→放行）。
+    if (t.gate && patch.status === E_TASK_STATUS.DONE) {
+      const gr = patch.gateResult !== undefined ? patch.gateResult : t.gateResult
+      if (!gr) {
+        throw new Error('任务 "' + taskId + '" 配置了质量门禁（checker=' + (t.gate.checker || '?') + '），未出 gateResult 前不可标 DONE。'
+          + '正确路径：①保持 taskStatus=RUNNING → ②派发独立 subagent 执行 checker 技能（附任务 inputs+outputs）→ '
+          + '③PASS：workflow_status({task, taskStatus:"DONE", gateResult:"PASS", gateNote:<结论摘要>})；'
+          + 'FAIL：按 gate.onFailure=' + (t.gate.onFailure || '?') + ' 处置（retry→重派发并附 gateNote 失败理由 / block→FAILED / skip→SKIPPED+gateResult:"FAIL"）')
+      }
+      if (gr === 'FAIL') {
+        throw new Error('任务 "' + taskId + '" 门禁结果为 FAIL，不可标 DONE。按 gate.onFailure=' + (t.gate.onFailure || '?')
+          + ' 处置：retry→taskStatus 回 RUNNING 重派发（必须附 gateNote 失败理由驱动修正；maxRetries=' + (t.gate.maxRetries || 0) + ' 耗尽仍 FAIL → taskStatus=FAILED）；block→taskStatus=FAILED；skip→taskStatus=SKIPPED')
+      }
+    }
     if (patch.status !== undefined) t.status = patch.status
     if (patch.gateResult !== undefined) t.gateResult = patch.gateResult
+    if (patch.gateNote !== undefined) t.gateNote = patch.gateNote
     if (patch.retries !== undefined) t.retries = patch.retries
     if (patch.error !== undefined) t.error = patch.error
     state.updatedAt = Date.now()
@@ -4195,7 +4221,8 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
       additionalProperties: true,
       properties: {
         stage: { type: 'string', description: '全局阶段' },
-        gateResult: { type: 'string', description: '门禁结果 PASS 或 FAIL' },
+        gateResult: { type: 'string', description: '门禁结果 PASS 或 FAIL（配置了 quality-gate 的任务标 DONE 前必须先出 gateResult）' },
+        gateNote: { type: 'string', description: '门禁结论摘要（FAIL 时必填=失败理由；重试派发必须引用该理由驱动修正）' },
         task: { type: 'string', description: '要更新的任务 id' },
         taskStatus: { type: 'string', description: '该任务状态' },
         retries: { type: 'number', description: '失败重试计数' },
@@ -4217,7 +4244,12 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (typeof args.retries === 'number') b.engine.setRetries(args.retries)
         if (args.error !== undefined) b.engine.setError(args.error ? String(args.error) : null)
         if (args.task && args.taskStatus) {
-          b.engine.updateTask(String(args.task), { status: String(args.taskStatus) })
+          // Iter-34：per-task gateResult/gateNote 接通（此前工具层未传，任务级门禁结果恒空）
+          b.engine.updateTask(String(args.task), {
+            status: String(args.taskStatus),
+            gateResult: args.gateResult !== undefined ? String(args.gateResult) : undefined,
+            gateNote: args.gateNote !== undefined ? String(args.gateNote) : undefined,
+          })
         }
         // Iter-26R（D4）：延迟展开前置检查——占位节点前驱就绪时展开为迭代
         if (b.entry) {
