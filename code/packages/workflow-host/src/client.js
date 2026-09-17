@@ -476,7 +476,7 @@ export function register(ctx) {
             React.createElement('span', { key: 't', style: { color: stageColor[it.stage] || '#9ca3af' } }, it.stage || 'CREATED'),
           ]),
           React.createElement('td', { key: 'p', style: cell }, it.phase === 'READY' ? (it.taskDone + '/' + it.taskTotal + (it.taskFailed ? ' ✗' + it.taskFailed : '')) : '—'),
-          React.createElement('td', { key: 'b', style: cell }, it.sessionId ? String(it.sessionId).slice(-6) + (it.active ? '' : '（离线）') : '未绑定'),
+          React.createElement('td', { key: 'b', style: cell }, it.sessionId ? String(it.sessionId).slice(-6) : '未绑定'), // Iter-33（U3，用户拍板）：移除「（离线）」后缀——active 是纯内存活跃指针（重启即清空），语义非「会话离线」，展示无信息量且误导
           React.createElement('td', { key: 't', style: Object.assign({}, cell, { color: '#9ca3af' }) }, fmtTime(it.createdAt)),
           React.createElement('td', { key: 'a', style: cell }, React.createElement('button', {
             title: !archivable(it.stage) ? (it.stage === 'RUNNING' ? '运行中：须先停止再归档' : '未启动：无执行内容，不支持归档') : '归档（移出池并备份）',

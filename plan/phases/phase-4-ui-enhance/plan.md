@@ -57,6 +57,7 @@
 | 11 | 面板 reset 失败：`cannot read "~/.dsh/workflow-agent/inputs/empty-list.txt": not found`（verify-empty-items reset 发现，2026-09-16） | reset 路由用简化版 `expandInstanceDef`（缺 wfDir/defDir/workspaceRoot + finalizeDataflow + inputs 物化），静态引用解析退化到预定义根；编排侧 reset 工具用完整版不受影响——面板/工具不对称 | 33 |
 | U1 | 门禁角点：任务执行后右上角门禁小圆点消失（补验 UI 发现） | DagCanvas 门禁角标渲染条件待查（疑似仅创建态渲染） | 39 |
 | U2 | 创建弹窗模板下拉只显示工作流说明，应显示名称+说明（补验 UI 发现） | 下拉 label 构造待查 | 36 |
+| U3 | 管理列表绑定列「（离线）」后缀误导：`active` 是纯内存活跃指针（重启即清空，重启后全员离线），非「会话离线」（用户 09-16 提问后拍板清除） | 渲染条件引用内存 activeBySession 映射 | ✅ **v0.26.2 已修**（展示层单行删除；信息以 stage 为准） |
 
 **补验项**（→ **Iter-32 独立迭代**，配预置测试模板）：分支 SKIPPED / 目录变量全量 / 技能工作区覆盖 / 会话删除解绑；顺带覆盖：文本创建 / 校验硬拦 / 警告类 / items 空提取（校验清单其余无法构造项）。
 
