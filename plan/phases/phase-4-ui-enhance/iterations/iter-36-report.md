@@ -75,3 +75,7 @@
 用户复验反馈：processor/gateChecker「查看」仍失败——传入的是工作区 skills 相对路径，而 never-pass 等技能实际在预定义物化目录（~/.dsh/workflow-agent/skills/）。修正：openSkillView 优先用 /wf/skills 列表项自带的绝对路径 path（两级链已裁决：工作区顶替→生效工作区副本；预定义→物化目录），列表未命中再回退 workspaceRoot 拼接（覆盖历史实例「当前值不在列表」场景）。
 
 另答用户问：loop/concurrent 任务配置 quality-gate = **每个迭代独立执行门禁**（schema 明确；tools-preset 逐迭代复制 gate「同一 checker，独立执行」）——每个迭代完成后先走自己的 checker 子会话、PASS 才算该迭代 DONE；组级聚合仅做「全部迭代终态」判定放行下游。FAIL 处置（retry/skip/block）为迭代粒度。
+
+## 13. 补记：保存生效语义提示（v0.26.12，2026-09-17）
+
+用户反馈 depends-on 调整后 DAG 未刷新——核实为设计内行为（DAG 渲染 state.json 执行快照；编辑写 instance.yaml，经 Reset/重新 begin 才进入执行定义），非缺陷。采纳提示提案：编辑器保存成功提示改为「✓ 定义已保存（对执行定义/DAG 的生效需 Reset 或重新 begin）」。明确不做：DAG 改读 instance.yaml 展开态做实时预览——执行中 DAG 应呈现真实执行态，两义混用会破坏状态机一致性。
