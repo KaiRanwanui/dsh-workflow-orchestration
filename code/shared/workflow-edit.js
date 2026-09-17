@@ -239,6 +239,71 @@ function applyInstancePatch(raw, patch, perms) {
         else t['max-concurrency'] = n
       }
     }
+    // ── Iter-36：表单补全——依赖/超时/循环组字段（definition 权限门控沿用）──
+    if (ch.dependsOn !== undefined) {
+      if (!perms.definition) deny(tid, 'depends-on', '仅 CREATED 状态可修改 depends-on（当前 ' + perms.stage + '）')
+      else {
+        const dv = ch.dependsOn
+        if (dv === null || dv === '') { delete t['depends-on'] }
+        else if (!Array.isArray(dv) || dv.some((x) => x === null || x === undefined || String(x).trim() === '')) {
+          errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'depends-on', message: 'depends-on 须为任务 id 数组（空数组/留空=清除依赖）' })
+        } else {
+          const clean = dv.map((x) => String(x).trim()).filter(Boolean)
+          if (clean.indexOf(tid) !== -1) {
+            errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'depends-on', message: 'depends-on 不能包含自身' })
+          } else if (clean.length === 0) delete t['depends-on']
+          else t['depends-on'] = clean
+        }
+      }
+    }
+    if (ch.timeout !== undefined) {
+      if (!perms.definition) deny(tid, 'timeout', '仅 CREATED 状态可修改 timeout（当前 ' + perms.stage + '）')
+      else if (ch.timeout === null || ch.timeout === '') { delete t.timeout }
+      else {
+        const n = Number(ch.timeout)
+        if (!Number.isInteger(n) || n < 1) errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'timeout', message: 'timeout 须为 >=1 整数（秒）或留空，实际: ' + JSON.stringify(ch.timeout) })
+        else t.timeout = n
+      }
+    }
+    if (ch.gateOnFailure !== undefined) {
+      if (!perms.definition) deny(tid, 'quality-gate.on-failure', '仅 CREATED 状态可修改 on-failure（当前 ' + perms.stage + '）')
+      else {
+        const v = String(ch.gateOnFailure == null ? '' : ch.gateOnFailure).trim()
+        if (v === '') {
+          const g = t['quality-gate']
+          if (g && typeof g === 'object' && !Array.isArray(g)) delete g['on-failure']
+        } else if (['retry', 'block', 'skip'].indexOf(v) === -1) {
+          errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'quality-gate.on-failure', message: 'on-failure 须为 retry/block/skip 之一，实际: ' + v })
+        } else {
+          weEnsureGate(t)['on-failure'] = v
+        }
+      }
+    }
+    // 循环/并发组字段（items-from / item-var / items-format / on-error）：仅对应类型任务
+    // 可配置；definition 权限门控沿用（组字段属定义面）。非组任务配置 → E-EDIT-TYPE。
+    const isGroupType36 = t.type === 'loop' || t.type === 'concurrent'
+    const groupFields36 = [['itemsFrom', 'items-from'], ['itemVar', 'item-var'], ['itemsFormat', 'items-format']]
+    for (const pair36 of groupFields36) {
+      const pk = pair36[0], yk = pair36[1]
+      if (ch[pk] === undefined) continue
+      if (!isGroupType36) { errors.push({ code: 'E-EDIT-TYPE', task: tid, field: yk, message: '仅 loop/concurrent 任务可配置 ' + yk }); continue }
+      if (!perms.definition) { deny(tid, yk, '仅 CREATED 状态可修改 ' + yk + '（当前 ' + perms.stage + '）'); continue }
+      const v36 = String(ch[pk] == null ? '' : ch[pk]).trim()
+      if (v36 === '') { delete t[yk]; continue }
+      if (pk === 'itemsFormat' && ['lines', 'markdown', 'json', 'yaml'].indexOf(v36) === -1) {
+        errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'items-format', message: 'items-format 须为 lines/markdown/json/yaml 之一，实际: ' + v36 })
+      } else t[yk] = v36
+    }
+    if (ch.onError !== undefined) {
+      if (t.type !== 'loop') { errors.push({ code: 'E-EDIT-TYPE', task: tid, field: 'on-error', message: '仅 loop 任务可配置 on-error' }) }
+      else if (!perms.definition) { deny(tid, 'on-error', '仅 CREATED 状态可修改 on-error（当前 ' + perms.stage + '）') }
+      else {
+        const v36b = String(ch.onError == null ? '' : ch.onError).trim()
+        if (v36b === '') delete t['on-error']
+        else if (['break', 'continue'].indexOf(v36b) === -1) errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'on-error', message: 'on-error 须为 break/continue 之一，实际: ' + v36b })
+        else t['on-error'] = v36b
+      }
+    }
   }
   return { ok: errors.length === 0, errors }
 }

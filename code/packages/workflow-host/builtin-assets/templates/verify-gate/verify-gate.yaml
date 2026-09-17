@@ -23,7 +23,6 @@ tasks:
     quality-gate:
       checker: skills/never-pass/SKILL.md
       on-failure: skip
-      max-retries: 1
 
   - id: gate-retry-exhaust
     name: "门禁 retry 耗尽变体（预期 FAIL→重试 2 次→FAILED）"

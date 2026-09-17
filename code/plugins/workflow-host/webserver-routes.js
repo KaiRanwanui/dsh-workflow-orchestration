@@ -490,6 +490,8 @@ function registerWebRoutes(ctx, registry) {
             type: (t && t.type) || 'llm-task',
             status: statusOf(t),
             processor: t && t.processor != null ? String(t.processor) : null,
+            dependsOn: t && Array.isArray(t['depends-on']) ? t['depends-on'].map(String) : [],
+            timeout: t && t.timeout != null ? Number(t.timeout) : null,
             gateChecker: g(t).checker != null ? String(g(t).checker) : null,
             gateOnFailure: g(t)['on-failure'] || null,
             retries: g(t)['max-retries'] != null ? Number(g(t)['max-retries']) : 0,
@@ -497,6 +499,10 @@ function registerWebRoutes(ctx, registry) {
             outputs: t && Array.isArray(t.outputs) ? t.outputs : [],
             concurrency: t && t['max-concurrency'] != null ? Number(t['max-concurrency']) : null,
             itemsFrom: t && t['items-from'] != null ? String(t['items-from']) : null,
+            // Iter-36：表单补全——循环组字段与错误策略映射
+            itemVar: t && t['item-var'] != null ? String(t['item-var']) : null,
+            itemsFormat: t && t['items-format'] != null ? String(t['items-format']) : null,
+            onError: t && t['on-error'] != null ? String(t['on-error']) : null,
           }))
           writeJson(res, 200, {
             instanceId, dir: entry.dir, stage, editable: perms,

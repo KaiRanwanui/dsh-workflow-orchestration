@@ -901,6 +901,16 @@ async function validateWorkflow(opts) {
     if ('gateRaw' in t && t.gateRaw == null) {
       pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'quality-gate 未指定 checker——该门禁必须补全')
     }
+    // W-GATE-RETRY-MISMATCH（Iter-36）：max-retries 仅在 on-failure: retry 时生效——
+    // 配在 skip/block 模式下静默无效（verify-gate-4423b98e 验证混淆实证），保存时提示
+    if ('gateRaw' in t && t.gateRaw != null) {
+      const mr36 = Number(t.gateMaxRetries)
+      const ofv36 = t.gateOnFailure
+      if (mr36 > 0 && ofv36 && ofv36 !== 'retry') {
+        pushW('W-GATE-RETRY-MISMATCH', t.id, 'quality-gate.max-retries',
+          'max-retries=' + mr36 + ' 仅在 on-failure: retry 时生效，当前 on-failure: ' + ofv36 + ' 下该值不起作用')
+      }
+    }
 
     // inputs 逐值：字面绝对（preset）→ 上游衔接（精确/basename）→ 语境探测
     const rawInputs = t.inputsRaw || {}
@@ -1222,6 +1232,71 @@ function applyInstancePatch(raw, patch, perms) {
         const n = Number(ch.concurrency)
         if (!Number.isInteger(n) || n < 1) errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'max-concurrency', message: '任务并发须为 >=1 整数或留空，实际: ' + JSON.stringify(ch.concurrency) })
         else t['max-concurrency'] = n
+      }
+    }
+    // ── Iter-36：表单补全——依赖/超时/循环组字段（definition 权限门控沿用）──
+    if (ch.dependsOn !== undefined) {
+      if (!perms.definition) deny(tid, 'depends-on', '仅 CREATED 状态可修改 depends-on（当前 ' + perms.stage + '）')
+      else {
+        const dv = ch.dependsOn
+        if (dv === null || dv === '') { delete t['depends-on'] }
+        else if (!Array.isArray(dv) || dv.some((x) => x === null || x === undefined || String(x).trim() === '')) {
+          errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'depends-on', message: 'depends-on 须为任务 id 数组（空数组/留空=清除依赖）' })
+        } else {
+          const clean = dv.map((x) => String(x).trim()).filter(Boolean)
+          if (clean.indexOf(tid) !== -1) {
+            errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'depends-on', message: 'depends-on 不能包含自身' })
+          } else if (clean.length === 0) delete t['depends-on']
+          else t['depends-on'] = clean
+        }
+      }
+    }
+    if (ch.timeout !== undefined) {
+      if (!perms.definition) deny(tid, 'timeout', '仅 CREATED 状态可修改 timeout（当前 ' + perms.stage + '）')
+      else if (ch.timeout === null || ch.timeout === '') { delete t.timeout }
+      else {
+        const n = Number(ch.timeout)
+        if (!Number.isInteger(n) || n < 1) errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'timeout', message: 'timeout 须为 >=1 整数（秒）或留空，实际: ' + JSON.stringify(ch.timeout) })
+        else t.timeout = n
+      }
+    }
+    if (ch.gateOnFailure !== undefined) {
+      if (!perms.definition) deny(tid, 'quality-gate.on-failure', '仅 CREATED 状态可修改 on-failure（当前 ' + perms.stage + '）')
+      else {
+        const v = String(ch.gateOnFailure == null ? '' : ch.gateOnFailure).trim()
+        if (v === '') {
+          const g = t['quality-gate']
+          if (g && typeof g === 'object' && !Array.isArray(g)) delete g['on-failure']
+        } else if (['retry', 'block', 'skip'].indexOf(v) === -1) {
+          errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'quality-gate.on-failure', message: 'on-failure 须为 retry/block/skip 之一，实际: ' + v })
+        } else {
+          weEnsureGate(t)['on-failure'] = v
+        }
+      }
+    }
+    // 循环/并发组字段（items-from / item-var / items-format / on-error）：仅对应类型任务
+    // 可配置；definition 权限门控沿用（组字段属定义面）。非组任务配置 → E-EDIT-TYPE。
+    const isGroupType36 = t.type === 'loop' || t.type === 'concurrent'
+    const groupFields36 = [['itemsFrom', 'items-from'], ['itemVar', 'item-var'], ['itemsFormat', 'items-format']]
+    for (const pair36 of groupFields36) {
+      const pk = pair36[0], yk = pair36[1]
+      if (ch[pk] === undefined) continue
+      if (!isGroupType36) { errors.push({ code: 'E-EDIT-TYPE', task: tid, field: yk, message: '仅 loop/concurrent 任务可配置 ' + yk }); continue }
+      if (!perms.definition) { deny(tid, yk, '仅 CREATED 状态可修改 ' + yk + '（当前 ' + perms.stage + '）'); continue }
+      const v36 = String(ch[pk] == null ? '' : ch[pk]).trim()
+      if (v36 === '') { delete t[yk]; continue }
+      if (pk === 'itemsFormat' && ['lines', 'markdown', 'json', 'yaml'].indexOf(v36) === -1) {
+        errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'items-format', message: 'items-format 须为 lines/markdown/json/yaml 之一，实际: ' + v36 })
+      } else t[yk] = v36
+    }
+    if (ch.onError !== undefined) {
+      if (t.type !== 'loop') { errors.push({ code: 'E-EDIT-TYPE', task: tid, field: 'on-error', message: '仅 loop 任务可配置 on-error' }) }
+      else if (!perms.definition) { deny(tid, 'on-error', '仅 CREATED 状态可修改 on-error（当前 ' + perms.stage + '）') }
+      else {
+        const v36b = String(ch.onError == null ? '' : ch.onError).trim()
+        if (v36b === '') delete t['on-error']
+        else if (['break', 'continue'].indexOf(v36b) === -1) errors.push({ code: 'E-EDIT-VALUE', task: tid, field: 'on-error', message: 'on-error 须为 break/continue 之一，实际: ' + v36b })
+        else t['on-error'] = v36b
       }
     }
   }
@@ -5356,6 +5431,8 @@ function registerWebRoutes(ctx, registry) {
             type: (t && t.type) || 'llm-task',
             status: statusOf(t),
             processor: t && t.processor != null ? String(t.processor) : null,
+            dependsOn: t && Array.isArray(t['depends-on']) ? t['depends-on'].map(String) : [],
+            timeout: t && t.timeout != null ? Number(t.timeout) : null,
             gateChecker: g(t).checker != null ? String(g(t).checker) : null,
             gateOnFailure: g(t)['on-failure'] || null,
             retries: g(t)['max-retries'] != null ? Number(g(t)['max-retries']) : 0,
@@ -5363,6 +5440,10 @@ function registerWebRoutes(ctx, registry) {
             outputs: t && Array.isArray(t.outputs) ? t.outputs : [],
             concurrency: t && t['max-concurrency'] != null ? Number(t['max-concurrency']) : null,
             itemsFrom: t && t['items-from'] != null ? String(t['items-from']) : null,
+            // Iter-36：表单补全——循环组字段与错误策略映射
+            itemVar: t && t['item-var'] != null ? String(t['item-var']) : null,
+            itemsFormat: t && t['items-format'] != null ? String(t['items-format']) : null,
+            onError: t && t['on-error'] != null ? String(t['on-error']) : null,
           }))
           writeJson(res, 200, {
             instanceId, dir: entry.dir, stage, editable: perms,

@@ -2246,7 +2246,7 @@ const loopTask = {
 const items = ['login', 'order', 'payment']
 const params = { project: 'my-proj' }
 
-Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((expanded) => {
+Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then(async (expanded) => {
   check('展开 3 个任务', expanded.length === 3, expanded.length)
   check('ID 格式 module-review/{item}', expanded[0].id === 'module-review/login')
   check('类型转为 llm-task', expanded.every(t => t.type === 'llm-task'))
@@ -2269,6 +2269,15 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then((
   const snap4 = engine3.snapshot()
   check('updateTask 用展开 ID', snap4.tasks[0].status === 'DONE')
   check('门禁任务 DONE 携带 gateResult/gateNote', snap4.tasks[0].gateResult === 'PASS' && snap4.tasks[0].gateNote === '评审通过')
+
+  // ── Iter-36：W-GATE-RETRY-MISMATCH（max-retries 配非 retry 模式 → W 级警告）──
+  const { validateWorkflow: vW36 } = require('../shared/workflow-validate.js')
+  const pW36skip = parseWorkflow(['name: gw1', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: skip', '      max-retries: 2'].join('\n'))
+  const rW36skip = await vW36({ parsed: pW36skip, context: 'definition', fs: null })
+  check('c24 W: max-retries 配 skip → W-GATE-RETRY-MISMATCH', (rW36skip.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH' && w.task === 'g'), JSON.stringify(rW36skip.warnings))
+  const pW36retry = parseWorkflow(['name: gw2', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: retry', '      max-retries: 2'].join('\n'))
+  const rW36retry = await vW36({ parsed: pW36retry, context: 'definition', fs: null })
+  check('c24 W: on-failure retry 无警告', !(rW36retry.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH'), JSON.stringify(rW36retry.warnings))
 
   // ── 用例 5：循环错误处理（Iter-6：onError=break/continue + hydrate 元数据 + begin 清 logs） ──
   console.log('［用例 5］循环错误处理 — onError break/continue')
@@ -2565,6 +2574,16 @@ async function runCase25() {
   // 保存后再 GET：draft 原值已更新
   r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
   check('edit save: 再 GET 反映新值', r.body.tasks[0].processor === '/ws/t25/x/g/SKILL.md' && r.body.tasks[0].retries === 2 && r.body.instance.maxConcurrency === 3)
+
+  // Iter-36：新增字段 round-trip（dependsOn/timeout/gateOnFailure）+ deny 守卫
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { dependsOn: [], timeout: 120, gateOnFailure: 'skip' } } } })
+  check('edit36: dependsOn/timeout/gateOnFailure 保存 200', r.code === 200 && r.body.saved === true, JSON.stringify(r.body).slice(0, 140))
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
+  check('edit36 GET: timeout=120 / on-failure=skip / depends-on 清除', r.body.tasks[0].timeout === 120 && r.body.tasks[0].gateOnFailure === 'skip' && Array.isArray(r.body.tasks[0].dependsOn) && r.body.tasks[0].dependsOn.length === 0, JSON.stringify(r.body.tasks[0]))
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { dependsOn: ['a'] } } } })
+  check('edit36 deny: depends-on 自引用被拒', r.code === 400 && (r.body.editErrors || []).some(e2 => e2.field === 'depends-on'), JSON.stringify(r.body).slice(0, 140))
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { itemsFrom: 'inputs/x.md' } } } })
+  check('edit36 deny: 非组任务配 items-from 被拒（E-EDIT-TYPE）', r.code === 400 && (r.body.editErrors || []).some(e2 => e2.code === 'E-EDIT-TYPE' && e2.field === 'items-from'), JSON.stringify(r.body).slice(0, 140))
 
   // validate-instance dryRun：合法 patch → 200；磁盘不变
   const beforeDisk = files.get(yamlA)

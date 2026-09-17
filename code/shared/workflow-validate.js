@@ -229,6 +229,16 @@ async function validateWorkflow(opts) {
     if ('gateRaw' in t && t.gateRaw == null) {
       pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'quality-gate 未指定 checker——该门禁必须补全')
     }
+    // W-GATE-RETRY-MISMATCH（Iter-36）：max-retries 仅在 on-failure: retry 时生效——
+    // 配在 skip/block 模式下静默无效（verify-gate-4423b98e 验证混淆实证），保存时提示
+    if ('gateRaw' in t && t.gateRaw != null) {
+      const mr36 = Number(t.gateMaxRetries)
+      const ofv36 = t.gateOnFailure
+      if (mr36 > 0 && ofv36 && ofv36 !== 'retry') {
+        pushW('W-GATE-RETRY-MISMATCH', t.id, 'quality-gate.max-retries',
+          'max-retries=' + mr36 + ' 仅在 on-failure: retry 时生效，当前 on-failure: ' + ofv36 + ' 下该值不起作用')
+      }
+    }
 
     // inputs 逐值：字面绝对（preset）→ 上游衔接（精确/basename）→ 语境探测
     const rawInputs = t.inputsRaw || {}

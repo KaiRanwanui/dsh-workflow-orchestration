@@ -263,6 +263,16 @@ function register(ctx) {
       const rowStyle = { display: 'flex', alignItems: 'center', gap: 6 }
       const dis = (allowed) => busy || !allowed || editable.readonlyAll
 
+      // Iter-36：枚举下拉（option 显式配色对齐 Iter-30 修法——未选中项字色可见）
+      const optStyle = { color: '#1e293b', background: '#f8fafc' }
+      const mkEnumSelect = (value, onChange, disabled, options, placeholder) => {
+        const opts = []
+        if (placeholder !== null && placeholder !== undefined) opts.push({ v: '', label: placeholder })
+        options.forEach(o => opts.push({ v: o[0], label: o[1] }))
+        return React.createElement('select', { value: value == null ? '' : value, onChange, disabled, style: Object.assign({}, inputStyle, { width: 170 }) },
+          opts.map(o => React.createElement('option', { key: o.v || '__e', value: o.v, style: optStyle }, o.label)))
+      }
+
       // 技能下拉（value=相对形态 relPath；当前值不在列表时保留显示为警示项）
       // Iter-35：可选「查看」入口（onView）→ 只读弹层展示技能全文（GET /wf/skill）
       const mkSkillSelect = (value, onChange, disabled, emptyLabel, onView) => {
@@ -274,7 +284,7 @@ function register(ctx) {
           label: (s.name || s.id) + (s.version ? ' (v' + s.version + ')' : '') + (s.source === 'workspace' ? ' · 工作区' : '') + (s.predefinedShadowed ? '（顶替预定义同名）' : ''),
         }))
         const select = React.createElement('select', { value: value == null ? '' : value, onChange, disabled, style: Object.assign({}, inputStyle, onView ? { flex: '1 1 auto', minWidth: 0 } : null) },
-          opts.map(o => React.createElement('option', { key: o.v || '__e', value: o.v }, o.label)))
+          opts.map(o => React.createElement('option', { key: o.v || '__e', value: o.v, style: optStyle }, o.label)))
         if (!onView) return select
         return React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center', width: '100%' } }, [
           select,
@@ -332,13 +342,55 @@ function register(ctx) {
         style: { flex: 1, display: 'flex', flexDirection: 'column', gap: 7, minWidth: 0, overflowY: 'auto', maxHeight: 230, paddingRight: 4 }
       }, [
         React.createElement('div', { key: 'tt', style: { fontWeight: 600 } }, (selTask.name || selTask.id) + '  ', React.createElement('span', { style: { color: '#9ca3af', fontWeight: 400, fontSize: 11 } }, selTask.id + ' · ' + (typeLabel[selTask.type] || selTask.type))),
+        // Iter-36：运行态只读呈现（有值才显示；数据源=state 对齐字段）
+        (selTask.status || selTask.runGateResult || selTask.runGateNote || selTask.runLoopItem || selTask.runLoopGroupName) ? React.createElement('div', { key: 'ro', style: { display: 'flex', flexWrap: 'wrap', gap: 10, fontSize: 11, color: '#9ca3af', borderBottom: '1px solid rgba(148,163,184,0.2)', paddingBottom: 5 } }, [
+          React.createElement('span', { key: 'st' }, '状态: ' + (selTask.status || '-')),
+          selTask.runGateResult ? React.createElement('span', { key: 'gr' }, '门禁: ' + selTask.runGateResult) : null,
+          selTask.runGateNote ? React.createElement('span', { key: 'gn', title: selTask.runGateNote }, '结论: ' + (selTask.runGateNote.length > 40 ? selTask.runGateNote.slice(0, 40) + '…' : selTask.runGateNote)) : null,
+          selTask.runLoopItem ? React.createElement('span', { key: 'li' }, '迭代: ' + selTask.runLoopItem) : null,
+          selTask.runLoopGroupName ? React.createElement('span', { key: 'lg' }, '组: ' + selTask.runLoopGroupName) : null,
+        ]) : null,
         React.createElement('div', { key: 'p', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'processor'),
           mkSkillSelect(getF('processor', selTask.processor), (e) => setF('processor', e.target.value), dis(editable.definition), null, (p) => openSkillView(p)),
         ]),
+        // Iter-36：depends-on（逗号分隔单行，同 outputs 风格；引用存在性/环依赖由语义关口兜底）
+        React.createElement('div', { key: 'dep', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'depends-on'),
+          React.createElement('input', {
+            key: 'in', value: (function () { const v = getF('dependsOn', selTask.dependsOn || []); return Array.isArray(v) ? v.join(', ') : String(v || '') })(),
+            onChange: (e) => setF('dependsOn', e.target.value.split(',').map(s => s.trim()).filter(Boolean)),
+            disabled: dis(editable.definition), placeholder: '前驱任务 id，逗号分隔', style: inputStyle,
+          }),
+        ]),
+        // Iter-36：timeout（秒）
+        React.createElement('div', { key: 'to', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'timeout'),
+          React.createElement('input', {
+            key: 'in', type: 'number', min: 1, disabled: dis(editable.definition),
+            value: getF('timeout', selTask.timeout) === null || getF('timeout', selTask.timeout) === undefined ? '' : getF('timeout', selTask.timeout),
+            onChange: (e) => setF('timeout', e.target.value === '' ? null : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }),
+            placeholder: '默认' }),
+          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '超时秒数（留空=默认）'),
+        ]),
         React.createElement('div', { key: 'g', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'gateChecker'),
           mkSkillSelect(getF('gateChecker', selTask.gateChecker), (e) => setF('gateChecker', e.target.value), dis(editable.definition), '（无门禁）', (p) => openSkillView(p)),
+        ]),
+        // Iter-36：on-failure（与 gateChecker 配对的处置策略）
+        (selTask.gateChecker || getF('gateChecker', null)) ? React.createElement('div', { key: 'gof', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'on-failure'),
+          mkEnumSelect(getF('gateOnFailure', selTask.gateOnFailure), (e) => setF('gateOnFailure', e.target.value), dis(editable.definition),
+            [['retry', 'retry（重执行）'], ['block', 'block（阻断）'], ['skip', 'skip（跳过）']], '未设置'),
+          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '门禁 FAIL 处置策略'),
+        ]) : null,
+        React.createElement('div', { key: 'r', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'retries'),
+          React.createElement('input', {
+            key: 'in', type: 'number', min: 0, disabled: dis(editable.runtime),
+            value: getF('retries', selTask.retries) === null || getF('retries', selTask.retries) === undefined ? 0 : getF('retries', selTask.retries),
+            onChange: (e) => setF('retries', e.target.value === '' ? 0 : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }) }),
+          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '门禁失败重试次数（仅 on-failure: retry 时生效）'),
         ]),
         React.createElement('div', { key: 'i', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'inputs'),
@@ -355,23 +407,52 @@ function register(ctx) {
             dis(editable.definition) ? null : React.createElement('button', { key: 'oa', onClick: () => onOutputsChange(outputsVal.concat([''])), style: { alignSelf: 'flex-start', border: '1px dashed rgba(148,163,184,0.5)', background: 'transparent', color: '#9ca3af', borderRadius: 5, padding: '1px 8px', fontSize: 11, cursor: 'pointer' } }, '+ 添加'),
           ]),
         ]),
-        React.createElement('div', { key: 'r', style: rowStyle }, [
-          React.createElement('span', { key: 'l', style: labelStyle }, 'retries'),
-          React.createElement('input', {
-            key: 'in', type: 'number', min: 0, disabled: dis(editable.runtime),
-            value: getF('retries', selTask.retries) === null || getF('retries', selTask.retries) === undefined ? 0 : getF('retries', selTask.retries),
-            onChange: (e) => setF('retries', e.target.value === '' ? 0 : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }) }),
-          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '门禁失败重试次数（保存后对下一次 reset/启动生效）'),
-        ]),
-        React.createElement('div', { key: 'c', style: rowStyle }, [
+        // Iter-36：循环/并发组字段分区（仅 loop/concurrent 类型显示）
+        (selTask.type === 'loop' || selTask.type === 'concurrent') ? React.createElement('div', { key: 'grp', style: { display: 'flex', flexDirection: 'column', gap: 7, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 6, padding: '6px 8px' } }, [
+          React.createElement('div', { key: 'gt', style: { fontSize: 11, color: '#9ca3af' } }, '循环/并发组字段（' + selTask.type + '）'),
+          React.createElement('div', { key: 'if', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'items-from'),
+            React.createElement('input', {
+              key: 'in', value: getF('itemsFrom', selTask.itemsFrom) === null || getF('itemsFrom', selTask.itemsFrom) === undefined ? '' : getF('itemsFrom', selTask.itemsFrom),
+              onChange: (e) => setF('itemsFrom', e.target.value), disabled: dis(editable.definition),
+              placeholder: '条目清单文件路径（相对实例目录）', style: inputStyle }),
+          ]),
+          React.createElement('div', { key: 'iv', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'item-var'),
+            React.createElement('input', {
+              key: 'in', value: getF('itemVar', selTask.itemVar) === null || getF('itemVar', selTask.itemVar) === undefined ? '' : getF('itemVar', selTask.itemVar),
+              onChange: (e) => setF('itemVar', e.target.value), disabled: dis(editable.definition),
+              placeholder: '条目变量名（如 item）', style: inputStyle }),
+          ]),
+          React.createElement('div', { key: 'ifo', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'items-format'),
+            mkEnumSelect(getF('itemsFormat', selTask.itemsFormat), (e) => setF('itemsFormat', e.target.value), dis(editable.definition),
+              [['lines', 'lines（逐行）'], ['markdown', 'markdown'], ['json', 'json'], ['yaml', 'yaml']], '自动（按扩展名）'),
+          ]),
+          selTask.type === 'loop' ? React.createElement('div', { key: 'oe', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'on-error'),
+            mkEnumSelect(getF('onError', selTask.onError), (e) => setF('onError', e.target.value), dis(editable.definition),
+              [['', '默认（continue）'], ['break', 'break（中断后续）'], ['continue', 'continue']], null),
+          ]) : null,
+          React.createElement('div', { key: 'c', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'concurrency'),
+            React.createElement('input', {
+              key: 'in', type: 'number', min: 1, disabled: dis(editable.runtime),
+              value: getF('concurrency', selTask.concurrency) === null || getF('concurrency', selTask.concurrency) === undefined ? '' : getF('concurrency', selTask.concurrency),
+              onChange: (e) => setF('concurrency', e.target.value === '' ? null : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }),
+              placeholder: '默认' }),
+            React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '组内并发上限'),
+          ]),
+        ]) : null,
+        // Iter-36：非组类型任务隐藏组字段后，concurrency 行保留在基础区（llm-task 无组级语义，通常留空）
+        selTask.type !== 'loop' && selTask.type !== 'concurrent' ? React.createElement('div', { key: 'c', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'concurrency'),
           React.createElement('input', {
             key: 'in', type: 'number', min: 1, disabled: dis(editable.runtime),
             value: getF('concurrency', selTask.concurrency) === null || getF('concurrency', selTask.concurrency) === undefined ? '' : getF('concurrency', selTask.concurrency),
             onChange: (e) => setF('concurrency', e.target.value === '' ? null : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }),
             placeholder: '默认' }),
-          React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '任务级并发上限（仅 loop/concurrent 组有意义）'),
-        ]),
+        ]) : null,
       ])
 
       const valResEl = !valRes ? null : (
@@ -1428,7 +1509,7 @@ function lgAggStatus(items) {
                   const m = p.yaml.match(/^description:\s*(.+)$/m)
                   return m ? m[1].replace(/^["']|["']$/g, '').trim() : p.name
                 }
-                ;(r.predefined || []).forEach(p => opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + (descOf(p) || p.name) + (p.fallback ? '（内建兜底）' : ''), t: p }))
+                ;(r.predefined || []).forEach(p => { const d = descOf(p); opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + p.name + (d && d !== p.name ? ' — ' + (String(d).length > 26 ? String(d).slice(0, 26) + '…' : d) : '') + (p.fallback ? '（内建兜底）' : ''), t: p }) })
                 setTplOpts(opts)
                 if (opts.length > 1) {
                   setTplSel(opts[1].v)
