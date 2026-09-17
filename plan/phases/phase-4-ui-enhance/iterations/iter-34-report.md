@@ -73,6 +73,12 @@
 |---|---|
 | 编辑器 quality-gate 字段缺失（#8 最可能根因） | Iter-36 表单补全（含 U2） |
 | gate-block 变体导致工作流 FAILED 后的续跑体验 | 用户验证反馈后评估 |
+| 语义校验增强候选：max-retries 在 on-failure≠retry 时静默无效（verify-gate-4423b98e 验证混淆的根因） | 候选 W 级警告，Iter-36/37 评估 |
+| verify-gate 模板补 retry 耗尽变体（gate-retry-exhaust：never-pass+retry+maxRetries 2），供 retry 循环可观察验证 | ✅ v0.26.4 已交付 |
+
+## 10. 补记：retry 验证混淆说明（2026-09-17，verify-gate-4423b98e）
+
+用户设置 max-retries 2/3 于 gate-skip/gate-block（on-failure 为 skip/block）后观察「retry 未生效」——**行为符合设计**：`max-retries` 仅在 `on-failure: retry` 时有意义，skip/block 语义下被忽略；而唯一 retry 变体（gate-pass）的 checker 会 PASS，触发不了重试。处置：verify-gate 模板新增 `gate-retry-exhaust` 变体（never-pass+retry+maxRetries 2），重跑即可完整观察「FAIL→重执行×2（每次携带 gateNote 失败理由）→耗尽 FAILED」循环。
 
 ## 9. 参考
 

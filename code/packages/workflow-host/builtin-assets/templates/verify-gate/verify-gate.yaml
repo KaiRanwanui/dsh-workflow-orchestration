@@ -4,7 +4,7 @@
 # gateResult 是否落快照（DAG 状态条 G: 与任务角标）、FAIL 后按 on-failure 处置是否正确。
 name: verify-gate
 version: "1.0"
-description: "验证质量门禁三变体：PASS→DONE / skip→SKIPPED / block→FAILED（配套 never-pass 探针技能）"
+description: "验证质量门禁四变体：PASS→DONE / skip→SKIPPED / retry 耗尽→FAILED / block→阻断（配套 never-pass 探针技能）"
 max-concurrency: 3
 tasks:
   - id: gate-pass
@@ -24,6 +24,15 @@ tasks:
       checker: skills/never-pass/SKILL.md
       on-failure: skip
       max-retries: 1
+
+  - id: gate-retry-exhaust
+    name: "门禁 retry 耗尽变体（预期 FAIL→重试 2 次→FAILED）"
+    processor: skills/item-processor/SKILL.md
+    outputs: ["output/gate-retry.md"]
+    quality-gate:
+      checker: skills/never-pass/SKILL.md
+      on-failure: retry
+      max-retries: 2
 
   - id: gate-block
     name: "门禁 block 变体（预期 FAIL→工作流阻断）"
