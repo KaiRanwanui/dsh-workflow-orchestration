@@ -39,7 +39,13 @@ function applyInternal(ctx) {
     if (!sessionQuery || typeof sessionQuery.listSessions !== 'function') return true
     try {
       const records = await sessionQuery.listSessions()
-      return (records || []).some((r) => r && (r.id === sid || r.sessionId === sid))
+      // SessionRecord 形态（dsh-session-query types）：{ header: SessionHeader, live, persisted }
+      // ——会话 id 在 header.id；v0.26.0 首版误用 r.id/r.sessionId 致全量 miss（真机复现后修正）
+      return (records || []).some((r) => {
+        if (!r) return false
+        const rid = (r.header && r.header.id) || r.id || r.sessionId
+        return rid === sid
+      })
     } catch (e) {
       return true
     }
