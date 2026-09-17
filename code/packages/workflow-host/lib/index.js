@@ -5366,6 +5366,7 @@ function registerWebRoutes(ctx, registry) {
           }))
           writeJson(res, 200, {
             instanceId, dir: entry.dir, stage, editable: perms,
+            text, // Iter-35：strip 后的 instance.yaml 原文（编辑器源码模式数据源）
             parseErrors: parsed.errors || [],
             instance: {
               name: parsed.name,
@@ -5457,6 +5458,76 @@ function registerWebRoutes(ctx, registry) {
             try { args = JSON.parse(body || '{}') } catch (e) { writeJson(res, 400, { error: 'invalid json body' }); return }
             const r = await editInstancePipeline(args, false)
             writeJson(res, r.code, r.body)
+          } catch (e) {
+            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+          }
+        })
+        return
+      }
+
+      // Iter-35：源码模式保存（定义全文替换）。同一语义校验关口（parse + instance 语境校验，
+      // errors 非空不落盘）；instance.yaml 注释头原样保留（同 patch 管道规则）；权限矩阵
+      // （editable.definition / readonlyAll）服务端兜底。与 patch 管道互斥：body 带 text 即全文。
+      if (req.method === 'POST' && pathname === '/wf/instance-yaml-raw') {
+        let body = ''
+        let oversized = false
+        req.on('data', (chunk) => { body += chunk; if (body.length > 2097152) { oversized = true; req.destroy() } })
+        req.on('end', async () => {
+          try {
+            if (oversized) { writeJson(res, 400, { error: 'body 超限' }); return }
+            let args = {}
+            try { args = JSON.parse(body || '{}') } catch (e) { writeJson(res, 400, { error: 'invalid json body' }); return }
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            const instanceId = args.instanceId
+            const newText = String(args.text || '')
+            if (!root || !instanceId) { writeJson(res, 400, { error: 'workspaceRoot and instanceId required' }); return }
+            if (!newText.trim()) { writeJson(res, 400, { error: 'text 为空，拒绝保存' }); return }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            if (!fs) { writeJson(res, 500, { error: 'fs service unavailable' }); return }
+            const entry = await registry.loadEntry(root, instanceId)
+            if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
+            const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
+            const perms = instanceEditPermissions(stage)
+            if (!perms.definition || perms.readonlyAll) {
+              writeJson(res, 403, { error: '当前阶段（' + stage + '）不允许编辑定义', stage, editable: perms })
+              return
+            }
+            const rawFile = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
+            // 注释头原样保留（同 patch 管道规则：创建时写入的快照元信息不动）
+            const lines = rawFile.split(/\r?\n/)
+            let hi = 0
+            while (hi < lines.length && (lines[hi].trim() === '' || lines[hi].trim().startsWith('#'))) hi++
+            const header = lines.slice(0, hi).join('\n')
+            const parsed = parseWorkflow(newText)
+            let vErrors = []
+            let vWarnings = []
+            if (parsed.errors && parsed.errors.length > 0) {
+              vErrors = parsed.errors.map((msg) => ({ code: 'E-PARSE', task: null, field: null, message: msg }))
+            } else {
+              const meta = entry.meta || {}
+              const defDir = presetTemplateDirOf(meta.sourcePath, detectPredefinedRoot()) || undefined
+              const vRes = await validateWorkflow({
+                parsed,
+                params: meta.params || {},
+                workspaceRoot: meta.sessionCwd || undefined,
+                predefinedRoot: detectPredefinedRoot(),
+                defDir,
+                wfDir: entry.dir,
+                context: 'instance',
+                fs,
+              })
+              vErrors = vRes.errors || []
+              vWarnings = (vRes.warnings || []).map(formatValidationItem)
+            }
+            if (vErrors.length > 0) {
+              writeJson(res, 400, { error: '语义校验未通过（' + vErrors.length + ' 项错误），未保存', stage, editable: perms, errors: vErrors, warnings: vWarnings, workflowBeginErrors: vErrors.map(formatValidationItem), hint: GATE_HINT })
+              return
+            }
+            const outText = (header ? header + '\n' : '') + newText
+            await fs.writeText(await fs.resolve(entry.dir + '/instance.yaml'), outText)
+            const validationSnapshot = { ok: true, errors: [], warnings: vWarnings, validatedAt: new Date().toISOString() }
+            try { await registry.patchMeta(root, instanceId, { validation: validationSnapshot }) } catch (e2) { /* 快照失败不阻断保存 */ }
+            writeJson(res, 200, { ok: true, saved: true, stage, editable: instanceEditPermissions(stage), warnings: vWarnings, validation: validationSnapshot })
           } catch (e) {
             writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
           }

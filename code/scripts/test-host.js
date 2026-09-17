@@ -2552,6 +2552,8 @@ async function runCase25() {
   check('edit GET: CREATED 权限 definition=true', r.code === 200 && r.body.stage === 'CREATED' && r.body.editable.definition === true && r.body.editable.runtime === true, JSON.stringify(r.body.editable))
   check('edit GET: 任务 raw 字段（processor/gateChecker/retries/outputs）', r.body.tasks.length === 1 && r.body.tasks[0].processor === '/ws/t25/x/a/SKILL.md' && r.body.tasks[0].gateChecker === '/ws/t25/x/c/SKILL.md' && r.body.tasks[0].retries === 1 && r.body.tasks[0].outputs[0] === '/ws/t25/output/a.md', JSON.stringify(r.body.tasks[0]))
   check('edit GET: 实例级 name/params/maxConcurrency', r.body.instance.name === 't25edit' && r.body.instance.params.topic === 'T' && r.body.instance.maxConcurrency === 2, JSON.stringify(r.body.instance))
+  // Iter-35：GET 响应含 text（strip 后 instance.yaml 原文，源码模式数据源）
+  check('edit GET: text 字段=strip 后定义原文（含任务 id）', typeof r.body.text === 'string' && r.body.text.indexOf('t25edit') !== -1 && r.body.text.indexOf('#') !== 0, typeof r.body.text === 'string' ? r.body.text.slice(0, 60) : r.body.text)
 
   // POST 保存：合法 patch → 200 + 落盘（header 保留 + 新值 + serialize 形态）
   r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { maxConcurrency: 3, tasks: { a: { processor: '/ws/t25/x/g/SKILL.md', retries: 2 } } } })

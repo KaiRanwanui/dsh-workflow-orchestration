@@ -92,6 +92,10 @@ function register(ctx) {
       const [valRes, setValRes] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
       const [err, setErr] = React.useState('')
+      // Iter-35：源码模式（'form' 表单态 | 'src' 源码态）；srcText=源码编辑缓冲；skillView=技能全文只读弹层
+      const [mode, setMode] = React.useState('form')
+      const [srcText, setSrcText] = React.useState('')
+      const [skillView, setSkillView] = React.useState(null)
 
       const load = React.useCallback(() => {
         if (!workspaceRoot || !instanceId) return
@@ -213,6 +217,42 @@ function register(ctx) {
         } finally { setBusy(false) }
       }
 
+      // Iter-35：源码模式保存（全文替换；同一语义校验关口；errors 非空服务端不落盘）
+      const doSaveSrc = async () => {
+        if (busy) return
+        setBusy(true); setErr(''); setValRes(null)
+        try {
+          const resp = await fetch('/wf/instance-yaml-raw', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceRoot, instanceId, text: srcText }),
+          })
+          const r = await resp.json()
+          if (!resp.ok) {
+            setValRes({
+              ok: false, kind: 'save',
+              lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
+              editLines: [],
+            })
+            return
+          }
+          setValRes({ ok: true, kind: 'save', warnings: (r && r.warnings) || [] })
+          load()
+          if (typeof onSaved === 'function') onSaved()
+        } catch (e) {
+          setErr(e && e.message ? e.message : String(e))
+        } finally { setBusy(false) }
+      }
+
+      // Iter-35：技能全文只读浏览（GET /wf/skill；skills 不物化进实例，仅浏览不编辑）
+      const openSkillView = (p) => {
+        if (!p) return
+        setSkillView({ path: p, text: null, err: null })
+        fetch('/wf/skill?path=' + encodeURIComponent(p))
+          .then(r => r.json())
+          .then(r => setSkillView({ path: p, text: r && r.text, err: r && r.error ? r.error : '' }))
+          .catch(e => setSkillView({ path: p, text: null, err: e && e.message ? e.message : String(e) }))
+      }
+
       const inputStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 5, padding: '3px 7px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
       const btnStyle2 = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
       const labelStyle = { display: 'inline-block', minWidth: 86, color: '#9ca3af', fontSize: 11 }
@@ -220,7 +260,8 @@ function register(ctx) {
       const dis = (allowed) => busy || !allowed || editable.readonlyAll
 
       // 技能下拉（value=相对形态 relPath；当前值不在列表时保留显示为警示项）
-      const mkSkillSelect = (value, onChange, disabled, emptyLabel) => {
+      // Iter-35：可选「查看」入口（onView）→ 只读弹层展示技能全文（GET /wf/skill）
+      const mkSkillSelect = (value, onChange, disabled, emptyLabel, onView) => {
         const opts = []
         if (emptyLabel) opts.push({ v: '', label: emptyLabel })
         if (value && !skills.some(s => s.relPath === value)) opts.push({ v: value, label: '⚠ ' + value + '（当前值，不在技能列表）' })
@@ -228,8 +269,17 @@ function register(ctx) {
           v: s.relPath,
           label: (s.name || s.id) + (s.version ? ' (v' + s.version + ')' : '') + (s.source === 'workspace' ? ' · 工作区' : '') + (s.predefinedShadowed ? '（顶替预定义同名）' : ''),
         }))
-        return React.createElement('select', { value: value == null ? '' : value, onChange, disabled, style: inputStyle },
+        const select = React.createElement('select', { value: value == null ? '' : value, onChange, disabled, style: Object.assign({}, inputStyle, onView ? { flex: '1 1 auto', minWidth: 0 } : null) },
           opts.map(o => React.createElement('option', { key: o.v || '__e', value: o.v }, o.label)))
+        if (!onView) return select
+        return React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center', width: '100%' } }, [
+          select,
+          React.createElement('button', {
+            onClick: () => onView && onView(value), disabled: disabled || !value,
+            title: '查看技能全文（只读）',
+            style: Object.assign({}, btnStyle2, { whiteSpace: 'nowrap', opacity: disabled || !value ? 0.5 : 1 }),
+          }, '查看'),
+        ])
       }
 
       const KvEditor = getKeyValueComponent()
@@ -280,11 +330,11 @@ function register(ctx) {
         React.createElement('div', { key: 'tt', style: { fontWeight: 600 } }, (selTask.name || selTask.id) + '  ', React.createElement('span', { style: { color: '#9ca3af', fontWeight: 400, fontSize: 11 } }, selTask.id + ' · ' + (typeLabel[selTask.type] || selTask.type))),
         React.createElement('div', { key: 'p', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'processor'),
-          mkSkillSelect(getF('processor', selTask.processor), (e) => setF('processor', e.target.value), dis(editable.definition), null),
+          mkSkillSelect(getF('processor', selTask.processor), (e) => setF('processor', e.target.value), dis(editable.definition), null, (p) => openSkillView(p)),
         ]),
         React.createElement('div', { key: 'g', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'gateChecker'),
-          mkSkillSelect(getF('gateChecker', selTask.gateChecker), (e) => setF('gateChecker', e.target.value), dis(editable.definition), '（无门禁）'),
+          mkSkillSelect(getF('gateChecker', selTask.gateChecker), (e) => setF('gateChecker', e.target.value), dis(editable.definition), '（无门禁）', (p) => openSkillView(p)),
         ]),
         React.createElement('div', { key: 'i', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'inputs'),
@@ -340,10 +390,40 @@ function register(ctx) {
           editable.readonlyAll ? React.createElement('span', { key: 'ro', style: { color: '#f59e0b', fontSize: 11 } }, '运行中不可编辑（停止后可改并发/重试；定义字段仅 CREATED 可改）') : null,
           !editable.definition && !editable.readonlyAll ? React.createElement('span', { key: 'pd', style: { color: '#9ca3af', fontSize: 11 } }, '已启动：processor/gateChecker/inputs/outputs 只读（重定义请 reset 后经编辑器或重新 create）') : null,
           React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+          // Iter-35：表单/源码两态切换（未保存改动切换弹确认，防误丢）
+          React.createElement('button', {
+            key: 'md', style: Object.assign({}, btnStyle2, { fontWeight: 600 }),
+            onClick: () => {
+              if (mode === 'form' && dirty) { if (!window.confirm('表单有未保存修改，切换到源码模式将丢弃，确认切换？')) return }
+              if (mode === 'src' && srcText !== ((data && data.text) || '')) { if (!window.confirm('源码有未保存修改，切换将丢弃，确认切换？')) return }
+              if (mode === 'form') setSrcText((data && data.text) || '')
+              setMode(mode === 'form' ? 'src' : 'form'); setValRes(null)
+            },
+          }, mode === 'form' ? '源码' : '表单'),
           React.createElement('button', { key: 'x', onClick: onClose, style: btnStyle2 }, '收起'),
         ]),
         err ? React.createElement('div', { key: 'err', style: { color: '#f87171', fontSize: 12 } }, err) : null,
-        !data ? React.createElement('div', { key: 'ld', style: { color: '#9ca3af', fontSize: 12 } }, '加载中…') : [
+        !data ? React.createElement('div', { key: 'ld', style: { color: '#9ca3af', fontSize: 12 } }, '加载中…')
+        : mode === 'src' ? [
+          // Iter-35：源码模式——instance.yaml 全文编辑（占满编辑区，内滚动；保存走语义校验闸）
+          React.createElement('div', { key: 'src', style: { display: 'flex', flexDirection: 'column', gap: 6, flex: 1, minHeight: 380 } }, [
+            React.createElement('div', { key: 'hint', style: { fontSize: 11, color: '#9ca3af' } },
+              'YAML 源码（instance.yaml 定义全文；顶部注释头保留）。保存走语义校验关口：errors 非空不落盘。'),
+            React.createElement('textarea', {
+              key: 'ta', value: srcText, spellCheck: false,
+              readOnly: dis(editable.definition),
+              onChange: (e) => { setSrcText(e.target.value); setValRes(null) },
+              style: { flex: 1, minHeight: 380, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre', overflow: 'auto', border: '1px solid rgba(148,163,184,0.4)', borderRadius: 6, padding: 8, background: 'rgba(21,32,51,0.55)', color: 'inherit', boxSizing: 'border-box' },
+            }),
+            React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
+              (srcText !== ((data && data.text) || '')) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '源码有未保存修改') : null,
+              React.createElement('button', {
+                key: 's', onClick: doSaveSrc, disabled: busy || editable.readonlyAll || srcText === ((data && data.text) || ''),
+                style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: busy || editable.readonlyAll || srcText === ((data && data.text) || '') ? 0.5 : 1 }),
+              }, busy ? '处理中…' : '保存源码（校验通过才落盘）'),
+            ]),
+          ]),
+        ] : [
           React.createElement('div', { key: 'ins', style: { display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'flex-start', borderBottom: '1px solid rgba(148,163,184,0.2)', paddingBottom: 7 } }, [
             React.createElement('div', { key: 'n', style: rowStyle }, [
               React.createElement('span', { key: 'l', style: labelStyle }, 'name'),
@@ -375,6 +455,26 @@ function register(ctx) {
             }, busy ? '处理中…' : '保存（校验通过才落盘）'),
           ]),
         ],
+        // Iter-35：技能全文只读弹层（processor/gateChecker「查看」入口；两种模式均可用）
+        skillView ? React.createElement('div', {
+          key: 'sv', onClick: () => setSkillView(null),
+          style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 },
+        }, React.createElement('div', {
+          onClick: (e) => e.stopPropagation(),
+          style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 8, padding: 14, width: 720, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8 },
+        }, [
+          React.createElement('div', { key: 'h', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+            React.createElement('span', { key: 't', style: { fontWeight: 600, fontSize: 12 } }, '技能全文（只读）'),
+            React.createElement('span', { key: 'p', style: { fontSize: 11, color: '#9ca3af', fontFamily: 'monospace', wordBreak: 'break-all' } }, skillView.path),
+            React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+            React.createElement('button', { key: 'c', onClick: () => setSkillView(null), style: btnStyle2 }, '关闭'),
+          ]),
+          skillView.err
+            ? React.createElement('div', { key: 'e', style: { color: '#f87171', fontSize: 12 } }, skillView.err)
+            : React.createElement('pre', {
+                key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'rgba(21,32,51,0.55)', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: 10 },
+              }, skillView.text === null || skillView.text === undefined ? '加载中…' : String(skillView.text)),
+        ])) : null,
       ])
     }
     return EditorComponent
@@ -1297,7 +1397,6 @@ function lgAggStatus(items) {
           const [mgmtOpen, setMgmtOpen] = React.useState(false)
           const [tplOpts, setTplOpts] = React.useState([])
           const [tplSel, setTplSel] = React.useState('custom')
-          const [yamlText, setYamlText] = React.useState('')
           const [pathText, setPathText] = React.useState('')
           // Iter-28：params 由 JSON textarea 改为 key-value 编辑器（模板默认值预填）
           const [paramsEntries, setParamsEntries] = React.useState([])
@@ -1325,7 +1424,7 @@ function lgAggStatus(items) {
                 ;(r.predefined || []).forEach(p => opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + (descOf(p) || p.name) + (p.fallback ? '（内建兜底）' : ''), t: p }))
                 setTplOpts(opts)
                 if (opts.length > 1) {
-                  setTplSel(opts[1].v); setYamlText(opts[1].t ? opts[1].t.yaml : '')
+                  setTplSel(opts[1].v)
                   // Iter-28：默认模板 params 默认值预填（{key: default 原值} → 行编辑器形态）
                   const pv = opts[1].t && opts[1].t.params ? opts[1].t.params : {}
                   setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
@@ -1340,7 +1439,6 @@ function lgAggStatus(items) {
             setTplSel(v)
             setFormErr(''); setFormErrItems([])
             const opt = tplOpts.find(o => o.v === v)
-            setYamlText(opt && opt.t ? opt.t.yaml : '')
             // Iter-28：切模板重置 params 预填
             const pv = opt && opt.t && opt.t.params ? opt.t.params : {}
             setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
@@ -1369,14 +1467,13 @@ function lgAggStatus(items) {
                 if (!pathText.trim()) throw new Error('请填写 workflowPath')
                 payload.workflowPath = pathText.trim()
               } else if (tplSel.startsWith('tpl:')) {
-                // Iter-24：模板选择统一走可编辑 yaml → workflowText（预定义与内建兜底同构）
-                if (!yamlText.trim()) throw new Error('模板内容为空')
-                payload.workflowText = yamlText
-                // Iter-30 附加修复：同时提交模板源路径——host 据此恢复 definition-preset 语境
-                //（目录锚点，items-from/相对路径按模板子目录解析，消除 E-ITEMS-MISSING 误报）
-                // 并触发模板静态文件 1:1 复制（presetCopy，实例自包含）。内建兜底（无 path）保持旧行为。
+                // Iter-35（用户拍板）：创建不再携带/编辑 yaml——仅提交模板源路径（模板引用语义，
+                // presetCopy/目录锚点/静态文件复制天然生效）；定义编辑统一在实例编辑器（源码/表单态）。
+                // 内建兜底模板（无源路径）不可用此通道，提示改选预定义模板。
                 const tplOpt = tplOpts.find(o => o.v === tplSel)
-                if (tplOpt && tplOpt.t && tplOpt.t.path) payload.workflowPath = tplOpt.t.path
+                const tplPath = tplOpt && tplOpt.t && tplOpt.t.path
+                if (!tplPath) throw new Error('该模板为内建兜底（无源路径），请选择预定义模板或使用路径直填')
+                payload.workflowPath = tplPath
               }
               const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
               const r = await resp.json()
@@ -1646,7 +1743,7 @@ function lgAggStatus(items) {
               tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: '#1e293b', background: '#f8fafc' } }, o.label))
             ),
             tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
-            tplSel.indexOf('tpl:') === 0 ? React.createElement('textarea', { key: 'y', value: yamlText, onChange: e => setYamlText(e.target.value), rows: 10, style: monoStyle, spellCheck: false }) : null,
+            tplSel.indexOf('tpl:') === 0 ? React.createElement('div', { key: 'y', style: { fontSize: 11, color: '#9ca3af' } }, '创建后可在实例编辑器（表单 / 源码）中调整定义全文。') : null,
             React.createElement('label', { key: 'l2' }, 'params（键值对；模板默认值已预填，可增删改）'),
             React.createElement(KvEditor, { key: 'pj', entries: paramsEntries, onChange: setParamsEntries, keyPlaceholder: '参数名', valuePlaceholder: '值' }),
             formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
