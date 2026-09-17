@@ -343,14 +343,34 @@ export function register(ctx) {
           mkSkillSelect(getF('processor', selTask.processor), (e) => setF('processor', e.target.value), dis(editable.definition), null, (p) => openSkillView(p)),
         ]),
         // Iter-36：depends-on（逗号分隔单行，同 outputs 风格；引用存在性/环依赖由语义关口兜底）
-        React.createElement('div', { key: 'dep', style: rowStyle }, [
-          React.createElement('span', { key: 'l', style: labelStyle }, 'depends-on'),
-          React.createElement('input', {
-            key: 'in', value: (function () { const v = getF('dependsOn', selTask.dependsOn || []); return Array.isArray(v) ? v.join(', ') : String(v || '') })(),
-            onChange: (e) => setF('dependsOn', e.target.value.split(',').map(s => s.trim()).filter(Boolean)),
-            disabled: dis(editable.definition), placeholder: '前驱任务 id，逗号分隔', style: inputStyle,
-          }),
-        ]),
+        // Iter-36（用户拍板）：depends-on 多选 chips——从现有任务定义中选 id（排除自身）；
+        // 历史遗留的失效引用（不在任务列表）显示为可删除的警示项；引用存在性由语义关口兜底
+        (function () {
+          const depVal = getF('dependsOn', selTask.dependsOn || [])
+          const deps = Array.isArray(depVal) ? depVal.map(String) : []
+          const toggleDep = (id) => setF('dependsOn', deps.indexOf(id) !== -1 ? deps.filter(x => x !== id) : deps.concat([id]))
+          const known = tasks.filter(t => t && t.id !== selId)
+          const unknown = deps.filter(d => !known.some(t => t.id === d)) // 失效引用（任务已不存在）
+          const chip = (id, warn) => {
+            const on = deps.indexOf(id) !== -1
+            return React.createElement('button', {
+              key: 'd' + id, disabled: dis(editable.definition),
+              title: warn ? '失效引用（任务已不存在），点击移除' : (on ? '点击移除依赖' : '点击添加依赖'),
+              onClick: () => { if (warn && on) toggleDep(id); else if (!warn) toggleDep(id) },
+              style: Object.assign({}, btnStyle2, { fontSize: 11, padding: '2px 8px', borderRadius: 10 },
+                on ? { background: '#3b82f6', color: '#fff', border: 'none' } : { opacity: warn ? 0.55 : 1 },
+                warn ? { color: warn && on ? '#fff' : '#f59e0b', borderColor: 'rgba(245,158,11,0.6)' } : null),
+            }, (warn ? '⚠ ' : '') + id)
+          }
+          return React.createElement('div', { key: 'dep', style: rowStyle }, [
+            React.createElement('span', { key: 'l', style: labelStyle }, 'depends-on'),
+            React.createElement('div', { key: 'chips', style: { flex: 1, minWidth: 0, display: 'flex', flexWrap: 'wrap', gap: 4 } },
+              tasks.filter(t => t && t.id !== selId).map(t => chip(t.id, false))
+                .concat(unknown.map(d => chip(d, true))),
+              known.length === 0 && unknown.length === 0 ? React.createElement('span', { key: 'none', style: { fontSize: 11, color: '#9ca3af' } }, '（暂无其他任务）') : null,
+            ),
+          ])
+        })(),
         // Iter-36：timeout（秒）
         React.createElement('div', { key: 'to', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'timeout'),
