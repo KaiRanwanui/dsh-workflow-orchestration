@@ -69,3 +69,9 @@
 
 - 设计：`iter-36-design.md`（字段矩阵 §2）
 - 来源：改进项「完整可执行期编辑属性」+ 分诊 #5/#6/U2 + 4423b98e 混淆预防（W 警告）
+
+## 10. 补记：技能查看路径解析修正（v0.26.10，2026-09-17）
+
+用户复验反馈：processor/gateChecker「查看」仍失败——传入的是工作区 skills 相对路径，而 never-pass 等技能实际在预定义物化目录（~/.dsh/workflow-agent/skills/）。修正：openSkillView 优先用 /wf/skills 列表项自带的绝对路径 path（两级链已裁决：工作区顶替→生效工作区副本；预定义→物化目录），列表未命中再回退 workspaceRoot 拼接（覆盖历史实例「当前值不在列表」场景）。
+
+另答用户问：loop/concurrent 任务配置 quality-gate = **每个迭代独立执行门禁**（schema 明确；tools-preset 逐迭代复制 gate「同一 checker，独立执行」）——每个迭代完成后先走自己的 checker 子会话、PASS 才算该迭代 DONE；组级聚合仅做「全部迭代终态」判定放行下游。FAIL 处置（retry/skip/block）为迭代粒度。
