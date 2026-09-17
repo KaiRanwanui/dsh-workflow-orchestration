@@ -5499,11 +5499,12 @@ function registerWebRoutes(ctx, registry) {
             while (hi < lines.length && (lines[hi].trim() === '' || lines[hi].trim().startsWith('#'))) hi++
             const header = lines.slice(0, hi).join('\n')
             const parsed = parseWorkflow(newText)
-            let vErrors = []
+            // Iter-35 修正（用户验证反馈）：解析错误不再屏蔽语义校验——原实现解析层有错
+            // （如 depends-on 引用未定义任务）即跳过语义层，「修一条露一条」。现两层并报：
+            // 解析错误（E-PARSE）+ 语义错误（环依赖/缺 processor/技能缺失等）全量合并呈现。
+            let vErrors = (parsed.errors || []).map((msg) => ({ code: 'E-PARSE', task: null, field: null, message: String(msg) }))
             let vWarnings = []
-            if (parsed.errors && parsed.errors.length > 0) {
-              vErrors = parsed.errors.map((msg) => ({ code: 'E-PARSE', task: null, field: null, message: msg }))
-            } else {
+            try {
               const meta = entry.meta || {}
               const defDir = presetTemplateDirOf(meta.sourcePath, detectPredefinedRoot()) || undefined
               const vRes = await validateWorkflow({
@@ -5516,9 +5517,9 @@ function registerWebRoutes(ctx, registry) {
                 context: 'instance',
                 fs,
               })
-              vErrors = vRes.errors || []
+              vErrors = vErrors.concat(vRes.errors || [])
               vWarnings = (vRes.warnings || []).map(formatValidationItem)
-            }
+            } catch (e2) { /* 语义校验异常（如解析残缺导致）→ 保留解析错误，不叠加 */ }
             if (vErrors.length > 0) {
               writeJson(res, 400, { error: '语义校验未通过（' + vErrors.length + ' 项错误），未保存', stage, editable: perms, errors: vErrors, warnings: vWarnings, workflowBeginErrors: vErrors.map(formatValidationItem), hint: GATE_HINT })
               return
