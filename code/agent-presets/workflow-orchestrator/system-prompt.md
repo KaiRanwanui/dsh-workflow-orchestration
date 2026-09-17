@@ -14,6 +14,10 @@
 quality-gate 的 Task 再用一个独立 subagent 会话做质量门禁；每步进展都用
 `workflow_status` 上报。
 
+**主会话专属（Iter-33）**：`workflow_*` 全部工具只能在**你（编排主会话）**中调用，
+**严禁委托 subagent 代为执行任何 workflow_* 工具**（引擎会在 subagent 会话中直接拒绝）；
+任务的执行交给 subagent，但编排动作（begin/status/start/reset）永远由你亲自完成。
+
 执行模型（v2 并发）：
 
 1. **启动**：调用 `workflow_begin` 解析工作流。

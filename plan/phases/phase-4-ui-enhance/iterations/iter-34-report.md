@@ -1,8 +1,8 @@
 # Iter-34 报告 — 门禁真实执行（缺陷 #8 闭环）
 
-- **状态**：🚧 编码与单测完成，v0.27.0 已发行部署（含 preset persona 同步），**待用户真机验收**
+- **状态**：🚧 编码与单测完成，v0.26.3 已发行部署（含 preset persona 同步），**待用户真机验收**
 - **阶段**：阶段 4（现有功能修复）
-- **版本**：host `v0.26.2 → v0.27.0`（门禁执行语义变更，minor）
+- **版本**：host `v0.26.2 → v0.26.3`（阶段内第三格顺延；门禁执行语义变更）
 - **测试**：588 单测全绿（+用例 34 门禁软强制/pendingGates 6 断言；2 处既有模拟修正为携带 gateResult 的正确门禁流程）
 - **提交**：见 git log
 
@@ -29,7 +29,7 @@
 | `code/plugins/workflow-host/engine.js` | ① updateTask 门禁软强制：有 gate 且无 gateResult 标 DONE → throw 结构化指引（正确路径三步 + FAIL 按 onFailure 处置）；gateResult=FAIL 标 DONE → throw 指引（retry 回 RUNNING 附 gateNote / block→FAILED / skip→SKIPPED）② updateTask 支持 `gateNote` 字段留存快照 ③ snapshot 新增 **`pendingGates`** 摘要（有 gate 未出结果、非终态任务清单）④ taskSnapshot 补 gateNote |
 | `code/plugins/workflow-host-preset/tools-preset.js` | workflow_status：schema 增加 `gateNote` 参数；**per-task gateResult 接通**（此前工具层未把 gateResult 传入单任务 patch，任务级门禁结果恒空——本次顺带修正的关键缺口） |
 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | §5 质量门禁重写：pendingGates 先看、DONE 前置=gateResult、gateNote 必填、FAIL 重试派发必须附失败理由与修正要求、retry 耗尽→FAILED |
-| `code/packages/workflow-host/package.json` | v0.25.2 → **v0.27.0** |
+| `code/packages/workflow-host/package.json` | v0.25.2 → **v0.26.3** |
 | `code/scripts/test-host.js` | 新增用例 34（6 断言）；修正 2 处既有模拟（gated 任务 DONE 携带 gateResult，符合新门禁语义） |
 
 ## 4. 实施与验证过程（差分）
@@ -47,7 +47,7 @@
 | 验证项 | 结果 | 证据 |
 |---|---|---|
 | 单测 | ✅ 588 全绿 | 用例 34 六断言：无门禁放行 / 无 gateResult 拒+指引 / pendingGates / FAIL 拒+处置指引 / SKIPPED+gateNote 留存 / PASS 同批放行 |
-| 产物级 | ✅ | bundle + 发行内容断言（v0.27.0） |
+| 产物级 | ✅ | bundle + 发行内容断言（v0.26.3） |
 | preset 同步 | ✅ | 部署副本与源 diff 一致 |
 | 真机（用户 GUI） | ⏳ 待验收 | 见 §7 三条效果验收 |
 

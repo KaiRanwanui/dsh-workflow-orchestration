@@ -696,7 +696,31 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   // Iter-26R：返回值补 entry（实例条目，含 dir/meta）——workflow_status 的延迟展开
   // 前置检查（expandDeferredGroups）需要 entry.dir 构造 expandFn；此前 b.entry 恒
   // undefined 导致展开从未触发（GUI 验收实证）。
+  // Iter-33（缺陷 #12）：subagent 会话判定（sessionQuery 持久化头 parentSession 字段；
+  // 探针实证：子会话头含 parentSession/origin，主会话两者为空）。判定不可用时放行。
+  async function assertMainSession(exec) {
+    try {
+      const sq = typeof ctx.get === 'function' ? ctx.get('sessionQuery') : null
+      const sid = registry && typeof registry.sessionIdOf === 'function' ? registry.sessionIdOf(exec) : null
+      if (!sid || !sq || typeof sq.listSessions !== 'function') return null
+      const recs = await sq.listSessions()
+      const rec = (recs || []).find((r) => r && ((r.header && r.header.id === sid) || r.id === sid))
+      if (rec && rec.header && rec.header.parentSession) {
+        return 'workflow_* 工具须在编排主会话中执行，当前是 subagent 会话（…' + String(sid).slice(-8)
+          + '）。请在主会话直接执行工作流编排动作；subagent 不应代为调用 workflow_* 工具。'
+      }
+    } catch (e) { /* 判定失败 → 放行 */ }
+    return null
+  }
+
   async function bind(exec, args) {
+    // Iter-33（缺陷 #12）：workflow_* 工具拒绝在 subagent 会话内执行——
+    // 实证（verify-gate-c3a579cf 第二轮）：编排 Agent 把「重置后重新执行」委托给 subagent 后，
+    // workflow_begin 在 subagent 会话内新建并绑定了实例（绑定到 subagent），任务派发全挂在
+    // subagent 之下、用户对原实例的编辑也没有进入执行实例。守卫：当前会话持久化头带
+    // parentSession（即 subagent）→ 硬错误拒绝；判定失败放行（保守，不阻塞主会话）。
+    const subagentReject = await assertMainSession(exec)
+    if (subagentReject) throw new Error(subagentReject)
     if (args && (args.statePath || args.workspaceRoot)) {
       return { engine, storage, instanceId: null, entry: null }
     }
