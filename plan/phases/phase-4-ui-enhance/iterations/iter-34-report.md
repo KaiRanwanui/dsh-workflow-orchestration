@@ -75,6 +75,11 @@
 | gate-block 变体导致工作流 FAILED 后的续跑体验 | 用户验证反馈后评估 |
 | 语义校验增强候选：max-retries 在 on-failure≠retry 时静默无效（verify-gate-4423b98e 验证混淆的根因） | 候选 W 级警告，Iter-36/37 评估 |
 | verify-gate 模板补 retry 耗尽变体（gate-retry-exhaust：never-pass+retry+maxRetries 2），供 retry 循环可观察验证 | ✅ v0.26.4 已交付 |
+| 门禁结论全文机械传递：gateNote 摘要经两跳 LLM 转述有删减（用户真机观察）→ checker 结论落盘 `<实例目录>/logs/gate-<task>-<序号>.md` + 重试派发引用文件路径（persona §5.c/d + never-pass 技能同步） | ✅ v0.26.5 已交付 |
+
+## 11. 补记：门禁结论落盘机制（v0.26.5，2026-09-17）
+
+真机验证反馈：retry 循环与门禁结果传递已通，但传递内容**非全文**——机制固有：gateNote 定义即摘要，重派发 prompt 又经 LLM 转述，两跳均无全文保证。修正（persona/技能层，引擎零改动）：①checker 派发指令要求把完整结论写入 `<实例目录>/logs/gate-<task>-<尝试序号>.md`；②FAIL 重试派发 prompt 必须含结论**文件路径**并指示「先 read 全文，再按失败点逐条修正」；③gateNote 保留为人读摘要；④结论文件按尝试序号留存，天然形成逐轮门禁历史。
 
 ## 10. 补记：retry 验证混淆说明（2026-09-17，verify-gate-4423b98e）
 

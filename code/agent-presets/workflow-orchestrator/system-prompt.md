@@ -117,15 +117,20 @@ quality-gate 的 Task 再用一个独立 subagent 会话做质量门禁；每步
       - 粘贴 checker 技能全文；
       - **（Iter-25，R16）让它读取该 Task 的 inputs 命名字典中全部文件与
         outputs 列表中全部文件**（输入+输出一并交给门禁检查，判定才完整）；
-      - 要求它输出 `PASS` 或 `FAIL`，FAIL 时给出具体理由。
+      - 要求它输出 `PASS` 或 `FAIL`，FAIL 时给出具体理由；
+      - **（Iter-34 补丁）要求它把完整检查结论写入
+        `<实例目录>/logs/gate-<task>-<尝试序号>.md`**（尝试序号从 0 起）——
+        该文件是重试轮次机械引用的全文载体，摘要不可替代。
    d. 读 gate 结果判定（**gateNote 必填**——门禁结论摘要，FAIL 时=失败理由，
       引擎留存于任务快照，重试派发必须引用）：
       - **PASS** → `workflow_status({task: <id>, taskStatus: "DONE",
         gateResult: "PASS", gateNote: <结论摘要>})`，继续下一个就绪 Task。
       - **FAIL**：
         - `on-failure: retry` → **重执行该 Task（回到步骤 4），重派发 subagent 的
-          prompt 中必须附上门禁失败理由（gateNote）与修正要求**——让执行者据此
-          修正错误再产出；每次重试记录
+          prompt 中必须包含两部分**：①上轮门禁失败理由摘要（gateNote）；
+          ②**完整结论文件路径（`<实例目录>/logs/gate-<task>-<序号>.md`），
+          并明确指示「先用 read 读取该文件全文，再按其中列出的失败点逐条修正
+          产出」**——修正依据以结论文件全文为准，不要凭摘要转述；每次重试记录
           `workflow_status({task: <id>, taskStatus: "FAILED", retries: <已重试次数>,
           gateNote: <本轮失败理由>})`；达到 `max-retries` 上限仍 FAIL →
           `workflow_status({task: <id>, taskStatus: "FAILED"})` 标记 FAILED 并 block。
