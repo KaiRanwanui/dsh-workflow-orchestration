@@ -107,6 +107,27 @@ function serializeWorkflowYaml(raw) {
   return weSerializeMap(ordered, 0).join('\n') + '\n'
 }
 
+// ── Iter-38：params 单轨化——参数对象合并进 YAML 文本 params 节 ─────────────
+// 编辑器/创建实参的落盘点：parseYaml → params 节合并 → 全文重序列化（其余内容保真）。
+// 宿主内联语境：parseYaml/serializeWorkflowYaml 由拼接作用域提供（parser/edit 段序在前）。
+function mergeParamsIntoYamlText(text, paramsObj) {
+  let parseYamlFn = null
+  try { parseYamlFn = (typeof parseYaml === 'function') ? parseYaml : require('./workflow-parser').parseYaml } catch (e0) {}
+  if (!parseYamlFn) throw new Error('parseYaml 不可用（params 落盘失败）')
+  const src = String(text || '')
+  // 保留文件头注释块（实例头含 source/instanceId/createdAt 溯源；parseYaml 往返会丢注释）
+  const lines = src.split('\n')
+  let i = 0
+  while (i < lines.length && (lines[i].trim() === '' || lines[i].trimStart().indexOf('#') === 0)) i++
+  const header = lines.slice(0, i)
+  const raw = parseYamlFn(lines.slice(i).join('\n')) || {}
+  const pv = paramsObj || {}
+  raw.params = Object.assign({}, raw.params || {}, pv)
+  if (Object.keys(raw.params).length === 0) delete raw.params
+  const out = serializeWorkflowYaml(raw)
+  return (header.length ? header.join('\n') + '\n' : '') + out
+}
+
 // ── 实例编辑权限矩阵（用户拍板 2026-09-05）────────────────────────────────
 // definition = processor/gateChecker/inputs/outputs（仅 CREATED 可改——"一旦运行即不可改"）
 // runtime    = retries（gate.max-retries）/任务级 concurrency/实例级 max-concurrency
@@ -140,6 +161,30 @@ function applyInstancePatch(raw, patch, perms) {
     return { ok: false, errors: [{ code: 'E-EDIT-RAW', task: null, field: 'definition', message: '实例定义不是有效 YAML 对象' }] }
   }
   const deny = (task, field, why) => errors.push({ code: 'E-EDIT-DENIED', task, field, message: why })
+
+  // Iter-38（params 单轨化）：patch.params 全量替换 yaml params 节（当前值扁平形态）。
+  // params 属实例定义一部分、随 instance.yaml 单轨存储；门控=非 RUNNING（readonlyAll）。
+  if (patch && patch.params !== undefined) {
+    if (perms.readonlyAll) {
+      deny(null, 'params', '当前状态（' + perms.stage + '）不可修改 params')
+    } else {
+      const pv = patch.params
+      if (!pv || typeof pv !== 'object' || Array.isArray(pv)) {
+        errors.push({ code: 'E-EDIT-VALUE', task: null, field: 'params', message: 'params 须为对象（键→当前值）' })
+      } else {
+        const clean = {}
+        let badKey = false
+        for (const k of Object.keys(pv)) {
+          if (String(k).trim() === '') { errors.push({ code: 'E-EDIT-VALUE', task: null, field: 'params', message: 'params 存在空键' }); badKey = true; break }
+          clean[k] = pv[k]
+        }
+        if (!badKey) {
+          if (Object.keys(clean).length === 0) delete raw.params
+          else raw.params = clean
+        }
+      }
+    }
+  }
 
   if (patch && patch.maxConcurrency !== undefined) {
     if (!perms.runtime) deny(null, 'max-concurrency', '当前状态（' + perms.stage + '）不可修改 max-concurrency')
@@ -339,5 +384,5 @@ function parseSkillFrontmatter(text, dirName) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { serializeWorkflowYaml, instanceEditPermissions, applyInstancePatch, simplifyParams, parseSkillFrontmatter }
+  module.exports = { serializeWorkflowYaml, instanceEditPermissions, applyInstancePatch, simplifyParams, parseSkillFrontmatter, mergeParamsIntoYamlText }
 }

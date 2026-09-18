@@ -73,3 +73,16 @@
 | ③ 新增 params 未进 subagent 提示词 | workflow_begin 返回快照未挂 params（仅 statusTool 挂）→ beginTool 补挂 meta.params（对齐 statusTool）；persona §4 派发已要求附 params 上下文（L90-92 既有） |
 
 版本 v0.26.14；588→599（含 params 路由与 edit36/edit37 断言累计）。
+
+## 11. 补记：params 单轨化落地（v0.26.16~18，2026-09-17，与 Iter-38 分析合并实施）
+
+用户拍板：全局 params 作为工作流定义一部分保留在模板/instance.yaml；**不设 default、仅当前值**；meta.params 删除退役。实施（iter-38-analysis.md 方案合并落地）：
+
+| 改动 | 说明 |
+|---|---|
+| params 节扁平化 | parser 兼容旧对象形态（取 default），新形态=扁平当前值；serialize 往返保真 |
+| 单一事实源 | instance.yaml params 节：${param} 注入、workflow_status/begin 快照 params、编辑器 params 区、源码态全部同源 |
+| 保存通道统一 | params 随 /wf/instance-yaml patch.params 提交（applyInstancePatch 顶层分支，非 RUNNING 可改）；/wf/instance-params 路由退役删除 |
+| 创建实参落 yaml | /wf/create 与 workflow_create：args.params 经 mergeParamsIntoYamlText 落 instance.yaml params 节；**meta.params 不再写入**（createBind/beginInstance params={}） |
+| 头注释保留修复 | mergeParamsIntoYamlText 保留文件头注释块（实例溯源不被 parseYaml 往返丢弃） |
+| 教训 | merge 编辑曾引用未赋值 parsed（runCase14 中断）；webserver/tools-preset 双路径都要改（GUI 走 /wf/create 路由）；pnpm install 对同版本 file: tgz 不刷新内容——**发版后必须强删包目录+--force 重装并 grep 部署产物核验** |

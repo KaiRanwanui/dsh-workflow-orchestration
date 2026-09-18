@@ -88,6 +88,7 @@ function createWorkflowEngine() {
       stage: state.stage,
       tasks: state.tasks.map(taskSnapshot),
       pendingGates,
+      params: state.params || {}, // Iter-38：params 单轨化——instance.yaml params 节（当前值），快照直出
       gateResult: state.gateResult,
       retries: state.retries,
       error: state.error,

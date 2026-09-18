@@ -185,6 +185,13 @@ function register(ctx) {
           tp[id] = out
         }
         if (Object.keys(tp).length) patch.tasks = tp
+        // Iter-38 修订（v0.26.17）：params 单轨化——params 随定义 patch 一起提交
+        //（服务端 applyInstancePatch params 分支全量替换 yaml params 节）
+        if (paramsDirty) {
+          const cp = collectParams()
+          if (!cp.ok) { setValRes({ ok: false, kind: thenSave ? 'save' : 'validate', lines: [cp.bad] }); }
+          else if (Object.keys(cp.params).length || paramsDraftEntries !== null) patch.params = cp.params
+        }
         return patch
       }
 

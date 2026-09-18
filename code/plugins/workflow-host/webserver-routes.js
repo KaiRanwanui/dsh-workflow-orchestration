@@ -371,10 +371,19 @@ function registerWebRoutes(ctx, registry) {
                 workflowName: parsed.name,
                 sourceText: text,
                 sourcePath: srcPath || null,
-                params: args.params || {},
+                params: {}, // Iter-38：meta.params 退役——创建实参经 mergeParamsIntoYamlText 落 instance.yaml params 节
               })
             } else {
-              entry = await registry.beginInstance({ cwd: root, sessionId: null, workflowName: parsed.name, sourceText: text, sourcePath: srcPath || null, params: args.params || {} })
+              entry = await registry.beginInstance({ cwd: root, sessionId: null, workflowName: parsed.name, sourceText: text, sourcePath: srcPath || null, params: {} })
+            }
+            // Iter-38（params 单轨化）：创建实参落 instance.yaml params 节（单一事实源；
+            // ${param} 注入/快照/编辑器/源码态全部读这一处；meta.params 不再写入）
+            if (args.params && Object.keys(args.params).length) {
+              try {
+                const yPathC = await fs.resolve(entry.dir + '/instance.yaml')
+                const yTextC = await fs.readText(yPathC)
+                await fs.writeText(yPathC, mergeParamsIntoYamlText(yTextC, args.params))
+              } catch (e38) { /* params 落盘失败不阻断创建 */ }
             }
             // Iter-27a（四点②③）：预置工作流子目录 1:1 复制（模板子目录与实例目录同构；
             // 静态文件原样复制、相对引用零调整；定义本身已写 instance.yaml；文本 only；
@@ -513,7 +522,7 @@ function registerWebRoutes(ctx, registry) {
               version: rawYaml.version != null ? String(rawYaml.version) : null,
               description: rawYaml.description != null ? String(rawYaml.description) : null,
               maxConcurrency: rawYaml['max-concurrency'] != null ? Number(rawYaml['max-concurrency']) : 1,
-              params: (entry.meta && entry.meta.params) || {},
+              params: rawYaml.params || {}, // Iter-38：params 单轨化——读 instance.yaml params 节（当前值），meta.params 退役
             },
             tasks,
             validation: (entry.meta && entry.meta.validation) || null,
@@ -676,40 +685,8 @@ function registerWebRoutes(ctx, registry) {
         return
       }
 
-      // Iter-37：全局参数编辑（meta.params patch；阶段门控 CREATED/PENDING/STOPPED——
-      // RUNNING/COMPLETED/FAILED 拒绝，对齐「参数影响下一次 begin/reset 注入」的语义）
-      if (req.method === 'POST' && pathname === '/wf/instance-params') {
-        let body = ''
-        req.on('data', (chunk) => { body += chunk })
-        req.on('end', async () => {
-          try {
-            const args = JSON.parse(body || '{}')
-            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
-            const instanceId = args.instanceId
-            const params = args.params
-            if (!root || !instanceId) { writeJson(res, 400, { error: 'workspaceRoot and instanceId required' }); return }
-            if (!params || typeof params !== 'object' || Array.isArray(params)) { writeJson(res, 400, { error: 'params 须为对象（键→值）' }); return }
-            for (const k of Object.keys(params)) {
-              if (!String(k).trim()) { writeJson(res, 400, { error: 'params 存在空键' }); return }
-            }
-            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
-            const entry = await registry.loadEntry(root, instanceId)
-            if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
-            const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
-            // Iter-37 修正（用户验收反馈）：params 影响下一次 begin/reset 注入——除 RUNNING 外
-            // 均可修改（FAILED/COMPLETED 下改参数→Reset 重跑正是主流程）；仅 RUNNING 拒绝。
-            if (stage === 'RUNNING') {
-              writeJson(res, 403, { error: '运行中不允许修改全局参数（请先停止；修改后经 reset 生效）', stage })
-              return
-            }
-            await registry.patchMeta(root, instanceId, { params })
-            writeJson(res, 200, { ok: true, saved: true, stage, params, hint: '对下一次 begin/reset 生效' })
-          } catch (e) {
-            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
-          }
-        })
-        return
-      }
+      // Iter-38（用户拍板）：/wf/instance-params 路由退役——params 单轨化后由
+      // /wf/instance-yaml patch.params 承载（见 applyInstancePatch params 分支）。
 
       // Iter-28：编辑保存（同一闸门；通过才写回 instance.yaml）
       if (req.method === 'POST' && pathname === '/wf/instance-yaml') {

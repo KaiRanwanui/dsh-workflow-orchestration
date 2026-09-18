@@ -400,11 +400,11 @@ function parseWorkflow(text) {
   if (raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params)) {
     for (const k of Object.keys(raw.params)) {
       const p = raw.params[k]
-      params[k] = {
-        type: (p && p.type) || 'string',
-        description: (p && p.description) || '',
-        default: p && p.default !== undefined ? p.default : undefined,
-      }
+      // Iter-38（用户拍板单轨化）：params 节 = 参数当前值（扁平形态），不再有
+      // {type, description, default} 声明对象；兼容旧对象形态（取 default 作当前值）
+      params[k] = (p && typeof p === 'object' && !Array.isArray(p))
+        ? (p.default !== undefined ? p.default : '')
+        : (p === undefined ? '' : p)
     }
   }
 
@@ -1102,6 +1102,27 @@ function serializeWorkflowYaml(raw) {
   return weSerializeMap(ordered, 0).join('\n') + '\n'
 }
 
+// ── Iter-38：params 单轨化——参数对象合并进 YAML 文本 params 节 ─────────────
+// 编辑器/创建实参的落盘点：parseYaml → params 节合并 → 全文重序列化（其余内容保真）。
+// 宿主内联语境：parseYaml/serializeWorkflowYaml 由拼接作用域提供（parser/edit 段序在前）。
+function mergeParamsIntoYamlText(text, paramsObj) {
+  let parseYamlFn = null
+  try { parseYamlFn = (typeof parseYaml === 'function') ? parseYaml : require('./workflow-parser').parseYaml } catch (e0) {}
+  if (!parseYamlFn) throw new Error('parseYaml 不可用（params 落盘失败）')
+  const src = String(text || '')
+  // 保留文件头注释块（实例头含 source/instanceId/createdAt 溯源；parseYaml 往返会丢注释）
+  const lines = src.split('\n')
+  let i = 0
+  while (i < lines.length && (lines[i].trim() === '' || lines[i].trimStart().indexOf('#') === 0)) i++
+  const header = lines.slice(0, i)
+  const raw = parseYamlFn(lines.slice(i).join('\n')) || {}
+  const pv = paramsObj || {}
+  raw.params = Object.assign({}, raw.params || {}, pv)
+  if (Object.keys(raw.params).length === 0) delete raw.params
+  const out = serializeWorkflowYaml(raw)
+  return (header.length ? header.join('\n') + '\n' : '') + out
+}
+
 // ── 实例编辑权限矩阵（用户拍板 2026-09-05）────────────────────────────────
 // definition = processor/gateChecker/inputs/outputs（仅 CREATED 可改——"一旦运行即不可改"）
 // runtime    = retries（gate.max-retries）/任务级 concurrency/实例级 max-concurrency
@@ -1135,6 +1156,30 @@ function applyInstancePatch(raw, patch, perms) {
     return { ok: false, errors: [{ code: 'E-EDIT-RAW', task: null, field: 'definition', message: '实例定义不是有效 YAML 对象' }] }
   }
   const deny = (task, field, why) => errors.push({ code: 'E-EDIT-DENIED', task, field, message: why })
+
+  // Iter-38（params 单轨化）：patch.params 全量替换 yaml params 节（当前值扁平形态）。
+  // params 属实例定义一部分、随 instance.yaml 单轨存储；门控=非 RUNNING（readonlyAll）。
+  if (patch && patch.params !== undefined) {
+    if (perms.readonlyAll) {
+      deny(null, 'params', '当前状态（' + perms.stage + '）不可修改 params')
+    } else {
+      const pv = patch.params
+      if (!pv || typeof pv !== 'object' || Array.isArray(pv)) {
+        errors.push({ code: 'E-EDIT-VALUE', task: null, field: 'params', message: 'params 须为对象（键→当前值）' })
+      } else {
+        const clean = {}
+        let badKey = false
+        for (const k of Object.keys(pv)) {
+          if (String(k).trim() === '') { errors.push({ code: 'E-EDIT-VALUE', task: null, field: 'params', message: 'params 存在空键' }); badKey = true; break }
+          clean[k] = pv[k]
+        }
+        if (!badKey) {
+          if (Object.keys(clean).length === 0) delete raw.params
+          else raw.params = clean
+        }
+      }
+    }
+  }
 
   if (patch && patch.maxConcurrency !== undefined) {
     if (!perms.runtime) deny(null, 'max-concurrency', '当前状态（' + perms.stage + '）不可修改 max-concurrency')
@@ -1784,6 +1829,7 @@ function createWorkflowEngine() {
       stage: state.stage,
       tasks: state.tasks.map(taskSnapshot),
       pendingGates,
+      params: state.params || {}, // Iter-38：params 单轨化——instance.yaml params 节（当前值），快照直出
       gateResult: state.gateResult,
       retries: state.retries,
       error: state.error,
@@ -3638,7 +3684,9 @@ function definitionError(errors) {
 async function expandDefinition(fs, src, params, dirCtx) {
   const parsed = E_parseWorkflow(src.text)
   if (parsed.errors && parsed.errors.length > 0) throw definitionError(parsed.errors)
-  const p = params || {}
+  // Iter-38（params 单轨化）：注入源=instance.yaml params 节（当前值）∪ 调用方覆盖；
+  // meta.params 实参轨退役不再读取。
+  const p = Object.assign({}, parsed.params || {}, params || {})
   // Iter-25：阶段1目录变量——skills=预定义技能根目录（R20）；无预定义根（单测隔离环境）
   // 时值为 undefined，占位符保留原样。
   const preRoot = src.predefinedRoot || (typeof detectPredefinedRoot === 'function' ? detectPredefinedRoot() : null)
@@ -4221,7 +4269,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
           : undefined
         let parsed
         try {
-          parsed = await expandDefinition(fs, src, params, beginDefDir ? { defDir: beginDefDir } : undefined)
+          // Iter-38（params 单轨化）：args.params 作为覆盖层并入 yaml params 节（当前值）
+          const declaredParams = E_parseWorkflow(src.text).params || {}
+          const mergedParams = Object.assign({}, declaredParams, args.params || {})
+          parsed = await expandDefinition(fs, src, mergedParams, beginDefDir ? { defDir: beginDefDir } : undefined)
         } catch (e) {
           if (e && e.workflowBeginErrors) {
             // 保持既有契约：解析错误经快照 workflowBeginErrors 字段返回
@@ -4270,9 +4321,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
                 workflowName: parsed.name,
                 sourceText: src.text,
                 sourcePath: args.workflowPath || null,
-                params,
+                params: {}, // Iter-38：meta.params 退役——begin 实参经 expandDefinition 合并落 yaml params 节
               })
-              : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params }))
+              : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: {} }))
             b = { engine: entry.engine, storage: entry.storage, instanceId: entry.instanceId, recoveredConflict: entry._recoveredConflict || [] }
             wfDir = entry.dir
             // Iter-25 修复（潜伏 bug）：begin 路径此前从未置 hasState，begin→stop→reset
@@ -4300,12 +4351,18 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const beginSnap = withInstanceId(b.engine.snapshot(), b)
         // Iter-27b：begin 附 validation 摘要（通过；W 级提醒随行）
         beginSnap.validation = { ok: true, warnings: vResBegin.warnings.map(E_formatValidationItem) }
-        // Iter-37：begin 附实例 params（对齐 statusTool——编排 Agent 在 begin 时点即获知
-        // 工作流级参数，供派发 prompt 附带 params 上下文；此前仅 workflow_status 挂载）
-        if (b.entry && b.entry.meta && b.entry.meta.params && Object.keys(b.entry.meta.params).length) {
-          beginSnap.params = b.entry.meta.params
-        }
+        // Iter-38（params 单轨化）：begin 附 params=instance.yaml params 节（当前值，
+        // 经 beginSnap=engine.snapshot() 已含，无需 meta.params）
         if (b.recoveredConflict && b.recoveredConflict.length > 0) beginSnap.recoveredConflict = b.recoveredConflict
+        // Iter-38（params 单轨化）：合并后 params 落 instance.yaml params 节（单一事实源；
+        // reset/编辑器/源码态读同一处）
+        try {
+          const mergeFn38 = (typeof mergeParamsIntoYamlText === 'function') ? mergeParamsIntoYamlText
+            : require('../../shared/workflow-edit.js').mergeParamsIntoYamlText
+          const yPath38 = await fs.resolve(entry.dir + '/instance.yaml')
+          const yText38 = await fs.readText(yPath38)
+          await fs.writeText(yPath38, mergeFn38(yText38, beginSnap.params || {}))
+        } catch (e38) { /* params 落盘失败不阻断 begin（本次运行已用合并值） */ }
         return beginSnap
       } catch (error) {
         b.engine.setError(error.message)
@@ -4367,11 +4424,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         if (b.entry) {
           const mv = b.entry.meta && b.entry.meta.validation
           snap.validation = mv || { ok: true, errors: [], warnings: [], legacy: true }
-          // Iter-28 验收修正：附实例 params（meta.params 用户实参；engine state 不存值——
-          // 定义声明与注入后原值分离）。编排 Agent 派发 prompt 据此告知子会话参数上下文。
-          if (b.entry.meta && b.entry.meta.params && Object.keys(b.entry.meta.params).length) {
-            snap.params = b.entry.meta.params
-          }
+          // Iter-38（params 单轨化）：params 来源=instance.yaml params 节（engine.snapshot
+          // 已直出）；meta.params 实参轨退役不再读取。编排 Agent 派发 prompt 据此告知
+          // 子会话参数上下文。
         }
         return withInstanceId(snap, b)
       } catch (error) {
@@ -4396,7 +4451,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
   async function expandInstanceDefinition(entry) {
     const raw = await fs.readText(await fs.resolve(entry.dir + '/instance.yaml'))
     const text = stripInstanceHeader(raw)
-    const params = (entry.meta && entry.meta.params) || {}
+    // Iter-38（params 单轨化）：${param} 注入来源=instance.yaml params 节（当前值）；
+    // meta.params 退役不再读取（旧实例首次 start/reset 时经 params 保存迁移落 yaml）
+    const params = E_parseWorkflow(text).params || {}
     const wsRoot = (entry.meta && entry.meta.sessionCwd) || undefined
     // Iter-27a：预置工作流 defDir 锚点（meta.sourcePath → templates/<子目录>）。
     // 静态 items 解析优先序=实例目录（1:1 副本，自包含主路径）→ defDir（模板子目录，
@@ -4430,9 +4487,10 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
     if (parsed.errors && parsed.errors.length > 0) return { parsed, parseErrors: parsed.errors }
     // Iter-27a 同款锚点：meta.sourcePath → templates/<子目录>（实例副本缺失时自愈语义）
     const defDir = E_presetTemplateDirOf(meta.sourcePath, detectPredefinedRootSafe()) || undefined
+    // Iter-38（params 单轨化）：${param} 校验来源=instance.yaml params 节（当前值）
     const vRes = await E_validateWorkflow({
       parsed,
-      params: meta.params || {},
+      params: parsed.params || {},
       workspaceRoot: meta.sessionCwd || undefined,
       predefinedRoot: detectPredefinedRootSafe(),
       defDir,
@@ -4592,9 +4650,9 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
             workflowName: parsed.name,
             sourceText: src.text,
             sourcePath: args.workflowPath || null,
-            params: args.params || {},
+            params: {}, // Iter-38：meta.params 退役——创建实参经 mergeParamsIntoYamlText 落 instance.yaml params 节
           })
-          : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: args.params || {} }))
+          : registry.beginInstance({ cwd, sessionId: null, workflowName: parsed.name, sourceText: src.text, sourcePath: args.workflowPath || null, params: {} }))
         // Iter-27a（四点②③）：预置工作流子目录 1:1 复制——模板子目录与实例目录
         // 同构，静态文件原样复制（相对引用零调整，实例自包含）；定义文件本身已写
         // 为 instance.yaml，跳过；文本 only；单文件失败不阻断（失败清单回传）。
@@ -4604,6 +4662,15 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         // validate 出口（parser 两处 warning 已下线升错误级）。
         const validationSnapshot = { ok: vRes.ok, errors: vRes.errors, warnings: vRes.warnings, validatedAt: new Date().toISOString() }
         await registry.patchMeta(cwd, entry.instanceId, { validation: validationSnapshot })
+        // Iter-38（params 单轨化）：创建实参落 instance.yaml params 节（meta.params 退役）
+        if (args.params && Object.keys(args.params).length) {
+          try {
+            const mergeWE = require('../../shared/workflow-edit.js')
+            const yPath = await fs.resolve(entry.dir + '/instance.yaml')
+            const yText0 = await fs.readText(yPath)
+            await fs.writeText(yPath, mergeWE.mergeParamsIntoYamlText(yText0, args.params))
+          } catch (e38) { /* params 落盘失败不阻断创建 */ }
+        }
         return { instanceId: entry.instanceId, dir: entry.dir, workflowName: parsed.name, phase: 'CREATED', cwd, recoveredConflict: entry._recoveredConflict || [], warnings: vRes.warnings.map(E_formatValidationItem), validation: validationSnapshot, presetCopy }
       } catch (e) {
         return errPayload(e)
@@ -5317,10 +5384,19 @@ function registerWebRoutes(ctx, registry) {
                 workflowName: parsed.name,
                 sourceText: text,
                 sourcePath: srcPath || null,
-                params: args.params || {},
+                params: {}, // Iter-38：meta.params 退役——创建实参经 mergeParamsIntoYamlText 落 instance.yaml params 节
               })
             } else {
-              entry = await registry.beginInstance({ cwd: root, sessionId: null, workflowName: parsed.name, sourceText: text, sourcePath: srcPath || null, params: args.params || {} })
+              entry = await registry.beginInstance({ cwd: root, sessionId: null, workflowName: parsed.name, sourceText: text, sourcePath: srcPath || null, params: {} })
+            }
+            // Iter-38（params 单轨化）：创建实参落 instance.yaml params 节（单一事实源；
+            // ${param} 注入/快照/编辑器/源码态全部读这一处；meta.params 不再写入）
+            if (args.params && Object.keys(args.params).length) {
+              try {
+                const yPathC = await fs.resolve(entry.dir + '/instance.yaml')
+                const yTextC = await fs.readText(yPathC)
+                await fs.writeText(yPathC, mergeParamsIntoYamlText(yTextC, args.params))
+              } catch (e38) { /* params 落盘失败不阻断创建 */ }
             }
             // Iter-27a（四点②③）：预置工作流子目录 1:1 复制（模板子目录与实例目录同构；
             // 静态文件原样复制、相对引用零调整；定义本身已写 instance.yaml；文本 only；
@@ -5459,7 +5535,7 @@ function registerWebRoutes(ctx, registry) {
               version: rawYaml.version != null ? String(rawYaml.version) : null,
               description: rawYaml.description != null ? String(rawYaml.description) : null,
               maxConcurrency: rawYaml['max-concurrency'] != null ? Number(rawYaml['max-concurrency']) : 1,
-              params: (entry.meta && entry.meta.params) || {},
+              params: rawYaml.params || {}, // Iter-38：params 单轨化——读 instance.yaml params 节（当前值），meta.params 退役
             },
             tasks,
             validation: (entry.meta && entry.meta.validation) || null,
@@ -5622,40 +5698,8 @@ function registerWebRoutes(ctx, registry) {
         return
       }
 
-      // Iter-37：全局参数编辑（meta.params patch；阶段门控 CREATED/PENDING/STOPPED——
-      // RUNNING/COMPLETED/FAILED 拒绝，对齐「参数影响下一次 begin/reset 注入」的语义）
-      if (req.method === 'POST' && pathname === '/wf/instance-params') {
-        let body = ''
-        req.on('data', (chunk) => { body += chunk })
-        req.on('end', async () => {
-          try {
-            const args = JSON.parse(body || '{}')
-            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
-            const instanceId = args.instanceId
-            const params = args.params
-            if (!root || !instanceId) { writeJson(res, 400, { error: 'workspaceRoot and instanceId required' }); return }
-            if (!params || typeof params !== 'object' || Array.isArray(params)) { writeJson(res, 400, { error: 'params 须为对象（键→值）' }); return }
-            for (const k of Object.keys(params)) {
-              if (!String(k).trim()) { writeJson(res, 400, { error: 'params 存在空键' }); return }
-            }
-            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
-            const entry = await registry.loadEntry(root, instanceId)
-            if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
-            const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
-            // Iter-37 修正（用户验收反馈）：params 影响下一次 begin/reset 注入——除 RUNNING 外
-            // 均可修改（FAILED/COMPLETED 下改参数→Reset 重跑正是主流程）；仅 RUNNING 拒绝。
-            if (stage === 'RUNNING') {
-              writeJson(res, 403, { error: '运行中不允许修改全局参数（请先停止；修改后经 reset 生效）', stage })
-              return
-            }
-            await registry.patchMeta(root, instanceId, { params })
-            writeJson(res, 200, { ok: true, saved: true, stage, params, hint: '对下一次 begin/reset 生效' })
-          } catch (e) {
-            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
-          }
-        })
-        return
-      }
+      // Iter-38（用户拍板）：/wf/instance-params 路由退役——params 单轨化后由
+      // /wf/instance-yaml patch.params 承载（见 applyInstancePatch params 分支）。
 
       // Iter-28：编辑保存（同一闸门；通过才写回 instance.yaml）
       if (req.method === 'POST' && pathname === '/wf/instance-yaml') {

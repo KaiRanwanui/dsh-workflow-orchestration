@@ -173,11 +173,11 @@ function parseWorkflow(text) {
   if (raw.params && typeof raw.params === 'object' && !Array.isArray(raw.params)) {
     for (const k of Object.keys(raw.params)) {
       const p = raw.params[k]
-      params[k] = {
-        type: (p && p.type) || 'string',
-        description: (p && p.description) || '',
-        default: p && p.default !== undefined ? p.default : undefined,
-      }
+      // Iter-38（用户拍板单轨化）：params 节 = 参数当前值（扁平形态），不再有
+      // {type, description, default} 声明对象；兼容旧对象形态（取 default 作当前值）
+      params[k] = (p && typeof p === 'object' && !Array.isArray(p))
+        ? (p.default !== undefined ? p.default : '')
+        : (p === undefined ? '' : p)
     }
   }
 

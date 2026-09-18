@@ -4,7 +4,7 @@
 // 用法：node code/scripts/test-host.js
 // ============================================================================
 
-const { parseWorkflow } = require('../shared/workflow-parser')
+const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
 const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
 const { expandLoopTasks, expandConcurrentTasks } = require('../plugins/workflow-host-preset/tools-preset.js')
@@ -201,7 +201,8 @@ async function runCase10() {
   const iid = r.body.instanceId
   check('create: 200 + CREATED + id 形态', r.code === 200 && r.body.phase === 'CREATED' && /^t13demo-[0-9a-f]{8}$/.test(iid), JSON.stringify(r.body).slice(0, 140))
   check('create: 快照目录五件套落盘', files.has('/ws/t13/.workflow-agent/instances/' + iid + '/instance.yaml') && files.has('/ws/t13/.workflow-agent/instances/' + iid + '/output/.gitkeep'))
-  check('create: params 记入 metadata', JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).params.output_dir === 'out')
+  check('create: params 记入 instance.yaml params 节（Iter-38 单轨）', (parseYaml(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/instance.yaml')).params || {}).output_dir === 'out')
+  check('create: metadata 不再记 params（meta.params 退役）', !(JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).params || {}).output_dir)
   check('create: warnings 数组在（完好定义为空，27b validate 出口）', Array.isArray(r.body.warnings) && r.body.warnings.length === 0, JSON.stringify(r.body.warnings))
   check('create(27b): 200 附 validation 摘要 + metadata 落盘快照', r.body.validation && r.body.validation.ok === true && JSON.parse(files.get('/ws/t13/.workflow-agent/instances/' + iid + '/metadata.json')).validation.ok === true, JSON.stringify(r.body.validation))
 
@@ -1049,7 +1050,7 @@ function check(name, cond, extra) {
 async function runCase20() {
   console.log('［用例 20］数据流显性化 — 目录变量注入 + inputs/outputs 绝对化 + 落盘 + create 警告')
   const { expandDefinition, finalizeDataflow, injectParams, registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
-  const { parseWorkflow } = require('../shared/workflow-parser')
+  const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
   const { validateWorkflow } = require('../shared/workflow-validate')
 
   // 1) parser（27b）：warnings 通道恒空——processor 缺省/缺 checker 升错误级归 validate
@@ -1186,7 +1187,7 @@ async function runCase21() {
   console.log('［用例 21］数据 items 结构化提取 — 提取器矩阵 + 推断 + 对象 item 注入 + 占位迭代 + ${wf_dir} + reset 清空')
   const ie = require('../shared/items-extract')
   const tp = require('../plugins/workflow-host-preset/tools-preset.js')
-  const { parseWorkflow } = require('../shared/workflow-parser')
+  const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
 
   // 1) extractItems 矩阵
   check('c21 lines: 行文本兼容（#注释/空行）', JSON.stringify(ie.extractItems('login\n# comment\n\norder\n', { format: 'lines' })) === JSON.stringify(['login', 'order']))
@@ -1870,7 +1871,7 @@ async function runCase24() {
   const { validateWorkflow, expandRef, detectDepCycles } = require('../shared/workflow-validate.js')
   const { deferDisposition } = require('../shared/workflow-paths.js')
   const { registerWorkflowToolsPreset, injectParams } = require('../plugins/workflow-host-preset/tools-preset.js')
-  const { parseWorkflow } = require('../shared/workflow-parser')
+  const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
   const { createInstanceRegistry } = require('../plugins/workflow-host/instance-store.js')
   const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
   const { createWorkflowStorage } = require('../plugins/workflow-host/storage.js')
@@ -1928,6 +1929,17 @@ async function runCase24() {
   check('c24 技能: 预定义端命中不报', !rSk.errors.some(e => e.task === 'pre-hit'))
   check('c24 技能: 绝对直通命中不报', !rSk.errors.some(e => e.task === 'abs-hit'))
   check('c24 技能: 双 miss → E-SKILL-MISSING', rSk.errors.some(e => e.code === 'E-SKILL-MISSING' && e.task === 'miss'))
+
+  // ── Iter-36/38：W-GATE-RETRY-MISMATCH（max-retries 配非 retry 模式 → W 级警告）──
+  {
+    const { validateWorkflow: vW36 } = require('../shared/workflow-validate.js')
+    const ySkip = ['name: gw1', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: skip', '      max-retries: 2'].join('\n')
+    const yRetry = ['name: gw2', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: retry', '      max-retries: 2'].join('\n')
+    const rSkip = await validateWorkflow({ parsed: parseWorkflow(ySkip), context: 'definition', fs: null })
+    const rRetry = await validateWorkflow({ parsed: parseWorkflow(yRetry), context: 'definition', fs: null })
+    check('c24 W: max-retries 配 skip → W-GATE-RETRY-MISMATCH', (rSkip.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH' && w.task === 'g'), JSON.stringify(rSkip.warnings))
+    check('c24 W: on-failure retry 无该警告', !(rRetry.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH'), JSON.stringify(rRetry.warnings))
+  }
 
   // B2 inputs：上游精确 / basename 兜底+警告 / 文件存在 / 双 miss / ${item} / 未知变量
   const pIn = parseWorkflow([
@@ -2270,15 +2282,6 @@ Promise.resolve(expandLoopTasks(null, loopTask, items, 'module', params)).then(a
   check('updateTask 用展开 ID', snap4.tasks[0].status === 'DONE')
   check('门禁任务 DONE 携带 gateResult/gateNote', snap4.tasks[0].gateResult === 'PASS' && snap4.tasks[0].gateNote === '评审通过')
 
-  // ── Iter-36：W-GATE-RETRY-MISMATCH（max-retries 配非 retry 模式 → W 级警告）──
-  const { validateWorkflow: vW36 } = require('../shared/workflow-validate.js')
-  const pW36skip = parseWorkflow(['name: gw1', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: skip', '      max-retries: 2'].join('\n'))
-  const rW36skip = await vW36({ parsed: pW36skip, context: 'definition', fs: null })
-  check('c24 W: max-retries 配 skip → W-GATE-RETRY-MISMATCH', (rW36skip.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH' && w.task === 'g'), JSON.stringify(rW36skip.warnings))
-  const pW36retry = parseWorkflow(['name: gw2', 'version: "1"', 'tasks:', '  - id: g', '    name: G', '    processor: /x/skills/a/SKILL.md', '    outputs: ["output/g.md"]', '    quality-gate:', '      checker: /x/skills/c/SKILL.md', '      on-failure: retry', '      max-retries: 2'].join('\n'))
-  const rW36retry = await vW36({ parsed: pW36retry, context: 'definition', fs: null })
-  check('c24 W: on-failure retry 无警告', !(rW36retry.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH'), JSON.stringify(rW36retry.warnings))
-
   // ── 用例 5：循环错误处理（Iter-6：onError=break/continue + hydrate 元数据 + begin 清 logs） ──
   console.log('［用例 5］循环错误处理 — onError break/continue')
 
@@ -2550,7 +2553,7 @@ async function runCase25() {
   files.set('/ws/t25/x/a/SKILL.md', 'skill a')
   files.set('/ws/t25/x/c/SKILL.md', 'skill c')
   files.set('/ws/t25/x/g/SKILL.md', 'skill g')
-  const WF25A = 'name: t25edit\nversion: "1"\ndescription: d\nmax-concurrency: 2\ntasks:\n  - id: a\n    name: A\n    processor: /ws/t25/x/a/SKILL.md\n    outputs: ["/ws/t25/output/a.md"]\n    depends-on: []\n    quality-gate:\n      checker: /ws/t25/x/c/SKILL.md\n      on-failure: retry\n      max-retries: 1\n'
+  const WF25A = 'name: t25edit\nversion: "1"\ndescription: d\nmax-concurrency: 2\nparams:\n  topic: T\ntasks:\n  - id: a\n    name: A\n    processor: /ws/t25/x/a/SKILL.md\n    outputs: ["/ws/t25/output/a.md"]\n    depends-on: []\n    quality-gate:\n      checker: /ws/t25/x/c/SKILL.md\n      on-failure: retry\n      max-retries: 1\n'
   r = await call('POST', '/wf/create', { workspaceRoot: '/ws/t25', workflowText: WF25A, params: { topic: 'T' }, sessionId: 'sess-t25' })
   const iidA = r.body.instanceId
   check('edit create: CREATED 实例就绪', r.code === 200 && !!iidA, JSON.stringify(r.body).slice(0, 120))
@@ -2585,15 +2588,15 @@ async function runCase25() {
   r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { itemsFrom: 'inputs/x.md' } } } })
   check('edit36 deny: 非组任务配 items-from 被拒（E-EDIT-TYPE）', r.code === 400 && (r.body.editErrors || []).some(e2 => e2.code === 'E-EDIT-TYPE' && e2.field === 'items-from'), JSON.stringify(r.body).slice(0, 140))
 
-  // Iter-37：全局参数编辑（/wf/instance-params）
-  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: { topic: 'X', n: 2, flag: true } })
-  check('p37: CREATED 阶段保存 200', r.code === 200 && r.body.saved === true && r.body.params.n === 2 && r.body.params.flag === true, JSON.stringify(r.body).slice(0, 140))
+  // Iter-38（params 单轨化）：全局参数编辑改走 /wf/instance-yaml patch.params（yaml params 节=单一事实源）
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { params: { topic: 'X', n: 2, flag: true } } })
+  check('p38: patch.params 保存 200（yaml params 节更新）', r.code === 200 && r.body.saved === true, JSON.stringify(r.body).slice(0, 140))
   r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
-  check('p37 GET: params 反映落盘值', r.body.instance.params.topic === 'X' && r.body.instance.params.n === 2 && r.body.instance.params.flag === true, JSON.stringify(r.body.instance.params))
-  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: { '': 'v' } })
-  check('p37: 空键 400', r.code === 400, JSON.stringify(r.body))
-  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: 'not-an-object' })
-  check('p37: 非对象 400', r.code === 400, JSON.stringify(r.body))
+  check('p38 GET: instance.params 反映 yaml params 节', r.body.instance.params.topic === 'X' && r.body.instance.params.n === 2 && r.body.instance.params.flag === true, JSON.stringify(r.body.instance.params))
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { params: { '': 'v' } } })
+  check('p38: 空键 400', r.code === 400, JSON.stringify(r.body))
+  r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { params: 'not-an-object' } })
+  check('p38: 非对象 400', r.code === 400, JSON.stringify(r.body))
 
   // validate-instance dryRun：合法 patch → 200；磁盘不变
   const beforeDisk = files.get(yamlA)
