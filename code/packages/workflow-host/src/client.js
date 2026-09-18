@@ -171,8 +171,9 @@ export function register(ctx) {
         // Iter-38 修订（v0.26.17）：params 单轨化——params 随定义 patch 一起提交
         //（服务端 applyInstancePatch params 分支全量替换 yaml params 节）
         if (paramsDirty) {
+          patchParamsErr = null
           const cp = collectParams()
-          if (!cp.ok) { setValRes({ ok: false, kind: thenSave ? 'save' : 'validate', lines: [cp.bad] }); }
+          if (!cp.ok) patchParamsErr = cp.bad
           else if (Object.keys(cp.params).length || paramsDraftEntries !== null) patch.params = cp.params
         }
         return patch
@@ -185,10 +186,16 @@ export function register(ctx) {
           // Iter-38 修订（v0.26.19）：单一 patch 通道——params 有改动时 buildPatch 已并入
           // patch.params（服务端 applyInstancePatch 顶层分支全量替换 yaml params 节）；
           // 仅 params 改动（dirty=false）也必须提交，不得跳过。
+          patchParamsErr = null
+          const patch = buildPatch()
+          if (patchParamsErr) {
+            setValRes({ ok: false, kind: thenSave ? 'save' : 'validate', lines: [patchParamsErr] })
+            return
+          }
           const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
           const resp = await fetch(url, {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
+            body: JSON.stringify({ workspaceRoot, instanceId, patch })
           })
           const r = await resp.json()
           if (!resp.ok) {
@@ -587,7 +594,7 @@ export function register(ctx) {
             React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: (!dirty && !paramsDirty) || busy, style: Object.assign({}, btnStyle2, { opacity: (!dirty && !paramsDirty) || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
             React.createElement('button', {
               key: 's', onClick: () => doAction(true), disabled: (!dirty && !paramsDirty) || busy || editable.readonlyAll,
-              style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: !dirty || busy || editable.readonlyAll ? 0.5 : 1 })
+              style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: (!dirty && !paramsDirty) || busy || editable.readonlyAll ? 0.5 : 1 })
             }, busy ? '处理中…' : '保存（校验通过才落盘）'),
           ]),
         ],

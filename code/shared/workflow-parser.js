@@ -149,9 +149,48 @@ function parseYaml(text) {
 let E_ITEMS_FORMATS = typeof ITEMS_FORMAT_VALUES !== 'undefined'
   ? ITEMS_FORMAT_VALUES
   : ['lines', 'markdown', 'json', 'yaml']
+// Iter-38：params 节重复键检测——parseYaml 对同名键静默折叠（取后者），校验层无法
+// 感知，须在文本层拦截。扫描顶层 params: 块的直接子键（缩进恰为 2 的 key: 行）。
+function detectParamsDuplicateKeys(text) {
+  const lines = String(text).split(/\r?\n/)
+  const contentIdx = []
+  lines.forEach((l, i) => { if (l.trim() !== '' && !/^\s*#/.test(l)) contentIdx.push(i) })
+  let paramsLine = -1
+  for (const i of contentIdx) {
+    if (/^params:\s*$/.test(lines[i])) { paramsLine = i; break }
+  }
+  if (paramsLine === -1) return []
+  const seen = {}
+  const dups = []
+  let inBlock = false
+  for (let i = paramsLine + 1; i < lines.length; i++) {
+    const l = lines[i]
+    if (l.trim() === '' || /^\s*#/.test(l)) continue
+    const ind = countIndent(l)
+    if (ind === 0) break // 下一个顶层键，params 块结束
+    if (!inBlock) {
+      if (ind >= 2) inBlock = true
+      else continue
+    }
+    if (ind === 2) {
+      const m = l.match(/^\s{2}([^:#\s][^:]*):\s*/)
+      if (m) {
+        const k = m[1].trim()
+        if (seen[k]) dups.push(k)
+        else seen[k] = true
+      }
+    }
+  }
+  return dups
+}
+
 function parseWorkflow(text) {
   const raw = parseYaml(text)
   const errors = []
+  // Iter-38：params 重复键 → 错误级拦截（parseYaml 静默折叠取后者，源码保存须被拒并提示去重）
+  for (const dup of detectParamsDuplicateKeys(text)) {
+    errors.push('params 参数重复定义: ' + dup + '（同名键仅最后一个生效，请去重）')
+  }
   const warnings = []
 
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {

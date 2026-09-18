@@ -1941,6 +1941,14 @@ async function runCase24() {
     check('c24 W: on-failure retry 无该警告', !(rRetry.warnings || []).some(w => w.code === 'W-GATE-RETRY-MISMATCH'), JSON.stringify(rRetry.warnings))
   }
 
+    // ── Iter-38：params 重复键（parseYaml 静默折叠 → 文本层拦截）──
+    const yDup38 = ['name: dup', 'version: "1"', 'params:', '  topic: A', '  topic: B', 'tasks:', '  - id: a', '    name: A', '    processor: /x/skills/a/SKILL.md'].join('\n')
+    const rDup38 = parseWorkflow(yDup38)
+    check('c38 dup: params 重复键 → 错误拦截', (rDup38.errors || []).some(e => String(e).indexOf('topic') !== -1 && String(e).indexOf('重复') !== -1), JSON.stringify(rDup38.errors))
+    const yOk38 = ['name: dup2', 'version: "1"', 'params:', '  topic: A', 'tasks:', '  - id: a', '    name: A', '    processor: /x/skills/a/SKILL.md'].join('\n')
+    const rOk38 = parseWorkflow(yOk38)
+    check('c38 dup: 无重复不误报', !(rOk38.errors || []).some(e => String(e).indexOf('重复') !== -1), JSON.stringify(rOk38.errors))
+
   // B2 inputs：上游精确 / basename 兜底+警告 / 文件存在 / 双 miss / ${item} / 未知变量
   const pIn = parseWorkflow([
     'name: ins', 'version: "1"', 'tasks:',
