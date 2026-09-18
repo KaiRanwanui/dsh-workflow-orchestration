@@ -199,40 +199,28 @@ function register(ctx) {
         if ((!dirty && !paramsDirty) || busy) return
         setBusy(true); setErr(''); setValRes(null)
         try {
-          // 通道 1：定义 patch（有定义改动时）
-          if (dirty) {
-            const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
-            const resp = await fetch(url, {
-              method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
+          // Iter-38 修订（v0.26.19）：单一 patch 通道——params 有改动时 buildPatch 已并入
+          // patch.params（服务端 applyInstancePatch 顶层分支全量替换 yaml params 节）；
+          // 仅 params 改动（dirty=false）也必须提交，不得跳过。
+          const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
+          const resp = await fetch(url, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
+          })
+          const r = await resp.json()
+          if (!resp.ok) {
+            const editErrors = (r && r.editErrors) || []
+            setValRes({
+              ok: false, kind: thenSave ? 'save' : 'validate',
+              // 校验错误（workflowBeginErrors=服务端 formatValidationItem 格式化）或原始 error
+              lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
+              // 禁改/非法值错误（workflow-edit 自有格式）
+              editLines: editErrors.map(e2 => '[' + e2.code + '] 任务 "' + (e2.task || '-') + '" ' + (e2.field || '') + ': ' + e2.message),
             })
-            const r = await resp.json()
-            if (!resp.ok) {
-              const editErrors = (r && r.editErrors) || []
-              setValRes({
-                ok: false, kind: thenSave ? 'save' : 'validate',
-                // 校验错误（workflowBeginErrors=服务端 formatValidationItem 格式化）或原始 error
-                lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
-                // 禁改/非法值错误（workflow-edit 自有格式）
-                editLines: editErrors.map(e2 => '[' + e2.code + '] 任务 "' + (e2.task || '-') + '" ' + (e2.field || '') + ': ' + e2.message),
-              })
-              return
-            }
+            return
           }
-          // 通道 2：params（Iter-37；有改动且阶段允许时随同批保存）
-          let paramsNote = ''
-          if (thenSave && paramsDirty && paramsEditable) {
-            const cp = collectParams()
-            if (!cp.ok) { setValRes({ ok: false, kind: 'save', lines: [cp.bad] }); return }
-            const pResp = await fetch('/wf/instance-params', {
-              method: 'POST', headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ workspaceRoot, instanceId, params: cp.params })
-            })
-            const pr = await pResp.json()
-            if (!pResp.ok) { setValRes({ ok: false, kind: 'save', lines: ['定义已保存，但参数保存失败: ' + (pr && pr.error ? pr.error : '')] }); return }
-            paramsNote = '；参数已保存'
-          }
-          setValRes({ ok: true, kind: thenSave ? 'save' : 'validate', warnings: [], savedNote: paramsNote })
+          const paramsNote = (thenSave && paramsDirty) ? '；参数已保存' : ''
+          setValRes({ ok: true, kind: thenSave ? 'save' : 'validate', warnings: (r && r.warnings) || [], savedNote: paramsNote })
           if (thenSave) {
             setDraft({ maxConcurrency: undefined, tasks: {} })
             setParamsDraftEntries(null)
