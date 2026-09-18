@@ -61,3 +61,14 @@
 
 - 设计：`iter-37-design.md`
 - 版本 Incident：本迭代首次发行时误编 0.26.10（该号已被技能查看修复占用）——根因=sed 基线过期静默空转 + 预设版本号违反规则；已纠正为 0.26.13 并记入教训（版本号以发行时顺延为准，禁止预设）
+
+## 10. 补记：验收反馈修复（v0.26.14，2026-09-17）
+
+用户验收三现象（实例 verify-gate-4423b98e，FAILED 阶段）：①maxConcurrency 修改无效重进旧值 ②保存按钮灰色 ③新增 params 未进 subagent 提示词。
+
+| 根因 | 修复 |
+|---|---|
+| ①② params KvEditor 在 FAILED 阶段被我设为只读（原门控仅 CREATED/PENDING/STOPPED）+ 用户编辑的是 maxConcurrency（定义字段，走页脚定义保存）却点了 params 区的独立灰按钮——**两个保存按钮并存的 UI 语义混乱（设计缺陷）** | ①params 阶段门控放宽为仅拒 RUNNING（FAILED/COMPLETED 下改参数→Reset 重跑正是主流程）②**统一保存**：移除 params 独立按钮，页脚「保存」双通道（定义 patch + params 有改动时同批提交）③maxConcurrency 走页脚保存即落盘 |
+| ③ 新增 params 未进 subagent 提示词 | workflow_begin 返回快照未挂 params（仅 statusTool 挂）→ beginTool 补挂 meta.params（对齐 statusTool）；persona §4 派发已要求附 params 上下文（L90-92 既有） |
+
+版本 v0.26.14；588→599（含 params 路由与 edit36/edit37 断言累计）。

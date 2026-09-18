@@ -863,6 +863,11 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         const beginSnap = withInstanceId(b.engine.snapshot(), b)
         // Iter-27b：begin 附 validation 摘要（通过；W 级提醒随行）
         beginSnap.validation = { ok: true, warnings: vResBegin.warnings.map(E_formatValidationItem) }
+        // Iter-37：begin 附实例 params（对齐 statusTool——编排 Agent 在 begin 时点即获知
+        // 工作流级参数，供派发 prompt 附带 params 上下文；此前仅 workflow_status 挂载）
+        if (b.entry && b.entry.meta && b.entry.meta.params && Object.keys(b.entry.meta.params).length) {
+          beginSnap.params = b.entry.meta.params
+        }
         if (b.recoveredConflict && b.recoveredConflict.length > 0) beginSnap.recoveredConflict = b.recoveredConflict
         return beginSnap
       } catch (error) {

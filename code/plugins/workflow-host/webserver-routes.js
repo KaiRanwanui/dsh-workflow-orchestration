@@ -696,8 +696,10 @@ function registerWebRoutes(ctx, registry) {
             const entry = await registry.loadEntry(root, instanceId)
             if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
             const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
-            if (['CREATED', 'PENDING', 'STOPPED'].indexOf(stage) === -1) {
-              writeJson(res, 403, { error: '当前阶段（' + stage + '）不允许修改全局参数（仅 CREATED/PENDING/STOPPED）', stage })
+            // Iter-37 修正（用户验收反馈）：params 影响下一次 begin/reset 注入——除 RUNNING 外
+            // 均可修改（FAILED/COMPLETED 下改参数→Reset 重跑正是主流程）；仅 RUNNING 拒绝。
+            if (stage === 'RUNNING') {
+              writeJson(res, 403, { error: '运行中不允许修改全局参数（请先停止；修改后经 reset 生效）', stage })
               return
             }
             await registry.patchMeta(root, instanceId, { params })

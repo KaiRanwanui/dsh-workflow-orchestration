@@ -189,29 +189,46 @@ function register(ctx) {
       }
 
       const doAction = async (thenSave) => {
-        if (!dirty || busy) return
+        if ((!dirty && !paramsDirty) || busy) return
         setBusy(true); setErr(''); setValRes(null)
         try {
-          const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
-          const resp = await fetch(url, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
-          })
-          const r = await resp.json()
-          if (!resp.ok) {
-            const editErrors = (r && r.editErrors) || []
-            setValRes({
-              ok: false, kind: thenSave ? 'save' : 'validate',
-              // 校验错误（workflowBeginErrors=服务端 formatValidationItem 格式化）或原始 error
-              lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
-              // 禁改/非法值错误（workflow-edit 自有格式）
-              editLines: editErrors.map(e2 => '[' + e2.code + '] 任务 "' + (e2.task || '-') + '" ' + (e2.field || '') + ': ' + e2.message),
+          // 通道 1：定义 patch（有定义改动时）
+          if (dirty) {
+            const url = thenSave ? '/wf/instance-yaml' : '/wf/validate-instance'
+            const resp = await fetch(url, {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ workspaceRoot, instanceId, patch: buildPatch() })
             })
-            return
+            const r = await resp.json()
+            if (!resp.ok) {
+              const editErrors = (r && r.editErrors) || []
+              setValRes({
+                ok: false, kind: thenSave ? 'save' : 'validate',
+                // 校验错误（workflowBeginErrors=服务端 formatValidationItem 格式化）或原始 error
+                lines: (r && r.workflowBeginErrors && r.workflowBeginErrors.length ? r.workflowBeginErrors : null) || (r && r.error ? [r.error] : []),
+                // 禁改/非法值错误（workflow-edit 自有格式）
+                editLines: editErrors.map(e2 => '[' + e2.code + '] 任务 "' + (e2.task || '-') + '" ' + (e2.field || '') + ': ' + e2.message),
+              })
+              return
+            }
           }
-          setValRes({ ok: true, kind: thenSave ? 'save' : 'validate', warnings: (r && r.warnings) || [] })
+          // 通道 2：params（Iter-37；有改动且阶段允许时随同批保存）
+          let paramsNote = ''
+          if (thenSave && paramsDirty && paramsEditable) {
+            const cp = collectParams()
+            if (!cp.ok) { setValRes({ ok: false, kind: 'save', lines: [cp.bad] }); return }
+            const pResp = await fetch('/wf/instance-params', {
+              method: 'POST', headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ workspaceRoot, instanceId, params: cp.params })
+            })
+            const pr = await pResp.json()
+            if (!pResp.ok) { setValRes({ ok: false, kind: 'save', lines: ['定义已保存，但参数保存失败: ' + (pr && pr.error ? pr.error : '')] }); return }
+            paramsNote = '；参数已保存'
+          }
+          setValRes({ ok: true, kind: thenSave ? 'save' : 'validate', warnings: [], savedNote: paramsNote })
           if (thenSave) {
             setDraft({ maxConcurrency: undefined, tasks: {} })
+            setParamsDraftEntries(null)
             load()
             if (typeof onSaved === 'function') onSaved()
           }
@@ -325,38 +342,22 @@ function register(ctx) {
       const paramsEditable = ['CREATED', 'PENDING', 'STOPPED'].indexOf(editable.stage) !== -1
       const paramsDirty = paramsDraftEntries !== null
       const onParamsChange = (entries) => { setParamsDraftEntries(entries); setValRes(null) }
-      const doSaveParams = async () => {
-        if (busy || !paramsEditable) return
-        setBusy(true); setErr(''); setValRes(null)
-        try {
-          const out = {}
-          let bad = false
-          const seen = new Set()
-          for (const e of paramsDraftEntries) {
-            const k = String(e.key || '').trim()
-            if (!k) continue
-            if (seen.has(k)) { setValRes({ ok: false, kind: 'params', lines: ['params 存在重复键: ' + k] }); bad = true; break }
-            seen.add(k)
-            let v = String(e.value)
-            try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
-            out[k] = v
-          }
-          if (bad) return
-          const resp = await fetch('/wf/instance-params', {
-            method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceRoot, instanceId, params: out }),
-          })
-          const r = await resp.json()
-          if (!resp.ok) {
-            setValRes({ ok: false, kind: 'params', lines: [r && r.error ? r.error : '保存失败'] })
-            return
-          }
-          setValRes({ ok: true, kind: 'params', warnings: [] })
-          setParamsDraftEntries(null)
-          load()
-        } catch (e) {
-          setErr(e && e.message ? e.message : String(e))
-        } finally { setBusy(false) }
+      // Iter-37 修订（用户验收反馈）：params 不再设独立保存按钮——页脚「保存」统一双通道
+      // （定义 patch + params），收集逻辑在此；dirty 判定含 params
+      const collectParams = () => {
+        const out = {}
+        let bad = null
+        const seen = new Set()
+        for (const e of (paramsDraftEntries || [])) {
+          const k = String(e.key || '').trim()
+          if (!k) continue
+          if (seen.has(k)) { bad = 'params 存在重复键: ' + k; break }
+          seen.add(k)
+          let v = String(e.value)
+          try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
+          out[k] = v
+        }
+        return { ok: !bad, bad, params: out }
       }
 
       const stageColor = { CREATED: '#9ca3af', PENDING: '#9ca3af', RUNNING: '#3b82f6', STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
@@ -523,7 +524,7 @@ function register(ctx) {
       const valResEl = !valRes ? null : (
         valRes.ok
           ? React.createElement('div', { key: 'vok', style: { border: '1px solid rgba(34,197,94,0.45)', background: 'rgba(34,197,94,0.08)', color: '#22c55e', borderRadius: 6, padding: '6px 9px', fontSize: 12 } },
-              (valRes.kind === 'save' ? '✓ 定义已保存（对执行定义/DAG 的生效需 Reset 或重新 begin）' : '✓ 校验通过') + (valRes.warnings && valRes.warnings.length ? ('；' + valRes.warnings.length + ' 项警告（不阻断）：' + valRes.warnings.join('；')) : '，无警告'))
+              (valRes.kind === 'save' ? '✓ 定义已保存（对执行定义/DAG 的生效需 Reset 或重新 begin）' + (valRes.savedNote || '') : '✓ 校验通过') + (valRes.warnings && valRes.warnings.length ? ('；' + valRes.warnings.length + ' 项警告（不阻断）：' + valRes.warnings.join('；')) : '，无警告'))
           : React.createElement('div', { key: 'verr', style: { border: '1px solid rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.08)', color: '#f87171', borderRadius: 6, padding: '6px 9px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 140, overflowY: 'auto' } }, [
               React.createElement('div', { key: 't', style: { fontWeight: 600 } }, '✗ ' + (valRes.kind === 'save' ? '保存被拦（校验未通过，未落盘）' : '校验未通过')),
               ...(valRes.editLines || []).map((l, i) => React.createElement('div', { key: 'el' + i }, '· ' + l)),
@@ -596,24 +597,18 @@ function register(ctx) {
               React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 } }, [
                 // Iter-37：params 可编辑（meta.params；独立保存按钮；CREATED/PENDING/STOPPED）
                 React.createElement(KvEditor, { entries: paramsShown, onChange: onParamsChange, readOnly: !paramsEditable || busy, keyPlaceholder: '参数名', valuePlaceholder: '值（数字/布尔/字符串）' }),
-                React.createElement('div', { key: 'ps', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
-                  paramsDirty && paramsEditable ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '参数有未保存修改') : null,
-                  React.createElement('button', {
-                    key: 'sp', onClick: doSaveParams, disabled: !paramsEditable || !paramsDirty || busy,
-                    title: paramsEditable ? '保存全局参数（对下一次 begin/reset 生效）' : '当前阶段（' + (editable.stage || '…') + '）不允许修改参数',
-                    style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: !paramsEditable || !paramsDirty || busy ? 0.5 : 1 }),
-                  }, busy ? '处理中…' : '保存参数'),
-                ]),
+                // Iter-37 修订：独立「保存参数」按钮移除——统一由页脚「保存」双通道提交
+                // （定义 patch + params）；params 改动计入页脚「有未保存修改」提示。
               ]),
             ]),
           ]),
           React.createElement('div', { key: 'cols', style: { display: 'flex', gap: 10 } }, [taskListEl, taskFormEl]),
           valResEl,
           React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
-            dirty && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '有未保存修改') : null,
-            React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: !dirty || busy, style: Object.assign({}, btnStyle2, { opacity: !dirty || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
+            (dirty || paramsDirty) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '有未保存修改') : null,
+            React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: (!dirty && !paramsDirty) || busy, style: Object.assign({}, btnStyle2, { opacity: (!dirty && !paramsDirty) || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
             React.createElement('button', {
-              key: 's', onClick: () => doAction(true), disabled: !dirty || busy || editable.readonlyAll,
+              key: 's', onClick: () => doAction(true), disabled: (!dirty && !paramsDirty) || busy || editable.readonlyAll,
               style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: !dirty || busy || editable.readonlyAll ? 0.5 : 1 })
             }, busy ? '处理中…' : '保存（校验通过才落盘）'),
           ]),
