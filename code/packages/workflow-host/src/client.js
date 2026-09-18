@@ -322,7 +322,7 @@ export function register(ctx) {
       // params 展示与编辑（Iter-37：instance.meta.params；仅 CREATED/PENDING/STOPPED 可改）
       const paramEntriesBase = Object.keys(inst.params || {}).map(k => ({ key: k, value: inst.params[k] === null || inst.params[k] === undefined ? '' : String(inst.params[k]) }))
       const paramsShown = paramsDraftEntries !== null ? paramsDraftEntries : paramEntriesBase
-      const paramsEditable = ['CREATED', 'PENDING', 'STOPPED'].indexOf(editable.stage) !== -1
+      const paramsEditable = editable.stage !== 'RUNNING' // Iter-37 修正：与服务端门控对齐（仅拒 RUNNING；FAILED/COMPLETED 可改，配 Reset 重跑）
       const paramsDirty = paramsDraftEntries !== null
       const onParamsChange = (entries) => { setParamsDraftEntries(entries); setValRes(null) }
       // Iter-37 修订（用户验收反馈）：params 不再设独立保存按钮——页脚「保存」统一双通道
