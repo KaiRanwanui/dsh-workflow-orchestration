@@ -55,6 +55,7 @@
 | 遗留 | 去向 |
 |---|---|
 | 定义内 params 声明与 meta.params 实参的差异标注（「非声明参数」提示） | 候选，Iter-38+ 评估 |
+| **params 双轨统一**（instance.yaml 声明 vs metadata.params 实参；用户 09-17 指令插入队列） | **Iter-38：params 影响分析与单轨化**（先出影响分析方案） |
 | U1 门禁角点 | Iter-39 |
 
 ## 9. 参考
