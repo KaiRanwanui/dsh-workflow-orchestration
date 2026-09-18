@@ -5617,6 +5617,39 @@ function registerWebRoutes(ctx, registry) {
         return
       }
 
+      // Iter-37：全局参数编辑（meta.params patch；阶段门控 CREATED/PENDING/STOPPED——
+      // RUNNING/COMPLETED/FAILED 拒绝，对齐「参数影响下一次 begin/reset 注入」的语义）
+      if (req.method === 'POST' && pathname === '/wf/instance-params') {
+        let body = ''
+        req.on('data', (chunk) => { body += chunk })
+        req.on('end', async () => {
+          try {
+            const args = JSON.parse(body || '{}')
+            const root = String(args.workspaceRoot || '').replace(/\\/g, '/').replace(/\/+$/, '')
+            const instanceId = args.instanceId
+            const params = args.params
+            if (!root || !instanceId) { writeJson(res, 400, { error: 'workspaceRoot and instanceId required' }); return }
+            if (!params || typeof params !== 'object' || Array.isArray(params)) { writeJson(res, 400, { error: 'params 须为对象（键→值）' }); return }
+            for (const k of Object.keys(params)) {
+              if (!String(k).trim()) { writeJson(res, 400, { error: 'params 存在空键' }); return }
+            }
+            if (!registry) { writeJson(res, 500, { error: 'registry unavailable' }); return }
+            const entry = await registry.loadEntry(root, instanceId)
+            if (!entry) { writeJson(res, 404, { error: 'instance not found: ' + instanceId }); return }
+            const stage = entry.hasState ? entry.engine.snapshot().stage : 'CREATED'
+            if (['CREATED', 'PENDING', 'STOPPED'].indexOf(stage) === -1) {
+              writeJson(res, 403, { error: '当前阶段（' + stage + '）不允许修改全局参数（仅 CREATED/PENDING/STOPPED）', stage })
+              return
+            }
+            await registry.patchMeta(root, instanceId, { params })
+            writeJson(res, 200, { ok: true, saved: true, stage, params, hint: '对下一次 begin/reset 生效' })
+          } catch (e) {
+            writeJson(res, 500, { error: e && e.message ? e.message : String(e) })
+          }
+        })
+        return
+      }
+
       // Iter-28：编辑保存（同一闸门；通过才写回 instance.yaml）
       if (req.method === 'POST' && pathname === '/wf/instance-yaml') {
         let body = ''

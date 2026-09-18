@@ -79,6 +79,8 @@ export function register(ctx) {
       const [mode, setMode] = React.useState('form')
       const [srcText, setSrcText] = React.useState('')
       const [skillView, setSkillView] = React.useState(null)
+      // Iter-37：params 编辑缓冲（null=无改动，回落 inst.params）
+      const [paramsDraftEntries, setParamsDraftEntries] = React.useState(null)
 
       const load = React.useCallback(() => {
         if (!workspaceRoot || !instanceId) return
@@ -88,6 +90,7 @@ export function register(ctx) {
             if (r && r.error && !r.tasks) { setErr(r.error); return }
             setErr('')
             setData(r)
+            setParamsDraftEntries(null) // Iter-37：重载后 params 编辑缓冲回落
             if (!r.tasks || !r.tasks.some(t => t.id === selId)) setSelId(r.tasks && r.tasks.length ? r.tasks[0].id : '')
           })
           .catch(e => setErr(e && e.message ? e.message : String(e)))
@@ -103,7 +106,7 @@ export function register(ctx) {
 
       React.useEffect(() => {
         let stop = false
-        setData(null); setSkills([]); setSelId(''); setDraft({ maxConcurrency: undefined, tasks: {} }); setValRes(null); setErr('')
+        setData(null); setSkills([]); setSelId(''); setDraft({ maxConcurrency: undefined, tasks: {} }); setValRes(null); setErr(''); setParamsDraftEntries(null)
         if (!workspaceRoot || !instanceId) return () => { stop = true }
         fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(workspaceRoot) + '&instanceId=' + encodeURIComponent(instanceId))
           .then(r => r.json())
@@ -299,8 +302,45 @@ export function register(ctx) {
       const outputsVal = getF('outputs', (selTask && selTask.outputs) || [])
       const onOutputsChange = (arr) => setF('outputs', arr.map(s => String(s)))
 
-      // params 只读展示（instance.meta.params）
-      const paramEntries = Object.keys(inst.params || {}).map(k => ({ key: k, value: inst.params[k] === null || inst.params[k] === undefined ? '' : String(inst.params[k]) }))
+      // params 展示与编辑（Iter-37：instance.meta.params；仅 CREATED/PENDING/STOPPED 可改）
+      const paramEntriesBase = Object.keys(inst.params || {}).map(k => ({ key: k, value: inst.params[k] === null || inst.params[k] === undefined ? '' : String(inst.params[k]) }))
+      const paramsShown = paramsDraftEntries !== null ? paramsDraftEntries : paramEntriesBase
+      const paramsEditable = ['CREATED', 'PENDING', 'STOPPED'].indexOf(editable.stage) !== -1
+      const paramsDirty = paramsDraftEntries !== null
+      const onParamsChange = (entries) => { setParamsDraftEntries(entries); setValRes(null) }
+      const doSaveParams = async () => {
+        if (busy || !paramsEditable) return
+        setBusy(true); setErr(''); setValRes(null)
+        try {
+          const out = {}
+          let bad = false
+          const seen = new Set()
+          for (const e of paramsDraftEntries) {
+            const k = String(e.key || '').trim()
+            if (!k) continue
+            if (seen.has(k)) { setValRes({ ok: false, kind: 'params', lines: ['params 存在重复键: ' + k] }); bad = true; break }
+            seen.add(k)
+            let v = String(e.value)
+            try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
+            out[k] = v
+          }
+          if (bad) return
+          const resp = await fetch('/wf/instance-params', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ workspaceRoot, instanceId, params: out }),
+          })
+          const r = await resp.json()
+          if (!resp.ok) {
+            setValRes({ ok: false, kind: 'params', lines: [r && r.error ? r.error : '保存失败'] })
+            return
+          }
+          setValRes({ ok: true, kind: 'params', warnings: [] })
+          setParamsDraftEntries(null)
+          load()
+        } catch (e) {
+          setErr(e && e.message ? e.message : String(e))
+        } finally { setBusy(false) }
+      }
 
       const stageColor = { CREATED: '#9ca3af', PENDING: '#9ca3af', RUNNING: '#3b82f6', STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
       const typeLabel = { 'llm-task': 'LLM', 'loop': '↻ loop', 'concurrent': '⚡ conc', 'human-decision': '人审', 'external-agent': '外部' }
@@ -534,10 +574,20 @@ export function register(ctx) {
                 style: Object.assign({}, inputStyle, { width: 80 }) }),
               React.createElement('span', { style: { color: '#9ca3af', fontSize: 11 } }, '全局并发上限'),
             ]),
-            React.createElement('div', { key: 'pp', style: Object.assign({}, rowStyle, { flex: '1 1 260px', minWidth: 0 }) }, [
+            React.createElement('div', { key: 'pp', style: Object.assign({}, rowStyle, { flex: '1 1 260px', minWidth: 0, alignItems: 'flex-start' }) }, [
               React.createElement('span', { key: 'l', style: labelStyle }, 'params'),
-              React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0, opacity: 0.75 } },
-                React.createElement(KvEditor, { entries: paramEntries, readOnly: true })),
+              React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 } }, [
+                // Iter-37：params 可编辑（meta.params；独立保存按钮；CREATED/PENDING/STOPPED）
+                React.createElement(KvEditor, { entries: paramsShown, onChange: onParamsChange, readOnly: !paramsEditable || busy, keyPlaceholder: '参数名', valuePlaceholder: '值（数字/布尔/字符串）' }),
+                React.createElement('div', { key: 'ps', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
+                  paramsDirty && paramsEditable ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '参数有未保存修改') : null,
+                  React.createElement('button', {
+                    key: 'sp', onClick: doSaveParams, disabled: !paramsEditable || !paramsDirty || busy,
+                    title: paramsEditable ? '保存全局参数（对下一次 begin/reset 生效）' : '当前阶段（' + (editable.stage || '…') + '）不允许修改参数',
+                    style: Object.assign({}, btnStyle2, { background: '#3b82f6', color: '#fff', border: 'none', opacity: !paramsEditable || !paramsDirty || busy ? 0.5 : 1 }),
+                  }, busy ? '处理中…' : '保存参数'),
+                ]),
+              ]),
             ]),
           ]),
           React.createElement('div', { key: 'cols', style: { display: 'flex', gap: 10 } }, [taskListEl, taskFormEl]),

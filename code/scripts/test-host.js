@@ -2585,6 +2585,16 @@ async function runCase25() {
   r = await call('POST', '/wf/instance-yaml', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { itemsFrom: 'inputs/x.md' } } } })
   check('edit36 deny: 非组任务配 items-from 被拒（E-EDIT-TYPE）', r.code === 400 && (r.body.editErrors || []).some(e2 => e2.code === 'E-EDIT-TYPE' && e2.field === 'items-from'), JSON.stringify(r.body).slice(0, 140))
 
+  // Iter-37：全局参数编辑（/wf/instance-params）
+  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: { topic: 'X', n: 2, flag: true } })
+  check('p37: CREATED 阶段保存 200', r.code === 200 && r.body.saved === true && r.body.params.n === 2 && r.body.params.flag === true, JSON.stringify(r.body).slice(0, 140))
+  r = await call('GET', '/wf/instance-yaml?workspaceRoot=/ws/t25&instanceId=' + iidA)
+  check('p37 GET: params 反映落盘值', r.body.instance.params.topic === 'X' && r.body.instance.params.n === 2 && r.body.instance.params.flag === true, JSON.stringify(r.body.instance.params))
+  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: { '': 'v' } })
+  check('p37: 空键 400', r.code === 400, JSON.stringify(r.body))
+  r = await call('POST', '/wf/instance-params', { workspaceRoot: '/ws/t25', instanceId: iidA, params: 'not-an-object' })
+  check('p37: 非对象 400', r.code === 400, JSON.stringify(r.body))
+
   // validate-instance dryRun：合法 patch → 200；磁盘不变
   const beforeDisk = files.get(yamlA)
   r = await call('POST', '/wf/validate-instance', { workspaceRoot: '/ws/t25', instanceId: iidA, patch: { tasks: { a: { retries: 5 } } } })
