@@ -3,7 +3,7 @@
 
 export function register(ctx) {
   const slots = ctx.get('slots')
-  const sessionsSvc = ctx.get('sessions') // Iter-39：会话订阅源（conversation 同款服务）
+  const sessionsSvcGet = () => { try { return ctx.get('sessions') } catch (eS) { return undefined } } // Iter-39：惰性获取（启动时序竞态防御）
   if (!slots) return
 
   // ── 模块级数据层（防止 remount 闪烁）────────────────────────────
@@ -2015,6 +2015,10 @@ if (!WfComponent) {
     }
   }
 
+  const probe36 = (line) => {
+    try { console.log('[wf-gate-probe] ' + line) } catch (e0) {}
+    try { fetch('/wf/debug-probe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ line }) }) } catch (e1) {}
+  }
   const sessionGateMap = new Map() // sessionId → isWorkflowSession 判定缓存（factory 冷查兜底）
   let disposeRef = null // 当前 entry 的 disposer（null=未注册）
   let gateBusy = false
@@ -2022,6 +2026,7 @@ if (!WfComponent) {
     if (!disposeRef) return
     const d = disposeRef
     disposeRef = null
+    probe36('disposeEntry called')
     d() // markDirty 自动刷新页签
   }
   const registerEntry = () => {
@@ -2052,6 +2057,7 @@ if (!WfComponent) {
           ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
           : undefined
         const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
+        probe36('gate sid=' + String(sessionId) + ' preset=' + String(sessionPreset) + ' origin=' + String(sessionOrigin) + ' isWf=' + isWorkflowSession)
         wfSessionActive = isWorkflowSession
         React.useEffect(() => {
           if (sessionId !== undefined && sessionId !== null) sessionGateMap.set(String(sessionId), isWorkflowSession)
@@ -2065,6 +2071,7 @@ if (!WfComponent) {
       }
     )
     disposeRef = d
+    probe36('registerEntry OK')
     return d
   }
   slots.inject('conversation.view', (scopeArg) => {
@@ -2073,39 +2080,61 @@ if (!WfComponent) {
       ? scopeArg
       : (scopeArg && scopeArg.sessionId != null ? String(scopeArg.sessionId)
         : (scopeArg && scopeArg.id != null ? String(scopeArg.id) : undefined))
-    if (scopeSid !== undefined && sessionGateMap.get(scopeSid) === false) {
-      return () => {} // 已判定非编排会话：不注册 → 该会话 scope 无 Workflow 页签
+    const verdict36 = scopeSid !== undefined ? sessionGateMap.get(scopeSid) : undefined
+    probe36('factory scopeSid=' + String(scopeSid) + ' verdict=' + String(verdict36) + ' argKeys=' + (scopeArg && typeof scopeArg === 'object' ? Object.keys(scopeArg).slice(0, 12).join(',') : typeof scopeArg))
+    if (scopeSid !== undefined && verdict36 === false) {
+      probe36('factory skip (cached non-wf)')
+      return () => {}
     }
+    probe36('factory -> registerEntry')
     return registerEntry()
   })
 
   // Iter-39 修复：顶层持久订阅——哨兵自注销后失去复活感知的补偿。
   // 会话切换/preset 投影更新时重判：编排会话确保 entry 注册；非编排确保注销。
-  if (sessionsSvc && sessionsSvc.list) {
+  probe36('sessionsSvc init=' + (sessionsSvcGet() ? 'yes' : 'NO (将重试)'))
+  {
     const applyGate = () => {
       if (gateBusy) return
       gateBusy = true
       try {
-        const snap = sessionsSvc.list.getSnapshot()
+        const svc = sessionsSvcGet()
+        if (!svc || !svc.list) { probe36('applyGate skip: sessionsSvc 未就绪'); return }
+        const snap = svc.list.getSnapshot()
         const sid = snap && snap.current
-        if (sid === undefined || sid === null) return
+        if (sid === undefined || sid === null) { probe36('applyGate skip: no current sid'); return }
         const entry = snap.byId ? snap.byId[sid] : undefined
-        if (!entry) return
+        if (!entry) { probe36('applyGate skip: no entry for sid=' + String(sid) + ' byIdKeys=' + (snap.byId ? Object.keys(snap.byId).slice(0, 5).join(',') : 'none')); return }
         const preset = entry.projectionValues && entry.projectionValues.agentPreset != null
           ? entry.projectionValues.agentPreset
           : entry.agentPreset
         const origin = entry.origin
-        if (preset === undefined) return // 投影未就绪：维持现状，等下一次订阅通知
+        if (preset === undefined) { probe36('applyGate skip: preset undefined for sid=' + String(sid)); return } // 投影未就绪：维持现状，等下一次订阅通知
         const isWf = preset === 'workflow-orchestrator' && origin !== 'subagent'
         sessionGateMap.set(String(sid), isWf)
+        probe36('applyGate sid=' + String(sid) + ' preset=' + String(preset) + ' origin=' + String(origin) + ' isWf=' + isWf + ' registered=' + String(!!disposeRef))
         if (isWf) registerEntry()
         else disposeEntry()
       } catch (e36) { /* 判定失败维持现状 */ }
       finally { gateBusy = false }
     }
-    try {
-      sessionsSvc.list.subscribe(() => { try { applyGate() } catch (e37) {} })
-    } catch (e38) { /* 订阅不可用则退化为 Gate 渲染路径 */ }
-    try { applyGate() } catch (e39) {}
+    let subTries = 0
+    let subTimer = null
+    const trySubscribe = () => {
+      const svc = sessionsSvcGet()
+      if (!svc || !svc.list) { probe36('trySubscribe: sessionsSvc 未就绪 (try ' + subTries + ')'); return false }
+      try {
+        svc.list.subscribe(() => { try { applyGate() } catch (e37) { probe36('subscribe cb err: ' + (e37 && e37.message ? e37.message : String(e37))) } })
+        probe36('subscribe ok')
+        applyGate()
+        return true
+      } catch (e38) { probe36('subscribe FAIL: ' + (e38 && e38.message ? e38.message : String(e38))); return false }
+    }
+    if (!trySubscribe()) {
+      subTimer = setInterval(() => {
+        subTries++
+        if (trySubscribe() || subTries > 40) { if (subTimer) clearInterval(subTimer) }
+      }, 500)
+    }
   }
 }
