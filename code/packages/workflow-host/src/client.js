@@ -1387,7 +1387,9 @@ function lgAggStatus(items) {
       const runNode = graph.nodes.find(n =>
         (n.kind === 'task' && n.status === 'RUNNING') ||
         (n.kind === 'group' && n.items && n.items.some(i => i.status === 'RUNNING')))
+      if (!runNode) return // 无 RUNNING（PENDING/全部终态）：不跟随（v0.26.38 回归缺失的守卫）
       const pp = geo.pos.get(runNode.key)
+      if (!pp) return
       if (!pp) return
       if (Date.now() - lastUserScrollTs.current < 3000) return
       let target = pp.x + pp.w / 2 - el.clientWidth / 2
