@@ -5468,8 +5468,28 @@ function registerWebRoutes(ctx, registry) {
             writeJson(res, 200, { text: null, error: 'no file path provided' })
             return
           }
-          const resolved = await fs.resolve(path)
-          const text = await fs.readText(resolved)
+          // Iter-41 修复（用户反馈）：相对路径按两级链解析——工作空间优先，未命中则
+          // .dsh 预定义目录（与 /wf/skills 技能扫描同源 detectPredefinedRoot）；
+          // 绝对路径直读（现状不变）。
+          const isAbs = path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)
+          const rel = path.replace(/^\.\//, '')
+          const wsRoot36 = (query.get('workspaceRoot') || '').replace(/\\/g, '/').replace(/\/+$/, '')
+          const pre36 = detectPredefinedRoot()
+          const candidates = isAbs ? [path] : [].concat(
+            wsRoot36 ? [wsRoot36 + '/' + rel] : [],
+            pre36 ? [pre36.replace(/\/+$/, '') + '/' + rel] : [],
+            [path]
+          )
+          let text = null
+          let lastErr36 = null
+          for (const c of candidates) {
+            try {
+              const r36 = await fs.resolve(c)
+              text = await fs.readText(r36)
+              break
+            } catch (e36) { lastErr36 = e36 }
+          }
+          if (text === null) throw (lastErr36 || new Error('not found: ' + path))
           writeJson(res, 200, { text, error: null })
         } catch (e) {
           writeJson(res, 200, { text: null, error: e && e.message ? e.message : String(e) })

@@ -1474,7 +1474,8 @@ if (!WfComponent) {
     const openFileView = (p36) => {
       if (!p36) return
       setFileView({ path: p36, text: null, err: null })
-      fetch('/wf/skill?path=' + encodeURIComponent(p36))
+      const wsQ36 = (typeof activeRoot === 'string' && activeRoot) ? '&workspaceRoot=' + encodeURIComponent(activeRoot) : ''
+      fetch('/wf/skill?path=' + encodeURIComponent(p36) + wsQ36)
         .then(r36 => r36.json())
         .then(r36 => setFileView({ path: p36, text: r36 && r36.text, err: r36 && r36.error ? r36.error : '' }))
         .catch(e36 => setFileView({ path: p36, text: null, err: e36 && e36.message ? e36.message : String(e36) }))
