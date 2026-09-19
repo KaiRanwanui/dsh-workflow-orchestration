@@ -254,18 +254,14 @@ export function register(ctx) {
       // 相对解析不到，须拼 workspaceRoot 成绝对路径（已是绝对路径则原样）
       const openSkillView = (p) => {
         if (!p) return
-        // Iter-36 修正（v0.26.10）：技能解析遵循两级链——优先用 /wf/skills 列表项自带的
-        // 绝对路径 path（工作区顶替时已指向生效副本；预定义技能指向物化目录），
-        // 列表未命中再回退 workspaceRoot 拼接（覆盖「当前值不在技能列表」的历史实例）。
-        const hit = (skills || []).find(s => s && s.relPath === p)
-        const isAbs = p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)
-        const abs = (hit && hit.path) ? hit.path
-          : (isAbs ? p : String(workspaceRoot || '').replace(/\/+$/, '') + '/' + p)
-        setSkillView({ path: abs, text: null, err: null })
-        fetch('/wf/skill?path=' + encodeURIComponent(abs))
+        // Iter-42 归一：技能查看与详情卡同一语义——原始路径 + workspaceRoot 交
+        // 服务端两级链解析（工作空间优先 → .dsh 预定义目录）；列表仅作下拉数据源
+        const wsQ = workspaceRoot ? '&workspaceRoot=' + encodeURIComponent(workspaceRoot) : ''
+        setSkillView({ path: p, text: null, err: null })
+        fetch('/wf/skill?path=' + encodeURIComponent(p) + wsQ)
           .then(r => r.json())
-          .then(r => setSkillView({ path: abs, text: r && r.text, err: r && r.error ? r.error : '' }))
-          .catch(e => setSkillView({ path: abs, text: null, err: e && e.message ? e.message : String(e) }))
+          .then(r => setSkillView({ path: p, text: r && r.text, err: r && r.error ? r.error : '' }))
+          .catch(e => setSkillView({ path: p, text: null, err: e && e.message ? e.message : String(e) }))
       }
 
       const inputStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 5, padding: '3px 7px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
