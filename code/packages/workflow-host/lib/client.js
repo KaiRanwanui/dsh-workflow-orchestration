@@ -1742,7 +1742,17 @@ if (!WfComponent) {
         } else {
           const st = stById.get(dt.id)
           coveredIds.add(dt.id)
-          merged41.push(st || Object.assign({}, dt, { status: 'PENDING' }))
+          // Iter-42 修正：结构/配置字段以定义（dt）为准，执行字段以 state（st）叠加——
+          // st 整体优先会沿用 begin 固化的 dependsOn（DAG 不随保存变的根因）
+          merged41.push(st ? Object.assign({}, dt, {
+            status: st.status,
+            gateResult: st.gateResult || null,
+            gateNote: st.gateNote || null,
+            error: st.error || null,
+            _loopGroup: st._loopGroup, _loopItem: st._loopItem, _loopIndex: st._loopIndex,
+            _loopGroupName: st._loopGroupName, _onError: st._onError,
+            _concurrentGroup: st._concurrentGroup,
+          }) : Object.assign({}, dt, { status: 'PENDING' }))
         }
       }
       staleCount41 = stateTasks41.filter(t => !coveredIds.has(t.id) &&
