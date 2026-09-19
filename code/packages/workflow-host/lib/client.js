@@ -1275,6 +1275,8 @@ function lgAggStatus(items) {
   // ── Iter-30 分层布局 DAG 画布（渲染层；算法区上方已自 PoC/dag-layered-prototype.html 定稿移植）──
   const DagCanvas = React.memo(function DagCanvas(props) {
     const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
+    const scrollRef = React.useRef(null) // Iter-40：自动跟随滚动容器
+    const lastFollowFp = React.useRef(null) // Iter-40：每指纹只跟随一次
     const [expanded, setExpanded] = React.useState({})
     const toggleGroup = React.useCallback(key => {
       setExpanded(prev => {
@@ -1315,13 +1317,17 @@ function lgAggStatus(items) {
       const kids = [React.createElement('title', { key: 'tt' }, n.name + '\n' + n.key + (n.kind === 'task' ? '\n状态: ' + n.status : ''))]
       if (n.kind === 'task') {
         const c = C[n.status] || C.PENDING
+        // Iter-40：RUNNING 呼吸脉冲（opacity 呼吸不动几何；状态迁移后条件不命中即停）
+        const pulseStyle = n.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
         kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? '#3b82f6' : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5 }))
-        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: c }))
-        kids.push(React.createElement('circle', { key: 'dot', cx: p.x + 15, cy: p.y + 16, r: 4, fill: c }))
+        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: c, style: pulseStyle }))
+        kids.push(React.createElement('circle', { key: 'dot', cx: p.x + 15, cy: p.y + 16, r: 4, fill: c, style: pulseStyle }))
         kids.push(React.createElement('text', { key: 'nm', x: p.x + 24, y: p.y + 20, fontSize: 12, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc(n.name, LGEO.gW - 34)))
         kids.push(React.createElement('text', { key: 'idt', x: p.x + 15, y: p.y + 35, fontSize: 10, fill: '#94a3b8' }, lgTrunc(n.key, LGEO.gW - 26)))
-        if (n.task.gate) {
-          const gc = n.task.gate.gateResult === 'PASS' ? '#22c55e' : n.task.gate.gateResult === 'FAIL' ? '#ef4444' : '#64748b'
+        // Iter-40（U1 修复）：门禁角点条件接快照稳定字段 gateChecker（原 n.task.gate
+        // 在 client 数据模型中不存在 → 角点从未渲染）；色值随 gateResult 全程可见
+        if (n.task.gateChecker) {
+          const gc = n.task.gateResult === 'PASS' ? '#22c55e' : n.task.gateResult === 'FAIL' ? '#ef4444' : '#64748b'
           kids.push(React.createElement('circle', { key: 'gate', cx: p.x + LGEO.gW - 10, cy: p.y + 10, r: 3.5, fill: gc }))
         }
       } else if (n.kind === 'placeholder') {
@@ -1382,7 +1388,8 @@ function lgAggStatus(items) {
       return React.createElement('g', { key: 'n-' + n.key, style: { cursor: 'pointer' }, onClick: () => onSelect(n.key) }, kids)
     }
 
-    const svgKids = [React.createElement('defs', { key: 'defs' },
+    const svgKids = [React.createElement('style', { key: 'kf' }, '@keyframes wfdag-pulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }'),
+      React.createElement('defs', { key: 'defs' },
       React.createElement('marker', { id: 'wfdag-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' },
         React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' })))]
     paths.forEach(p => svgKids.push(React.createElement('path', { key: p.id, d: p.d, fill: 'none', stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#wfdag-arrow)', opacity: 0.85 })))
@@ -1390,6 +1397,24 @@ function lgAggStatus(items) {
     if (sp) svgKids.push(React.createElement('circle', { key: 'cap-s', cx: sp.x + 10, cy: sp.cy, r: 10, fill: '#22c55e' }, React.createElement('title', null, '开始')))
     if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: 'none', stroke: '#ef4444', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
     graph.nodes.forEach(n => svgKids.push(nodeEls(n)))
+
+    // Iter-40：自动跟随——每指纹一次；存在 RUNNING 节点且在视口外时滚入居中
+    React.useEffect(() => {
+      const el = scrollRef.current
+      if (!el) return
+      const fp40 = fingerprint(flat)
+      if (lastFollowFp.current === fp40) return
+      lastFollowFp.current = fp40
+      const runNode = graph.nodes.find(n => n.kind === 'task' && n.status === 'RUNNING')
+      if (!runNode) return
+      const pp = geo.pos.get(runNode.key)
+      if (!pp) return
+      let target = pp.x + pp.w / 2 - el.clientWidth / 2
+      if (target < 0) target = 0
+      try {
+        if (Math.abs(el.scrollLeft - target) > 24) el.scrollTo({ left: target, behavior: 'smooth' })
+      } catch (e40) { el.scrollLeft = Math.max(0, target) }
+    })
 
     const legendKids = []
     ;[['PENDING', '待跑'], ['RUNNING', '运行中'], ['DONE', '完成'], ['FAILED', '失败'], ['SKIPPED', '跳过']].forEach(x => {
@@ -1421,6 +1446,7 @@ function lgAggStatus(items) {
       React.createElement('div', { key: 'lg', style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8, fontSize: 11, color: '#94a3b8' } }, legendKids),
       graph.nodes.length ? React.createElement('div', {
         key: 'scroll',
+        ref: scrollRef,
         style: { overflowX: 'auto', border: '1px solid rgba(148,163,184,0.18)', borderRadius: 8, background: 'rgba(148,163,184,0.06)' }
       }, React.createElement('svg', { width: geo.svgW, height: geo.canvasH, xmlns: 'http://www.w3.org/2000/svg', style: { display: 'block' } }, svgKids)) : null,
     ])
