@@ -1443,6 +1443,7 @@ function lgAggStatus(items) {
         error ? React.createElement('span', { key: 'e', style: { color: C.FAILED } }, error) : null,
       ]),
       React.createElement('div', { key: 'lg', style: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 8, fontSize: 11, color: '#94a3b8' } }, legendKids),
+      staleCount41 > 0 ? React.createElement('div', { key: 'stale41', style: { margin: '0 0 6px', fontSize: 11, color: '#f59e0b', border: '1px dashed rgba(245,158,11,0.5)', borderRadius: 6, padding: '3px 8px', display: 'inline-block' } }, '⚠ 有 ' + staleCount41 + ' 个任务的执行状态属上一轮定义 · Reset 后对齐') : null,
       graph.nodes.length ? React.createElement('div', {
         key: 'scroll',
         ref: scrollRef,
@@ -1471,6 +1472,16 @@ if (!WfComponent) {
     const [selectedId, setSelectedId] = React.useState(null)
     // Iter-41：文件预览弹层（inputs/outputs/processor 点击 → /wf/skill 通道只读展示）
     const [fileView, setFileView] = React.useState(null)
+    // Iter-42：定义源（instance.yaml）——DAG 结构层的数据源（所见即所得）
+    const [defData41, setDefData41] = React.useState(null)
+    const reloadDef41 = () => {
+      if (!activeRoot || !currentInstanceId) { setDefData41(null); return }
+      fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(activeRoot) + '&instanceId=' + encodeURIComponent(currentInstanceId))
+        .then(r41 => r41.json())
+        .then(r41 => setDefData41(r41 && !r41.error ? r41 : null))
+        .catch(() => setDefData41(null))
+    }
+    React.useEffect(() => { reloadDef41() }, [activeRoot, currentInstanceId])
     const openFileView = (p36) => {
       if (!p36) return
       setFileView({ path: p36, text: null, err: null })
@@ -1554,7 +1565,47 @@ if (!WfComponent) {
 
     const snap = latest
     const stateData = (snap && snap.state) ? snap.state : null
-    const tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+    // Iter-42（DAG 数据源重构）：结构层=instance.yaml（所见即所得），状态层=state 叠加。
+    // 定义新增任务 → 未执行态即刻出现；删除任务即刻消失；state 残留任务计入「上一轮」徽标。
+    const stateTasks41 = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+    const defTasks41 = defData41 && Array.isArray(defData41.tasks) ? defData41.tasks : null
+    let tasks
+    let staleCount41 = 0
+    if (defTasks41) {
+      const stById = new Map(stateTasks41.map(t => [t.id, t]))
+      const coveredIds = new Set()
+      const coveredGroups = new Set()
+      const merged41 = []
+      for (const dt of defTasks41) {
+        if (dt.type === 'loop' || dt.type === 'concurrent') {
+          const gKey41 = dt.id
+          coveredGroups.add(gKey41)
+          const iters = stateTasks41.filter(t => t._loopGroup === gKey41 || t._concurrentGroup === gKey41)
+          iters.forEach(t => { coveredIds.add(t.id); merged41.push(t) })
+          if (!iters.length) {
+            // 未执行占位（复用哨兵+占位渲染形态：等待 items）
+            merged41.push({
+              id: dt.id, name: dt.name || dt.id, type: dt.type,
+              dependsOn: dt.dependsOn || [],
+              _loopGroup: dt.type === 'loop' ? dt.id : undefined,
+              _concurrentGroup: dt.type === 'concurrent' ? dt.id : undefined,
+              _pendingItems: dt.itemsFrom || '（待执行）',
+              status: 'PENDING',
+            })
+          }
+        } else {
+          const st = stById.get(dt.id)
+          coveredIds.add(dt.id)
+          merged41.push(st || Object.assign({}, dt, { status: 'PENDING' }))
+        }
+      }
+      staleCount41 = stateTasks41.filter(t => !coveredIds.has(t.id) &&
+        !(t._loopGroup && coveredGroups.has(t._loopGroup)) &&
+        !(t._concurrentGroup && coveredGroups.has(t._concurrentGroup))).length
+      tasks = merged41
+    } else {
+      tasks = stateTasks41 // 定义源不可用（加载失败/无实例）→ 退化为执行快照渲染
+    }
     const hasData = stateData && stateData.workflow
 
     // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
@@ -2159,7 +2210,7 @@ if (!WfComponent) {
               instanceId: currentInstanceId,
               stage: stateData ? stateData.stage : '',
               onClose: () => setEditorOpen(false),
-              onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+              onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader(); reloadDef41() },
             })
           : null,
       ),
