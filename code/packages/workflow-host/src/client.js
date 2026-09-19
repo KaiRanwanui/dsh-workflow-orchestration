@@ -1259,7 +1259,7 @@ function lgAggStatus(items) {
   const DagCanvas = React.memo(function DagCanvas(props) {
     const { stage, gateResult, tasks, selectedId, onSelect, workflowName, retries, error } = props
     const scrollRef = React.useRef(null) // Iter-40：自动跟随滚动容器
-    const lastFollowFp = React.useRef(null) // Iter-40：每指纹只跟随一次
+    const lastUserScrollTs = React.useRef(0) // Iter-40 修订：用户手动滚动宽限（3s 内不抢）
     const [expanded, setExpanded] = React.useState({})
     const toggleGroup = React.useCallback(key => {
       setExpanded(prev => {
@@ -1381,22 +1381,21 @@ function lgAggStatus(items) {
     if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: 'none', stroke: '#ef4444', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
     graph.nodes.forEach(n => svgKids.push(nodeEls(n)))
 
-    // Iter-40：自动跟随——每指纹一次；存在 RUNNING 节点且在视口外时滚入居中
+    // Iter-40 修订（用户反馈）：RUNNING 节点在视口外即持续自动居中（状态轮询随渲染校正）；
+    // 不抢手动滚动——用户滚动手势后 3s 宽限期内不纠偏
     React.useEffect(() => {
       const el = scrollRef.current
       if (!el) return
-      const fp40 = fingerprint(flat)
-      if (lastFollowFp.current === fp40) return
-      lastFollowFp.current = fp40
       const runNode = graph.nodes.find(n => n.kind === 'task' && n.status === 'RUNNING')
       if (!runNode) return
       const pp = geo.pos.get(runNode.key)
       if (!pp) return
+      if (Date.now() - lastUserScrollTs.current < 3000) return
       let target = pp.x + pp.w / 2 - el.clientWidth / 2
       if (target < 0) target = 0
-      try {
-        if (Math.abs(el.scrollLeft - target) > 24) el.scrollTo({ left: target, behavior: 'smooth' })
-      } catch (e40) { el.scrollLeft = Math.max(0, target) }
+      if (Math.abs(el.scrollLeft - target) > 24) {
+        try { el.scrollTo({ left: target, behavior: 'smooth' }) } catch (e40) { el.scrollLeft = Math.max(0, target) }
+      }
     })
 
     const legendKids = []
@@ -1430,6 +1429,9 @@ function lgAggStatus(items) {
       graph.nodes.length ? React.createElement('div', {
         key: 'scroll',
         ref: scrollRef,
+        onWheel: () => { lastUserScrollTs.current = Date.now() },
+        onPointerDown: () => { lastUserScrollTs.current = Date.now() },
+        onTouchMove: () => { lastUserScrollTs.current = Date.now() },
         style: { overflowX: 'auto', border: '1px solid rgba(148,163,184,0.18)', borderRadius: 8, background: 'rgba(148,163,184,0.06)' }
       }, React.createElement('svg', { width: geo.svgW, height: geo.canvasH, xmlns: 'http://www.w3.org/2000/svg', style: { display: 'block' } }, svgKids)) : null,
     ])
