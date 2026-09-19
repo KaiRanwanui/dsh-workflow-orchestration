@@ -1426,647 +1426,667 @@ function lgAggStatus(items) {
   })
 
   // ── Slot 注册 ──────────────────────────────────────────────────
-  slots.inject('conversation.view', () => {
-    return slots.register(
-      { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
-      function WorkflowViewFactory(props) {
-        const workspaceHook = props.useWorkspaces
-        const sessionId = props.sessionId
-        wfSessionId = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
-        const useSessions = props.useSessions
-        // Iter-12：跟随当前 session 的 cwd（切 session → 实例目录跟随）
-        const sessionCwd = useSessions
-          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
-          : undefined
-        // Iter-15：提取 parentSessionId（用于 subagent session 的消息注入）
-        const parentSessionId = useSessions
-          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
-          : undefined
-        // Iter-20(S5)：当前会话 agent preset（预设门控；仅 workflow-orchestrator 显示面板）
-        // 0.1.5 迁移：session preset 改经 projection 下发——官方读取路径为
-        // byId[id].projectionValues.agentPreset（见 dsh-client-ui-agent-preset AgentPresetLabel）；
-        // 保留直读 byId[id].agentPreset 兜底（兼容旧 store 形态）。
-        const sessionPreset = useSessions
-          ? useSessions((s) => {
-              if (sessionId === undefined || sessionId === null) return undefined
-              const entry = s.byId && s.byId[sessionId]
-              if (!entry) return undefined
-              const projected = entry.projectionValues && entry.projectionValues.agentPreset
-              return typeof projected === 'string' ? projected : entry.agentPreset
-            })
-          : undefined
-        // Iter-21(R2)：子会话（origin==='subagent'）一律占位，不显示工作流面板
-        const sessionOrigin = useSessions
-          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
-          : undefined
-        const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
-        wfSessionActive = isWorkflowSession
+  // Iter-39（页签动态门控）：conversation.view 为 session 作用域 list slot——inject
+  // factory 在每个会话 scope 实例化时调用。非编排会话（preset≠workflow-orchestrator）
+  // 与子会话（origin=subagent）不注册 entry → Workflow 页签不存在。register 返回
+  // disposer（markDirty 自动刷页签）；同 id 重注册前须先 disposer。
 
-        if (!WfComponent) {
-          WfComponent = function(props) {
-            const sessionId = props.sessionId
-            const isWorkflowSession = props.isWorkflowSession
-            const sessionCwd = props.sessionCwd
-            const parentSessionId = props.parentSessionId
-            const workspaceHook = props.workspaceHook
-          const [, forceUpdate] = React.useReducer(x => x + 1, 0)
-          const [selectedId, setSelectedId] = React.useState(null)
+if (!WfComponent) {
+    WfComponent = function(props) {
+      const sessionId = props.sessionId
+      const isWorkflowSession = props.isWorkflowSession
+      const sessionCwd = props.sessionCwd
+      const parentSessionId = props.parentSessionId
+      const workspaceHook = props.workspaceHook
+    const [, forceUpdate] = React.useReducer(x => x + 1, 0)
+    const [selectedId, setSelectedId] = React.useState(null)
 
-          React.useEffect(() => {
-            listeners.add(forceUpdate)
-            return () => listeners.delete(forceUpdate)
-          }, [])
+    React.useEffect(() => {
+      listeners.add(forceUpdate)
+      return () => listeners.delete(forceUpdate)
+    }, [])
 
-          // Iter-20(S5)：非编排会话 → 停止实例列表轮询（状态轮询由 wfSessionActive 短路）
-          React.useEffect(() => {
-            if (isWorkflowSession) {
-              // Iter-21(R3)：成为 workflow 会话（如 preset 异步加载 false→true）→ 启动列表轮询
-              if (activeRoot) startListPolling()
-            } else {
-              if (listPollingTimer) { clearInterval(listPollingTimer); listPollingTimer = null }
-            }
-            return () => {}
-          }, [isWorkflowSession])
+    // Iter-20(S5)：非编排会话 → 停止实例列表轮询（状态轮询由 wfSessionActive 短路）
+    React.useEffect(() => {
+      if (isWorkflowSession) {
+        // Iter-21(R3)：成为 workflow 会话（如 preset 异步加载 false→true）→ 启动列表轮询
+        if (activeRoot) startListPolling()
+      } else {
+        if (listPollingTimer) { clearInterval(listPollingTimer); listPollingTimer = null }
+      }
+      return () => {}
+    }, [isWorkflowSession])
 
-          // ── Iter-12：workspaceRoot 解析——session cwd 优先，回退当前工作区首项 ──
-          React.useEffect(() => {
-            let next = null
-            if (typeof sessionCwd === 'string' && sessionCwd) {
-              next = String(sessionCwd).replace(/\\/g, '/')
-              // 如果是相对路径，转换为绝对路径
-              if (!next.startsWith('/')) {
-                next = '/home/zhaokai/Projects/dsh_projects/' + next
-              }
-            }
-            if (!next && workspaceHook) {
-              try {
-                const wsList = workspaceHook()
-                if (wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items.length > 0) {
-                  next = String(wsList.data.items[0].path).replace(/\\/g, '/')
-                }
-              } catch (e) {}
-            }
-            if (!next || next === activeRoot) return
-            activeRoot = next
-            wfRoot = next
-            wfLoaded = true
-            latest = null; lastError = null
-            wfInstances = []; wfInstanceId = ''
-            if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(next)
-            listeners.forEach(fn => { try { fn() } catch (e2) {} })
-            // 启动实例列表轮询
-            startListPolling()
-          }, [sessionCwd, workspaceHook])
+    // ── Iter-12：workspaceRoot 解析——session cwd 优先，回退当前工作区首项 ──
+    React.useEffect(() => {
+      let next = null
+      if (typeof sessionCwd === 'string' && sessionCwd) {
+        next = String(sessionCwd).replace(/\\/g, '/')
+        // 如果是相对路径，转换为绝对路径
+        if (!next.startsWith('/')) {
+          next = '/home/zhaokai/Projects/dsh_projects/' + next
+        }
+      }
+      if (!next && workspaceHook) {
+        try {
+          const wsList = workspaceHook()
+          if (wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items.length > 0) {
+            next = String(wsList.data.items[0].path).replace(/\\/g, '/')
+          }
+        } catch (e) {}
+      }
+      if (!next || next === activeRoot) return
+      activeRoot = next
+      wfRoot = next
+      wfLoaded = true
+      latest = null; lastError = null
+      wfInstances = []; wfInstanceId = ''
+      if (typeof window.__wfSetRoot === 'function') window.__wfSetRoot(next)
+      listeners.forEach(fn => { try { fn() } catch (e2) {} })
+      // 启动实例列表轮询
+      startListPolling()
+    }, [sessionCwd, workspaceHook])
 
-          // ── Iter-21(R3)：会话切换（含同工作区 cwd 不变）→ 重置会话派生态并重拉列表 ──
-          React.useEffect(() => {
-            const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
-            if (sid === wfLastSessionId) return
-            wfLastSessionId = sid
-            // 仅重置派生态（gating 用）；不重置 wfInstances（工作区级列表，同工作区仍有效/避免采用池空）
-            // 不重置 latest（由 /wf/status 按新 boundId 更新，避免 DAG 闪空白）
-            wfSessionState = null; wfInstanceId = ''
-            // 仅 workflow 会话重拉列表；非编排会话保持占位 + 短路轮询
-            if (isWorkflowSession && activeRoot) startListPolling()
-            listeners.forEach(fn => { try { fn() } catch (e) {} })
-          }, [sessionId, isWorkflowSession])
+    // ── Iter-21(R3)：会话切换（含同工作区 cwd 不变）→ 重置会话派生态并重拉列表 ──
+    React.useEffect(() => {
+      const sid = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
+      if (sid === wfLastSessionId) return
+      wfLastSessionId = sid
+      // 仅重置派生态（gating 用）；不重置 wfInstances（工作区级列表，同工作区仍有效/避免采用池空）
+      // 不重置 latest（由 /wf/status 按新 boundId 更新，避免 DAG 闪空白）
+      wfSessionState = null; wfInstanceId = ''
+      // 仅 workflow 会话重拉列表；非编排会话保持占位 + 短路轮询
+      if (isWorkflowSession && activeRoot) startListPolling()
+      listeners.forEach(fn => { try { fn() } catch (e) {} })
+    }, [sessionId, isWorkflowSession])
 
-          // ── Iter-12：实例列表轮询（只读；选择经 wfInstanceId 参与 status 轮询）──
-          // 注意：轮询在 workspaceRoot 解析 effect 里启动，不依赖 React state
-          // 这里只负责清理
-          React.useEffect(() => {
-            return () => {
-              if (wfListLoader) {
-                wfListLoader.stop = true
-                wfListLoader = null
-              }
-            }
-          }, [])
+    // ── Iter-12：实例列表轮询（只读；选择经 wfInstanceId 参与 status 轮询）──
+    // 注意：轮询在 workspaceRoot 解析 effect 里启动，不依赖 React state
+    // 这里只负责清理
+    React.useEffect(() => {
+      return () => {
+        if (wfListLoader) {
+          wfListLoader.stop = true
+          wfListLoader = null
+        }
+      }
+    }, [])
 
-          const snap = latest
-          const stateData = (snap && snap.state) ? snap.state : null
-          const tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
-          const hasData = stateData && stateData.workflow
+    const snap = latest
+    const stateData = (snap && snap.state) ? snap.state : null
+    const tasks = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+    const hasData = stateData && stateData.workflow
 
-          // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
-          const [formOpen, setFormOpen] = React.useState(false)
-          const [adoptOpen, setAdoptOpen] = React.useState(false) // Iter-20：采用未绑定实例
-          // Iter-28：实例编辑器折叠开关（hooks 区声明；渲染条件在 hasData 分支内）
-          const [editorOpen, setEditorOpen] = React.useState(false)
-          // Iter-29：实例管理子页签开关（hooks 区声明；渲染在条件 return 之后）
-          const [mgmtOpen, setMgmtOpen] = React.useState(false)
-          const [tplOpts, setTplOpts] = React.useState([])
-          const [tplSel, setTplSel] = React.useState('custom')
-          const [pathText, setPathText] = React.useState('')
-          // Iter-28：params 由 JSON textarea 改为 key-value 编辑器（模板默认值预填）
-          const [paramsEntries, setParamsEntries] = React.useState([])
-          // Iter-28：创建成功结果视图（warnings 非空/解绑冲突时展示，承接 Iter-25 遗留面板展示）
-          const [createResult, setCreateResult] = React.useState(null)
-          const [busy, setBusy] = React.useState(false)
-          const [formErr, setFormErr] = React.useState('')
-          // Iter-30 附加修复：创建校验失败的结构化错误清单（host 400 已回传 workflowBeginErrors，此前被丢弃）
-          const [formErrItems, setFormErrItems] = React.useState([])
+    // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
+    const [formOpen, setFormOpen] = React.useState(false)
+    const [adoptOpen, setAdoptOpen] = React.useState(false) // Iter-20：采用未绑定实例
+    // Iter-28：实例编辑器折叠开关（hooks 区声明；渲染条件在 hasData 分支内）
+    const [editorOpen, setEditorOpen] = React.useState(false)
+    // Iter-29：实例管理子页签开关（hooks 区声明；渲染在条件 return 之后）
+    const [mgmtOpen, setMgmtOpen] = React.useState(false)
+    const [tplOpts, setTplOpts] = React.useState([])
+    const [tplSel, setTplSel] = React.useState('custom')
+    const [pathText, setPathText] = React.useState('')
+    // Iter-28：params 由 JSON textarea 改为 key-value 编辑器（模板默认值预填）
+    const [paramsEntries, setParamsEntries] = React.useState([])
+    // Iter-28：创建成功结果视图（warnings 非空/解绑冲突时展示，承接 Iter-25 遗留面板展示）
+    const [createResult, setCreateResult] = React.useState(null)
+    const [busy, setBusy] = React.useState(false)
+    const [formErr, setFormErr] = React.useState('')
+    // Iter-30 附加修复：创建校验失败的结构化错误清单（host 400 已回传 workflowBeginErrors，此前被丢弃）
+    const [formErrItems, setFormErrItems] = React.useState([])
 
-          React.useEffect(() => {
-            if (!formOpen || !activeRoot) return
-            let stop = false
-            fetch('/wf/templates?workspaceRoot=' + encodeURIComponent(activeRoot))
-              .then(r => r.json())
-              .then(r => {
-                if (stop) return
-                const opts = [{ v: 'custom', label: '自定义路径…' }]
-                // Iter-24：单一 predefined 列表（预定义目录扫描优先 + 内建兜底去重）；工作区 templates/ 不再列入
-                const descOf = (p) => {
-                  if (!p || !p.yaml) return p && p.name
-                  const m = p.yaml.match(/^description:\s*(.+)$/m)
-                  return m ? m[1].replace(/^["']|["']$/g, '').trim() : p.name
-                }
-                ;(r.predefined || []).forEach(p => { const d = descOf(p); opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + p.name + (d && d !== p.name ? ' — ' + (String(d).length > 26 ? String(d).slice(0, 26) + '…' : d) : '') + (p.fallback ? '（内建兜底）' : ''), t: p }) })
-                setTplOpts(opts)
-                if (opts.length > 1) {
-                  setTplSel(opts[1].v)
-                  // Iter-28：默认模板 params 默认值预填（{key: default 原值} → 行编辑器形态）
-                  const pv = opts[1].t && opts[1].t.params ? opts[1].t.params : {}
-                  setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
-                }
-              })
-              .catch(() => {})
-            return () => { stop = true }
-          }, [formOpen, activeRoot])
-
-          const openForm = () => { setFormErr(''); setFormErrItems([]); setCreateResult(null); setFormOpen(true) }
-          const pickTpl = (v) => {
-            setTplSel(v)
-            setFormErr(''); setFormErrItems([])
-            const opt = tplOpts.find(o => o.v === v)
-            // Iter-28：切模板重置 params 预填
-            const pv = opt && opt.t && opt.t.params ? opt.t.params : {}
+    React.useEffect(() => {
+      if (!formOpen || !activeRoot) return
+      let stop = false
+      fetch('/wf/templates?workspaceRoot=' + encodeURIComponent(activeRoot))
+        .then(r => r.json())
+        .then(r => {
+          if (stop) return
+          const opts = [{ v: 'custom', label: '自定义路径…' }]
+          // Iter-24：单一 predefined 列表（预定义目录扫描优先 + 内建兜底去重）；工作区 templates/ 不再列入
+          const descOf = (p) => {
+            if (!p || !p.yaml) return p && p.name
+            const m = p.yaml.match(/^description:\s*(.+)$/m)
+            return m ? m[1].replace(/^["']|["']$/g, '').trim() : p.name
+          }
+          ;(r.predefined || []).forEach(p => { const d = descOf(p); opts.push({ v: 'tpl:' + p.name, label: '[模板] ' + p.name + (d && d !== p.name ? ' — ' + (String(d).length > 26 ? String(d).slice(0, 26) + '…' : d) : '') + (p.fallback ? '（内建兜底）' : ''), t: p }) })
+          setTplOpts(opts)
+          if (opts.length > 1) {
+            setTplSel(opts[1].v)
+            // Iter-28：默认模板 params 默认值预填（{key: default 原值} → 行编辑器形态）
+            const pv = opts[1].t && opts[1].t.params ? opts[1].t.params : {}
             setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
           }
-          // Iter-28：key-value 行 → params 对象（空 key 跳过；数字/布尔解析与旧 JSON 输入等价）
-          const entriesToParams = (entries) => {
-            const out = {}
-            const seenDup = new Set()
-            for (const e of entries) {
-              const k = String(e.key || '').trim()
-              if (!k) continue
-              if (seenDup.has(k)) throw new Error('params 存在重复键: ' + k)
-              seenDup.add(k)
-              let v = String(e.value)
-              try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
-              out[k] = v
-            }
-            return out
+        })
+        .catch(() => {})
+      return () => { stop = true }
+    }, [formOpen, activeRoot])
+
+    const openForm = () => { setFormErr(''); setFormErrItems([]); setCreateResult(null); setFormOpen(true) }
+    const pickTpl = (v) => {
+      setTplSel(v)
+      setFormErr(''); setFormErrItems([])
+      const opt = tplOpts.find(o => o.v === v)
+      // Iter-28：切模板重置 params 预填
+      const pv = opt && opt.t && opt.t.params ? opt.t.params : {}
+      setParamsEntries(Object.keys(pv).map(k => ({ key: k, value: pv[k] === null || pv[k] === undefined ? '' : String(pv[k]) })))
+    }
+    // Iter-28：key-value 行 → params 对象（空 key 跳过；数字/布尔解析与旧 JSON 输入等价）
+    const entriesToParams = (entries) => {
+      const out = {}
+      const seenDup = new Set()
+      for (const e of entries) {
+        const k = String(e.key || '').trim()
+        if (!k) continue
+        if (seenDup.has(k)) throw new Error('params 存在重复键: ' + k)
+        seenDup.add(k)
+        let v = String(e.value)
+        try { v = JSON.parse(e.value) } catch (e2) { /* 保持字符串 */ }
+        out[k] = v
+      }
+      return out
+    }
+    const submitCreate = async () => {
+      setFormErr(''); setFormErrItems([]); setBusy(true)
+      try {
+        const params = entriesToParams(paramsEntries)
+        const payload = { workspaceRoot: activeRoot, params, sessionId } // Iter-19：面板创建即绑定当前 sessionId
+        if (tplSel === 'custom') {
+          if (!pathText.trim()) throw new Error('请填写 workflowPath')
+          payload.workflowPath = pathText.trim()
+        } else if (tplSel.startsWith('tpl:')) {
+          // Iter-35（用户拍板）：创建不再携带/编辑 yaml——仅提交模板源路径（模板引用语义，
+          // presetCopy/目录锚点/静态文件复制天然生效）；定义编辑统一在实例编辑器（源码/表单态）。
+          // 内建兜底模板（无源路径）不可用此通道，提示改选预定义模板。
+          const tplOpt = tplOpts.find(o => o.v === tplSel)
+          const tplPath = tplOpt && tplOpt.t && tplOpt.t.path
+          if (!tplPath) throw new Error('该模板为内建兜底（无源路径），请选择预定义模板或使用路径直填')
+          payload.workflowPath = tplPath
+        }
+        const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+        const r = await resp.json()
+        if (!resp.ok) {
+          // Iter-30 附加修复：结构化校验错误清单展示（此前仅显示 "invalid workflow definition" 一行，
+          // 用户无法定位修复）；workflowBeginErrors 为 host 格式化串，errors 为对象形态兜底。
+          const items = r && Array.isArray(r.workflowBeginErrors) && r.workflowBeginErrors.length
+            ? r.workflowBeginErrors.map(String)
+            : (r && Array.isArray(r.errors) && r.errors.length
+              ? r.errors.map(it => it && typeof it === 'object'
+                ? '[' + it.code + '] 任务 "' + (it.task || '-') + '" ' + (it.field || '-') + ': ' + (it.message || '')
+                : String(it))
+              : [])
+          if (items.length) {
+            setFormErr('创建被拒绝：定义校验未通过（' + items.length + ' 项，见下方清单）')
+            setFormErrItems(items)
+            return
           }
-          const submitCreate = async () => {
-            setFormErr(''); setFormErrItems([]); setBusy(true)
+          throw new Error((r && r.error) || ('HTTP ' + resp.status))
+        }
+        if (typeof wfListLoader === 'function') wfListLoader()
+        // Iter-28：创建成功 → 结果视图（warnings 面板展示，承接 Iter-25 遗留；
+        // recoveredConflict 一并展示替代旧 alert）。warnings 为空且无冲突 → 直接关弹窗。
+        const warns = r && Array.isArray(r.warnings) ? r.warnings : []
+        const conflicts = r && Array.isArray(r.recoveredConflict) ? r.recoveredConflict : []
+        if (warns.length > 0 || conflicts.length > 0) {
+          setCreateResult({ warnings: warns, recoveredConflict: conflicts, instanceId: r.instanceId })
+        } else {
+          setFormOpen(false)
+        }
+      } catch (e) {
+        setFormErr(e && e.message ? e.message : String(e))
+      } finally {
+        setBusy(false)
+      }
+    }
+
+    const fieldStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 6, padding: '4px 8px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
+    const monoStyle = Object.assign({}, fieldStyle, { fontFamily: 'monospace', resize: 'vertical' })
+    const btnStyle = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
+
+    // Iter-15：面板控制按钮（Start/Stop/Reset）
+    const controlBtns = []
+    const currentStage = stateData && stateData.stage
+    // Iter-20：当前实例 = 本会话绑定实例（snap 优先，其次 wfInstances 中绑本会话的实例）
+    const boundInstance = wfInstances.find(it => it.sessionId === wfSessionId)
+    const currentInstanceId = (snap && snap.instanceId) || (boundInstance && boundInstance.instanceId) || ''
+    const sessionBound = !!(wfSessionState && wfSessionState.state === 'BOUND')
+
+    // Iter-21：控制中间态终止——stage 已从 origin 移开（操作完成）或超时兜底
+    if (wfPendingCmd && currentStage) {
+      const originOk = wfPendingCmd === 'start'
+        ? (currentStage === 'CREATED' || currentStage === 'PENDING')
+        : wfPendingCmd === 'stop' ? (currentStage === 'RUNNING')
+        : (currentStage === 'STOPPED')
+      if (!originOk || (wfPendingAt && Date.now() - wfPendingAt > 30000)) {
+        wfPendingCmd = null; wfPendingAt = 0
+      }
+    }
+          
+    // Start 按钮（仅本会话已绑定实例（BOUND）且为可启动态时显示）
+    if (sessionBound && (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING')) {
+      if (wfPendingCmd === 'start') {
+        // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"启动中…"
+        controlBtns.push(React.createElement('button', {
+          key: 'start', title: '启动中…', disabled: true,
+          style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+        }, '启动中…'))
+      } else {
+        controlBtns.push(React.createElement('button', {
+          key: 'start', title: '启动实例',
+          onClick: async () => {
+            if (!currentInstanceId || !activeRoot) return
+            wfPendingCmd = 'start'; wfPendingAt = Date.now()
             try {
-              const params = entriesToParams(paramsEntries)
-              const payload = { workspaceRoot: activeRoot, params, sessionId } // Iter-19：面板创建即绑定当前 sessionId
-              if (tplSel === 'custom') {
-                if (!pathText.trim()) throw new Error('请填写 workflowPath')
-                payload.workflowPath = pathText.trim()
-              } else if (tplSel.startsWith('tpl:')) {
-                // Iter-35（用户拍板）：创建不再携带/编辑 yaml——仅提交模板源路径（模板引用语义，
-                // presetCopy/目录锚点/静态文件复制天然生效）；定义编辑统一在实例编辑器（源码/表单态）。
-                // 内建兜底模板（无源路径）不可用此通道，提示改选预定义模板。
-                const tplOpt = tplOpts.find(o => o.v === tplSel)
-                const tplPath = tplOpt && tplOpt.t && tplOpt.t.path
-                if (!tplPath) throw new Error('该模板为内建兜底（无源路径），请选择预定义模板或使用路径直填')
-                payload.workflowPath = tplPath
-              }
-              const resp = await fetch('/wf/create', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })
-              const r = await resp.json()
+              const resp = await fetch('/wf/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  workspaceRoot: activeRoot, 
+                  instanceId: currentInstanceId,
+                  sessionId: sessionId, // 传递当前 session ID
+                  parentSessionId: parentSessionId // 传递 parent session ID（用于 subagent session）
+                })
+              })
               if (!resp.ok) {
-                // Iter-30 附加修复：结构化校验错误清单展示（此前仅显示 "invalid workflow definition" 一行，
-                // 用户无法定位修复）；workflowBeginErrors 为 host 格式化串，errors 为对象形态兜底。
-                const items = r && Array.isArray(r.workflowBeginErrors) && r.workflowBeginErrors.length
-                  ? r.workflowBeginErrors.map(String)
-                  : (r && Array.isArray(r.errors) && r.errors.length
-                    ? r.errors.map(it => it && typeof it === 'object'
-                      ? '[' + it.code + '] 任务 "' + (it.task || '-') + '" ' + (it.field || '-') + ': ' + (it.message || '')
-                      : String(it))
-                    : [])
-                if (items.length) {
-                  setFormErr('创建被拒绝：定义校验未通过（' + items.length + ' 项，见下方清单）')
-                  setFormErrItems(items)
-                  return
-                }
-                throw new Error((r && r.error) || ('HTTP ' + resp.status))
-              }
-              if (typeof wfListLoader === 'function') wfListLoader()
-              // Iter-28：创建成功 → 结果视图（warnings 面板展示，承接 Iter-25 遗留；
-              // recoveredConflict 一并展示替代旧 alert）。warnings 为空且无冲突 → 直接关弹窗。
-              const warns = r && Array.isArray(r.warnings) ? r.warnings : []
-              const conflicts = r && Array.isArray(r.recoveredConflict) ? r.recoveredConflict : []
-              if (warns.length > 0 || conflicts.length > 0) {
-                setCreateResult({ warnings: warns, recoveredConflict: conflicts, instanceId: r.instanceId })
-              } else {
-                setFormOpen(false)
+                const err = await resp.json()
+                alert('启动失败: ' + (err.error || '未知错误'))
               }
             } catch (e) {
-              setFormErr(e && e.message ? e.message : String(e))
-            } finally {
-              setBusy(false)
+              alert('启动失败: ' + e.message)
             }
-          }
-
-          const fieldStyle = { border: '1px solid rgba(148,163,184,0.4)', borderRadius: 6, padding: '4px 8px', background: 'rgba(148,163,184,0.08)', color: 'inherit', fontSize: 12, width: '100%', boxSizing: 'border-box' }
-          const monoStyle = Object.assign({}, fieldStyle, { fontFamily: 'monospace', resize: 'vertical' })
-          const btnStyle = { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '3px 12px', cursor: 'pointer', fontSize: 12 }
-
-          // Iter-15：面板控制按钮（Start/Stop/Reset）
-          const controlBtns = []
-          const currentStage = stateData && stateData.stage
-          // Iter-20：当前实例 = 本会话绑定实例（snap 优先，其次 wfInstances 中绑本会话的实例）
-          const boundInstance = wfInstances.find(it => it.sessionId === wfSessionId)
-          const currentInstanceId = (snap && snap.instanceId) || (boundInstance && boundInstance.instanceId) || ''
-          const sessionBound = !!(wfSessionState && wfSessionState.state === 'BOUND')
-
-          // Iter-21：控制中间态终止——stage 已从 origin 移开（操作完成）或超时兜底
-          if (wfPendingCmd && currentStage) {
-            const originOk = wfPendingCmd === 'start'
-              ? (currentStage === 'CREATED' || currentStage === 'PENDING')
-              : wfPendingCmd === 'stop' ? (currentStage === 'RUNNING')
-              : (currentStage === 'STOPPED')
-            if (!originOk || (wfPendingAt && Date.now() - wfPendingAt > 30000)) {
-              wfPendingCmd = null; wfPendingAt = 0
-            }
-          }
-          
-          // Start 按钮（仅本会话已绑定实例（BOUND）且为可启动态时显示）
-          if (sessionBound && (!currentStage || currentStage === 'CREATED' || currentStage === 'PENDING')) {
-            if (wfPendingCmd === 'start') {
-              // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"启动中…"
-              controlBtns.push(React.createElement('button', {
-                key: 'start', title: '启动中…', disabled: true,
-                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
-              }, '启动中…'))
-            } else {
-              controlBtns.push(React.createElement('button', {
-                key: 'start', title: '启动实例',
-                onClick: async () => {
-                  if (!currentInstanceId || !activeRoot) return
-                  wfPendingCmd = 'start'; wfPendingAt = Date.now()
-                  try {
-                    const resp = await fetch('/wf/start', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ 
-                        workspaceRoot: activeRoot, 
-                        instanceId: currentInstanceId,
-                        sessionId: sessionId, // 传递当前 session ID
-                        parentSessionId: parentSessionId // 传递 parent session ID（用于 subagent session）
-                      })
-                    })
-                    if (!resp.ok) {
-                      const err = await resp.json()
-                      alert('启动失败: ' + (err.error || '未知错误'))
-                    }
-                  } catch (e) {
-                    alert('启动失败: ' + e.message)
-                  }
-                },
-                style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-              }, '▶ Start'))
-            }
-          }
-          
-          // Stop 按钮（仅 RUNNING 时显示；PENDING 属待启动，非执行中）
-          if (sessionBound && currentStage === 'RUNNING') {
-            if (wfPendingCmd === 'stop') {
-              // Iter-21：中间态——agent 尚未把实例切到 STOPPED，禁用并显示"停止中…"
-              controlBtns.push(React.createElement('button', {
-                key: 'stop', title: '停止中…', disabled: true,
-                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
-              }, '停止中…'))
-            } else {
-              controlBtns.push(React.createElement('button', {
-                key: 'stop', title: '停止实例',
-                onClick: async () => {
-                  if (!currentInstanceId || !activeRoot) return
-                  wfPendingCmd = 'stop'; wfPendingAt = Date.now()
-                  try {
-                    const resp = await fetch('/wf/stop', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
-                    })
-                    if (!resp.ok) {
-                      const err = await resp.json()
-                      alert('停止失败: ' + (err.error || '未知错误'))
-                    }
-                  } catch (e) {
-                    alert('停止失败: ' + e.message)
-                  }
-                },
-                style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-              }, '⏹ Stop'))
-            }
-          }
-          
-          // Iter-21(R5)：Resume 按钮（STOPPED 时显示；续跑保 DONE）
-          if (sessionBound && currentStage === 'STOPPED') {
-            if (wfPendingCmd === 'resume') {
-              // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"恢复中…"
-              controlBtns.push(React.createElement('button', {
-                key: 'resume', title: '恢复中…', disabled: true,
-                style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
-              }, '恢复中…'))
-            } else {
-              controlBtns.push(React.createElement('button', {
-                key: 'resume', title: '恢复实例（续跑，保留已完成）',
-                onClick: async () => {
-                  if (!currentInstanceId || !activeRoot) return
-                  wfPendingCmd = 'resume'; wfPendingAt = Date.now()
-                  try {
-                    const resp = await fetch('/wf/resume', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
-                    })
-                    if (!resp.ok) {
-                      const err = await resp.json()
-                      alert('恢复失败: ' + (err.error || '未知错误'))
-                    }
-                  } catch (e) {
-                    alert('恢复失败: ' + e.message)
-                  }
-                },
-                style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-              }, '▶ Resume'))
-            }
-          }
-          
-          // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
-          if (sessionBound && (currentStage === 'STOPPED' || currentStage === 'COMPLETED' || currentStage === 'FAILED')) {
-            controlBtns.push(React.createElement('button', {
-              key: 'reset', title: '重置实例（清空状态，保留产物）',
-              onClick: async () => {
-                if (!currentInstanceId || !activeRoot) return
-                if (!confirm('确定要重置实例吗？状态将被清空，产物文件保留。')) return
-                try {
-                  const resp = await fetch('/wf/reset', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-22(S4)：带 session 供"已重置"消息注入
-                  })
-                  if (!resp.ok) {
-                    const err = await resp.json()
-                    alert('重置失败: ' + (err.error || '未知错误'))
-                  }
-                } catch (e) {
-                  alert('重置失败: ' + e.message)
-                }
-              },
-              style: { border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-            }, '↻ Reset'))
-          }
-
-          // Iter-19：创建按钮仅当会话 UNBOUND（无绑定实例）时显示
-          const canCreate = !wfSessionState || wfSessionState.state === 'UNBOUND'
-          // Iter-28：编辑器折叠开关（已绑定实例且有定义数据时可见）；
-          // editorOpen state 声明在条件 return 之前的 hooks 区（见 formOpen 旁）。
-          // 修正2：RUNNING 时按钮灰色禁用（运行中不可编辑，避免展开空编辑器）
-          const EditorPanel = getEditorComponent()
-          const stageNow = (stateData && stateData.stage) || ''
-          const editBtn = (!canCreate && hasData && currentInstanceId)
-            ? React.createElement('button', {
-                key: 'edit',
-                title: stageNow === 'RUNNING' ? '运行中不可编辑（停止后可改并发/重试）' : '展开/收起实例编辑器（保存触发 Iter-27b 校验）',
-                disabled: stageNow === 'RUNNING',
-                onClick: () => setEditorOpen(o => !o),
-                style: {
-                  border: editorOpen ? '1px solid rgba(59,130,246,0.7)' : '1px solid rgba(148,163,184,0.35)',
-                  background: editorOpen ? 'rgba(59,130,246,0.15)' : 'transparent',
-                  color: editorOpen ? '#60a5fa' : 'inherit',
-                  borderRadius: 6, padding: '1px 9px', fontSize: 12,
-                  cursor: stageNow === 'RUNNING' ? 'default' : 'pointer',
-                  opacity: stageNow === 'RUNNING' ? 0.45 : 1,
-                  lineHeight: '18px',
-                }
-              }, '✎ 编辑')
-            : null
-          const plusBtn = canCreate ? React.createElement('button', {
-            key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
-            style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
-          }, '+ 创建') : null
-          // Iter-20(R3)：会话 UNBOUND 时提供"采用"入口（选未绑定实例并绑定本会话）
-          const adoptBtn = canCreate ? React.createElement('button', {
-            key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => { if (activeRoot) startListPolling(); setAdoptOpen(true) }, // Iter-21：打开即刷新列表，避免采用池空/延迟;孤儿可采纳(需 S3 recoverOrphan)属 Iter-22
-            style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
-          }, '采用') : null
-          // Iter-29：实例管理子页签按钮（所有 workflow 会话可见：管理列表展示全量实例+归档，
-          // UNBOUND 会话也可查看/下载/删除；与 DAG 视图互斥切换）
-          const mgmtBtn = activeRoot ? React.createElement('button', {
-            key: 'mgmt',
-            title: '实例管理（活动/归档两段列表：归档、下载、删除）',
-            onClick: () => setMgmtOpen(o => !o),
-            style: {
-              border: mgmtOpen ? '1px solid rgba(167,139,250,0.7)' : '1px solid rgba(148,163,184,0.35)',
-              background: mgmtOpen ? 'rgba(167,139,250,0.15)' : 'transparent',
-              color: mgmtOpen ? '#a78bfa' : 'inherit',
-              borderRadius: 6, padding: '1px 9px', fontSize: 12,
-              cursor: 'pointer', lineHeight: '18px',
-            }
-          }, '📋 管理') : null
-          // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮（+ Iter-28 编辑入口）
-          // Iter-29：管理按钮恒在末尾（与视图状态无关）
-          const toolbar = React.createElement('div', {
-            key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
-          }, (canCreate ? [plusBtn, adoptBtn] : (editBtn ? controlBtns.concat([editBtn]) : controlBtns)).concat(mgmtBtn ? [mgmtBtn] : []))
-
-          const KvEditor = getKeyValueComponent()
-          const formOverlay = !formOpen ? null : React.createElement('div', {
-            style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
-            onClick: () => setFormOpen(false)
-          }, React.createElement('div', {
-            style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 460, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
-            onClick: (e) => e.stopPropagation()
-          }, createResult ? [
-            // Iter-28：创建成功结果视图（warnings / 解绑冲突清单展示）
-            React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#22c55e' } }, '✓ 创建成功（' + (createResult.instanceId || '') + '）'),
-            createResult.recoveredConflict.length > 0 ? React.createElement('div', {
-              key: 'cf', style: { border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', borderRadius: 6, padding: '6px 9px', whiteSpace: 'pre-wrap' }
-            }, '检测到实例绑定冲突：已自动解绑 [' + createResult.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。') : null,
-            React.createElement('div', { key: 'wl', style: { fontWeight: 600 } }, createResult.warnings.length > 0 ? '⚠ 校验警告（' + createResult.warnings.length + ' 项，不阻断创建）' : '校验通过，无警告'),
-            createResult.warnings.length > 0 ? React.createElement('div', {
-              key: 'ws', style: { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b', borderRadius: 6, padding: '6px 9px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }
-            }, createResult.warnings.map((w, i) => React.createElement('div', { key: i }, '· ' + w))) : null,
-            React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end' } }, [
-              React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, '关闭'),
-            ]),
-          ] : [
-            React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
-            React.createElement('label', { key: 'l1' }, '模板 / 来源'),
-            React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
-              tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: '#1e293b', background: '#f8fafc' } }, o.label))
-            ),
-            tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
-            tplSel.indexOf('tpl:') === 0 ? React.createElement('div', { key: 'y', style: { fontSize: 11, color: '#9ca3af' } }, '创建后可在实例编辑器（表单 / 源码）中调整定义全文。') : null,
-            React.createElement('label', { key: 'l2' }, 'params（键值对；模板默认值已预填，可增删改）'),
-            React.createElement(KvEditor, { key: 'pj', entries: paramsEntries, onChange: setParamsEntries, keyPlaceholder: '参数名', valuePlaceholder: '值' }),
-            formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
-            formErrItems.length > 0 ? React.createElement('div', {
-              key: 'errlist',
-              style: { border: '1px solid rgba(248,113,113,0.45)', borderRadius: 6, background: 'rgba(248,113,113,0.08)', maxHeight: 180, overflowY: 'auto', padding: '6px 10px', fontSize: 12, fontFamily: 'monospace', whiteSpace: 'pre-wrap', color: '#f87171' }
-            }, formErrItems.map((s, i) => React.createElement('div', { key: i }, '· ' + s))) : null,
-            React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
-              React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
-              React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
-            ]),
-          ]))
-
-          // Iter-20(S5)：非 workflow-orchestrator 会话 → 占位（不显示面板/控件）
-          if (!isWorkflowSession) {
-            return React.createElement('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
-            }, '此会话不是 Workflow 编排会话，无监控面板。')
-          }
-          // Iter-20(S5)：BROKEN → 环境异常告警（隐藏操作按钮）
-          if (wfSessionState && wfSessionState.state === 'BROKEN') {
-            return React.createElement('div', {
-              style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, height: '100%', minHeight: 420, color: '#ef4444', fontSize: 13 }
-            }, [
-              React.createElement('div', { key: 't', style: { fontWeight: 600, fontSize: 14 } }, '⚠ 环境异常，需新建 workflow 会话'),
-              React.createElement('div', { key: 'r', style: { color: '#9ca3af', fontSize: 12, textAlign: 'center', maxWidth: 420 } },
-                wfSessionState.reason ? ('原因：' + wfSessionState.reason) : '工作流工作区损坏或存在绑定冲突，无法继续使用当前实例。'),
-            ])
-          }
-          // Iter-20(S5)：DONE（归档声明本会话）→ 已归档提示（不可再启动）
-          if (wfSessionState && wfSessionState.state === 'DONE') {
-            return React.createElement('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
-            }, '该工作流实例已归档（完成）。如需新建请开启新的 Workflow 编排会话。')
-          }
-
-          if (!wfLoaded) {
-            return React.createElement('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
-            }, '...')
-          }
-
-          if (!wfRoot) {
-            return React.createElement('div', {
-              style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13, flexDirection: 'column', gap: 8 }
-            }, [
-              React.createElement('span', { key: 'a' }, 'No workspace'),
-              React.createElement('span', { key: 'b', style: { fontSize: 11 } }, 'Open a workspace first')
-            ])
-          }
-
-
-          // ── Iter-20(R3)：移除常驻实例切换条；改为"采用"弹窗（可选未绑定实例并绑定本会话）──
-          const poolInstances = wfInstances.filter(it => it.sessionId == null)
-          const instBar = null // R3：不再常驻展示实例列表
-          const doAdopt = async (pid) => {
-            if (!sessionId || !activeRoot) { alert('无会话上下文，无法采用'); return }
-            try {
-              const resp = await fetch('/wf/adopt', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: pid, sessionId })
-              })
-              const r = await resp.json()
-              if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
-              setAdoptOpen(false); wfInstanceId = ''
-              if (typeof wfListLoader === 'function') wfListLoader()
-            } catch (e) { alert('采用失败: ' + (e && e.message ? e.message : String(e))) }
-          }
-          const adoptOverlay = !adoptOpen ? null : React.createElement('div', {
-            style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
-            onClick: () => setAdoptOpen(false)
-          }, React.createElement('div', {
-            style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 420, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
-            onClick: (e) => e.stopPropagation()
-          }, [
-            React.createElement('div', { key: 'tt', style: { fontSize: 13, fontWeight: 600 } }, '采用未绑定实例（绑定到本会话）'),
-            (poolInstances.length === 0
-              ? React.createElement('div', { key: 'e', style: { color: '#9ca3af', fontSize: 12 } }, '当前没有未绑定实例。请先「创建」一个新实例。')
-              : React.createElement('div', { key: 'lst', style: { display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' } },
-                poolInstances.map(it => React.createElement('button', {
-                  key: it.instanceId, onClick: () => doAdopt(it.instanceId),
-                  style: { textAlign: 'left', border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }
-                }, it.workflowName + ' · ' + String(it.instanceId).slice(-8) + (it.poolNote ? ' · ' + it.poolNote : (it.stage ? ' · ' + it.stage : ' · 未启动')))))),
-            React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
-          ]))
-
-          // Iter-31（用户 D3 拍板）：Iter-23(A3) 停止无效提示条已移除——Stop v4 后会话 UI 停止与
-          // 面板 Stop 等效（两时序真机验证通过），提示失去存在前提；/wf/list 亦不再返回 stopHint。
-
-          // Iter-29：管理子页签组件（activeRoot 存在时可用；与 DAG 视图互斥）
-          const ManagerPanel = getManagerComponent()
-          const mgmtView = (mgmtOpen && activeRoot)
-            ? React.createElement(ManagerPanel, {
-                workspaceRoot: activeRoot,
-                onClose: () => setMgmtOpen(false),
-                onChanged: () => { if (typeof wfListLoader === 'function') wfListLoader() },
-              })
-            : null
-
-          if (!hasData) {
-            return React.createElement('div', {
-              style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
-            },
-              toolbar,
-              formOverlay,
-            adoptOverlay,
-              mgmtView ? mgmtView : React.createElement('div', {
-                style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)', flexDirection: 'column', gap: 6, textAlign: 'center', padding: 16 }
-              }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (function () {
-                // Iter-33（缺陷 #3）：绑定实例 phase=CREATED（有目录无 state.json，begin 未完成）→
-                // 明示状态与出路，替代无差别的 "Waiting for workflow..." 永久等待
-                const boundCreated = (wfInstances || []).find(it => it && it.sessionId === wfSessionId && it.phase === 'CREATED')
-                if (boundCreated) {
-                  return [
-                    React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#e2e8f0' } }, '实例已创建未启动（CREATED）· ' + String(boundCreated.instanceId).slice(-8)),
-                    React.createElement('div', { key: 'd', style: { fontSize: 12 } }, '定义尚未执行。点击「启动」开始执行；若实例异常，可通过「管理」归档清理。'),
-                  ]
-                }
-                return (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...')
-              })())
-            )
-          }
-
-
-          return React.createElement('div', {
-            style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
           },
-            toolbar,
-            // Iter-29：管理子页签打开时替换 DAG+编辑器主区（互斥切换）
-            mgmtView ? mgmtView : React.createElement(React.Fragment, { key: 'dagview' },
-              React.createElement(DagCanvas, {
-                stage: stateData.stage,
-                gateResult: stateData.gateResult || null,
-                tasks,
-                selectedId,
-                onSelect: id => setSelectedId(prev => prev === id ? null : id),
-                workflowName: stateData.workflow,
-                retries: stateData.retries || 0,
-                error: stateData.error || null,
-              }),
-              // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
-              // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
-              editorOpen && currentInstanceId && activeRoot
-                ? React.createElement(EditorPanel, {
-                    workspaceRoot: activeRoot,
-                    instanceId: currentInstanceId,
-                    stage: stateData ? stateData.stage : '',
-                    onClose: () => setEditorOpen(false),
-                    onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
-                  })
-                : null,
-            ),
-            formOverlay,
-            adoptOverlay
-          )
+          style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+        }, '▶ Start'))
+      }
+    }
+          
+    // Stop 按钮（仅 RUNNING 时显示；PENDING 属待启动，非执行中）
+    if (sessionBound && currentStage === 'RUNNING') {
+      if (wfPendingCmd === 'stop') {
+        // Iter-21：中间态——agent 尚未把实例切到 STOPPED，禁用并显示"停止中…"
+        controlBtns.push(React.createElement('button', {
+          key: 'stop', title: '停止中…', disabled: true,
+          style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+        }, '停止中…'))
+      } else {
+        controlBtns.push(React.createElement('button', {
+          key: 'stop', title: '停止实例',
+          onClick: async () => {
+            if (!currentInstanceId || !activeRoot) return
+            wfPendingCmd = 'stop'; wfPendingAt = Date.now()
+            try {
+              const resp = await fetch('/wf/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
+              })
+              if (!resp.ok) {
+                const err = await resp.json()
+                alert('停止失败: ' + (err.error || '未知错误'))
+              }
+            } catch (e) {
+              alert('停止失败: ' + e.message)
+            }
+          },
+          style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+        }, '⏹ Stop'))
+      }
+    }
+          
+    // Iter-21(R5)：Resume 按钮（STOPPED 时显示；续跑保 DONE）
+    if (sessionBound && currentStage === 'STOPPED') {
+      if (wfPendingCmd === 'resume') {
+        // Iter-21：中间态——agent 尚未把实例切到 RUNNING，禁用并显示"恢复中…"
+        controlBtns.push(React.createElement('button', {
+          key: 'resume', title: '恢复中…', disabled: true,
+          style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: '#94a3b8', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'default' }
+        }, '恢复中…'))
+      } else {
+        controlBtns.push(React.createElement('button', {
+          key: 'resume', title: '恢复实例（续跑，保留已完成）',
+          onClick: async () => {
+            if (!currentInstanceId || !activeRoot) return
+            wfPendingCmd = 'resume'; wfPendingAt = Date.now()
+            try {
+              const resp = await fetch('/wf/resume', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-21：带 session 供消息注入
+              })
+              if (!resp.ok) {
+                const err = await resp.json()
+                alert('恢复失败: ' + (err.error || '未知错误'))
+              }
+            } catch (e) {
+              alert('恢复失败: ' + e.message)
+            }
+          },
+          style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+        }, '▶ Resume'))
+      }
+    }
+          
+    // Reset 按钮（STOPPED、COMPLETED、FAILED 时显示）
+    if (sessionBound && (currentStage === 'STOPPED' || currentStage === 'COMPLETED' || currentStage === 'FAILED')) {
+      controlBtns.push(React.createElement('button', {
+        key: 'reset', title: '重置实例（清空状态，保留产物）',
+        onClick: async () => {
+          if (!currentInstanceId || !activeRoot) return
+          if (!confirm('确定要重置实例吗？状态将被清空，产物文件保留。')) return
+          try {
+            const resp = await fetch('/wf/reset', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: currentInstanceId, sessionId: sessionId, parentSessionId: parentSessionId }) // Iter-22(S4)：带 session 供"已重置"消息注入
+            })
+            if (!resp.ok) {
+              const err = await resp.json()
+              alert('重置失败: ' + (err.error || '未知错误'))
+            }
+          } catch (e) {
+            alert('重置失败: ' + e.message)
           }
-        }
-        return React.createElement(WfComponent, { sessionId, isWorkflowSession, sessionCwd, parentSessionId, workspaceHook })
-      },
-    )
-  })
-}
+        },
+        style: { border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+      }, '↻ Reset'))
+    }
 
+    // Iter-19：创建按钮仅当会话 UNBOUND（无绑定实例）时显示
+    const canCreate = !wfSessionState || wfSessionState.state === 'UNBOUND'
+    // Iter-28：编辑器折叠开关（已绑定实例且有定义数据时可见）；
+    // editorOpen state 声明在条件 return 之前的 hooks 区（见 formOpen 旁）。
+    // 修正2：RUNNING 时按钮灰色禁用（运行中不可编辑，避免展开空编辑器）
+    const EditorPanel = getEditorComponent()
+    const stageNow = (stateData && stateData.stage) || ''
+    const editBtn = (!canCreate && hasData && currentInstanceId)
+      ? React.createElement('button', {
+          key: 'edit',
+          title: stageNow === 'RUNNING' ? '运行中不可编辑（停止后可改并发/重试）' : '展开/收起实例编辑器（保存触发 Iter-27b 校验）',
+          disabled: stageNow === 'RUNNING',
+          onClick: () => setEditorOpen(o => !o),
+          style: {
+            border: editorOpen ? '1px solid rgba(59,130,246,0.7)' : '1px solid rgba(148,163,184,0.35)',
+            background: editorOpen ? 'rgba(59,130,246,0.15)' : 'transparent',
+            color: editorOpen ? '#60a5fa' : 'inherit',
+            borderRadius: 6, padding: '1px 9px', fontSize: 12,
+            cursor: stageNow === 'RUNNING' ? 'default' : 'pointer',
+            opacity: stageNow === 'RUNNING' ? 0.45 : 1,
+            lineHeight: '18px',
+          }
+        }, '✎ 编辑')
+      : null
+    const plusBtn = canCreate ? React.createElement('button', {
+      key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
+      style: { border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
+    }, '+ 创建') : null
+    // Iter-20(R3)：会话 UNBOUND 时提供"采用"入口（选未绑定实例并绑定本会话）
+    const adoptBtn = canCreate ? React.createElement('button', {
+      key: 'adopt', title: '采用一个未绑定实例（绑定本会话）', onClick: () => { if (activeRoot) startListPolling(); setAdoptOpen(true) }, // Iter-21：打开即刷新列表，避免采用池空/延迟;孤儿可采纳(需 S3 recoverOrphan)属 Iter-22
+      style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: '#3b82f6', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
+    }, '采用') : null
+    // Iter-29：实例管理子页签按钮（所有 workflow 会话可见：管理列表展示全量实例+归档，
+    // UNBOUND 会话也可查看/下载/删除；与 DAG 视图互斥切换）
+    const mgmtBtn = activeRoot ? React.createElement('button', {
+      key: 'mgmt',
+      title: '实例管理（活动/归档两段列表：归档、下载、删除）',
+      onClick: () => setMgmtOpen(o => !o),
+      style: {
+        border: mgmtOpen ? '1px solid rgba(167,139,250,0.7)' : '1px solid rgba(148,163,184,0.35)',
+        background: mgmtOpen ? 'rgba(167,139,250,0.15)' : 'transparent',
+        color: mgmtOpen ? '#a78bfa' : 'inherit',
+        borderRadius: 6, padding: '1px 9px', fontSize: 12,
+        cursor: 'pointer', lineHeight: '18px',
+      }
+    }, '📋 管理') : null
+    // 会话 UNBOUND → 显示 创建/采用；已绑定 → 显示状态机控制按钮（+ Iter-28 编辑入口）
+    // Iter-29：管理按钮恒在末尾（与视图状态无关）
+    const toolbar = React.createElement('div', {
+      key: 'tb', style: { display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 6, padding: '6px 12px 0' }
+    }, (canCreate ? [plusBtn, adoptBtn] : (editBtn ? controlBtns.concat([editBtn]) : controlBtns)).concat(mgmtBtn ? [mgmtBtn] : []))
+
+    const KvEditor = getKeyValueComponent()
+    const formOverlay = !formOpen ? null : React.createElement('div', {
+      style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
+      onClick: () => setFormOpen(false)
+    }, React.createElement('div', {
+      style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 460, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
+      onClick: (e) => e.stopPropagation()
+    }, createResult ? [
+      // Iter-28：创建成功结果视图（warnings / 解绑冲突清单展示）
+      React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#22c55e' } }, '✓ 创建成功（' + (createResult.instanceId || '') + '）'),
+      createResult.recoveredConflict.length > 0 ? React.createElement('div', {
+        key: 'cf', style: { border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.08)', color: '#60a5fa', borderRadius: 6, padding: '6px 9px', whiteSpace: 'pre-wrap' }
+      }, '检测到实例绑定冲突：已自动解绑 [' + createResult.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。') : null,
+      React.createElement('div', { key: 'wl', style: { fontWeight: 600 } }, createResult.warnings.length > 0 ? '⚠ 校验警告（' + createResult.warnings.length + ' 项，不阻断创建）' : '校验通过，无警告'),
+      createResult.warnings.length > 0 ? React.createElement('div', {
+        key: 'ws', style: { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b', borderRadius: 6, padding: '6px 9px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }
+      }, createResult.warnings.map((w, i) => React.createElement('div', { key: i }, '· ' + w))) : null,
+      React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end' } }, [
+        React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, '关闭'),
+      ]),
+    ] : [
+      React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
+      React.createElement('label', { key: 'l1' }, '模板 / 来源'),
+      React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
+        tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: '#1e293b', background: '#f8fafc' } }, o.label))
+      ),
+      tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
+      tplSel.indexOf('tpl:') === 0 ? React.createElement('div', { key: 'y', style: { fontSize: 11, color: '#9ca3af' } }, '创建后可在实例编辑器（表单 / 源码）中调整定义全文。') : null,
+      React.createElement('label', { key: 'l2' }, 'params（键值对；模板默认值已预填，可增删改）'),
+      React.createElement(KvEditor, { key: 'pj', entries: paramsEntries, onChange: setParamsEntries, keyPlaceholder: '参数名', valuePlaceholder: '值' }),
+      formErr ? React.createElement('div', { key: 'err', style: { color: '#f87171', whiteSpace: 'pre-wrap' } }, formErr) : null,
+      formErrItems.length > 0 ? React.createElement('div', {
+        key: 'errlist',
+        style: { border: '1px solid rgba(248,113,113,0.45)', borderRadius: 6, background: 'rgba(248,113,113,0.08)', maxHeight: 180, overflowY: 'auto', padding: '6px 10px', fontSize: 12, fontFamily: 'monospace', whiteSpace: 'pre-wrap', color: '#f87171' }
+      }, formErrItems.map((s, i) => React.createElement('div', { key: i }, '· ' + s))) : null,
+      React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
+        React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
+        React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
+      ]),
+    ]))
+
+    // Iter-20(S5)：非 workflow-orchestrator 会话 → 占位（不显示面板/控件）
+    if (!isWorkflowSession) {
+      return React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+      }, '此会话不是 Workflow 编排会话，无监控面板。')
+    }
+    // Iter-20(S5)：BROKEN → 环境异常告警（隐藏操作按钮）
+    if (wfSessionState && wfSessionState.state === 'BROKEN') {
+      return React.createElement('div', {
+        style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, height: '100%', minHeight: 420, color: '#ef4444', fontSize: 13 }
+      }, [
+        React.createElement('div', { key: 't', style: { fontWeight: 600, fontSize: 14 } }, '⚠ 环境异常，需新建 workflow 会话'),
+        React.createElement('div', { key: 'r', style: { color: '#9ca3af', fontSize: 12, textAlign: 'center', maxWidth: 420 } },
+          wfSessionState.reason ? ('原因：' + wfSessionState.reason) : '工作流工作区损坏或存在绑定冲突，无法继续使用当前实例。'),
+      ])
+    }
+    // Iter-20(S5)：DONE（归档声明本会话）→ 已归档提示（不可再启动）
+    if (wfSessionState && wfSessionState.state === 'DONE') {
+      return React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+      }, '该工作流实例已归档（完成）。如需新建请开启新的 Workflow 编排会话。')
+    }
+
+    if (!wfLoaded) {
+      return React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13 }
+      }, '...')
+    }
+
+    if (!wfRoot) {
+      return React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 420, color: '#9ca3af', fontSize: 13, flexDirection: 'column', gap: 8 }
+      }, [
+        React.createElement('span', { key: 'a' }, 'No workspace'),
+        React.createElement('span', { key: 'b', style: { fontSize: 11 } }, 'Open a workspace first')
+      ])
+    }
+
+
+    // ── Iter-20(R3)：移除常驻实例切换条；改为"采用"弹窗（可选未绑定实例并绑定本会话）──
+    const poolInstances = wfInstances.filter(it => it.sessionId == null)
+    const instBar = null // R3：不再常驻展示实例列表
+    const doAdopt = async (pid) => {
+      if (!sessionId || !activeRoot) { alert('无会话上下文，无法采用'); return }
+      try {
+        const resp = await fetch('/wf/adopt', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceRoot: activeRoot, instanceId: pid, sessionId })
+        })
+        const r = await resp.json()
+        if (!resp.ok) throw new Error((r && r.error) || ('HTTP ' + resp.status))
+        setAdoptOpen(false); wfInstanceId = ''
+        if (typeof wfListLoader === 'function') wfListLoader()
+      } catch (e) { alert('采用失败: ' + (e && e.message ? e.message : String(e))) }
+    }
+    const adoptOverlay = !adoptOpen ? null : React.createElement('div', {
+      style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
+      onClick: () => setAdoptOpen(false)
+    }, React.createElement('div', {
+      style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 10, padding: 16, width: 420, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 },
+      onClick: (e) => e.stopPropagation()
+    }, [
+      React.createElement('div', { key: 'tt', style: { fontSize: 13, fontWeight: 600 } }, '采用未绑定实例（绑定到本会话）'),
+      (poolInstances.length === 0
+        ? React.createElement('div', { key: 'e', style: { color: '#9ca3af', fontSize: 12 } }, '当前没有未绑定实例。请先「创建」一个新实例。')
+        : React.createElement('div', { key: 'lst', style: { display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' } },
+          poolInstances.map(it => React.createElement('button', {
+            key: it.instanceId, onClick: () => doAdopt(it.instanceId),
+            style: { textAlign: 'left', border: '1px solid rgba(148,163,184,0.35)', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }
+          }, it.workflowName + ' · ' + String(it.instanceId).slice(-8) + (it.poolNote ? ' · ' + it.poolNote : (it.stage ? ' · ' + it.stage : ' · 未启动')))))),
+      React.createElement('button', { key: 'c', onClick: () => setAdoptOpen(false), style: btnStyle }, '取消'),
+    ]))
+
+    // Iter-31（用户 D3 拍板）：Iter-23(A3) 停止无效提示条已移除——Stop v4 后会话 UI 停止与
+    // 面板 Stop 等效（两时序真机验证通过），提示失去存在前提；/wf/list 亦不再返回 stopHint。
+
+    // Iter-29：管理子页签组件（activeRoot 存在时可用；与 DAG 视图互斥）
+    const ManagerPanel = getManagerComponent()
+    const mgmtView = (mgmtOpen && activeRoot)
+      ? React.createElement(ManagerPanel, {
+          workspaceRoot: activeRoot,
+          onClose: () => setMgmtOpen(false),
+          onChanged: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+        })
+      : null
+
+    if (!hasData) {
+      return React.createElement('div', {
+        style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
+      },
+        toolbar,
+        formOverlay,
+      adoptOverlay,
+        mgmtView ? mgmtView : React.createElement('div', {
+          style: { display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#9ca3af', fontSize: 13, border: '1px dashed rgba(148,163,184,0.35)', borderRadius: 8, margin: 12, background: 'rgba(148,163,184,0.05)', flexDirection: 'column', gap: 6, textAlign: 'center', padding: 16 }
+        }, stateData && stateData.error ? 'Workflow Error: ' + stateData.error : (function () {
+          // Iter-33（缺陷 #3）：绑定实例 phase=CREATED（有目录无 state.json，begin 未完成）→
+          // 明示状态与出路，替代无差别的 "Waiting for workflow..." 永久等待
+          const boundCreated = (wfInstances || []).find(it => it && it.sessionId === wfSessionId && it.phase === 'CREATED')
+          if (boundCreated) {
+            return [
+              React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#e2e8f0' } }, '实例已创建未启动（CREATED）· ' + String(boundCreated.instanceId).slice(-8)),
+              React.createElement('div', { key: 'd', style: { fontSize: 12 } }, '定义尚未执行。点击「启动」开始执行；若实例异常，可通过「管理」归档清理。'),
+            ]
+          }
+          return (canCreate ? '尚未绑定工作流实例。点击「创建」新建，或「采用」绑定一个未绑定实例。' : 'Waiting for workflow...')
+        })())
+      )
+    }
+
+
+    return React.createElement('div', {
+      style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 420, fontFamily: 'inherit', fontSize: 13 }
+    },
+      toolbar,
+      // Iter-29：管理子页签打开时替换 DAG+编辑器主区（互斥切换）
+      mgmtView ? mgmtView : React.createElement(React.Fragment, { key: 'dagview' },
+        React.createElement(DagCanvas, {
+          stage: stateData.stage,
+          gateResult: stateData.gateResult || null,
+          tasks,
+          selectedId,
+          onSelect: id => setSelectedId(prev => prev === id ? null : id),
+          workflowName: stateData.workflow,
+          retries: stateData.retries || 0,
+          error: stateData.error || null,
+        }),
+        // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
+        // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
+        editorOpen && currentInstanceId && activeRoot
+          ? React.createElement(EditorPanel, {
+              workspaceRoot: activeRoot,
+              instanceId: currentInstanceId,
+              stage: stateData ? stateData.stage : '',
+              onClose: () => setEditorOpen(false),
+              onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader() },
+            })
+          : null,
+      ),
+      formOverlay,
+      adoptOverlay
+    )
+    }
+  }
+
+  const sessionGateMap = new Map() // sessionId → isWorkflowSession 判定缓存（factory 冷查兜底）
+  slots.inject('conversation.view', (scopeArg) => {
+    // scopeArg 形态运行时自适应（spike 防御）：string sessionId 或携带 sessionId/id 的对象
+    const scopeSid = typeof scopeArg === 'string'
+      ? scopeArg
+      : (scopeArg && scopeArg.sessionId != null ? String(scopeArg.sessionId)
+        : (scopeArg && scopeArg.id != null ? String(scopeArg.id) : undefined))
+    if (scopeSid !== undefined && sessionGateMap.get(scopeSid) === false) {
+      return () => {} // 已判定非编排会话：不注册 → 该会话 scope 无 Workflow 页签
+    }
+    let disposeRef = null
+    const gate = function WorkflowGate(props) {
+      const sessionId = props.sessionId
+      const workspaceHook = props.useWorkspaces
+      const useSessions = props.useSessions
+      wfSessionId = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
+      const sessionCwd = useSessions
+        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
+        : undefined
+      const parentSessionId = useSessions
+        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
+        : undefined
+      const sessionPreset = useSessions
+        ? useSessions((s) => {
+            if (sessionId === undefined || sessionId === null) return undefined
+            const entry = s.byId && s.byId[sessionId]
+            if (!entry) return undefined
+            const projected = entry.projectionValues && entry.projectionValues.agentPreset
+            return typeof projected === 'string' ? projected : entry.agentPreset
+          })
+        : undefined
+      const sessionOrigin = useSessions
+        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
+        : undefined
+      const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
+      wfSessionActive = isWorkflowSession
+      React.useEffect(() => {
+        if (sessionId !== undefined && sessionId !== null) sessionGateMap.set(String(sessionId), isWorkflowSession)
+        if (!isWorkflowSession && disposeRef) {
+          const d = disposeRef
+          disposeRef = null
+          d() // 注销 entry → 页签消失（本组件随之卸载；同 scope factory 已早退不会重注册）
+        }
+      }, [sessionId, isWorkflowSession])
+      if (!isWorkflowSession) return null
+      return React.createElement(WfComponent, { sessionId, isWorkflowSession, sessionCwd, parentSessionId, workspaceHook })
+    }
+    const dispose = slots.register(
+      { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
+      gate
+    )
+    disposeRef = dispose
+    return dispose
+  })
+ 
+}
     
     // Plugin code ends here
     
