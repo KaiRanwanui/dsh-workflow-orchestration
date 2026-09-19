@@ -1749,6 +1749,12 @@ if (!WfComponent) {
             gateResult: st.gateResult || null,
             gateNote: st.gateNote || null,
             error: st.error || null,
+            // Iter-41 补（用户反馈）：inputs/outputs/processor/gateChecker 为执行态展开后的
+            // 绝对路径（实例目录），定义值是相对模板——执行态优先，未执行回退定义值
+            processor: st.processor || dt.processor || null,
+            gateChecker: st.gateChecker || dt.gateChecker || null,
+            inputs: (st.inputs && Object.keys(st.inputs).length) ? st.inputs : dt.inputs,
+            outputs: (st.outputs && st.outputs.length) ? st.outputs : dt.outputs,
             _loopGroup: st._loopGroup, _loopItem: st._loopItem, _loopIndex: st._loopIndex,
             _loopGroupName: st._loopGroupName, _onError: st._onError,
             _concurrentGroup: st._concurrentGroup,
