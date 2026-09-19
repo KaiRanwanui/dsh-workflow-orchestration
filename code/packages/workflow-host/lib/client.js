@@ -1981,6 +1981,10 @@ if (!WfComponent) {
       } catch (e) { alert('采用失败: ' + (e && e.message ? e.message : String(e))) }
     }
     // Iter-41：节点详情卡（选中任务 → 三分区任务卡；选中组 → 成员清单卡，成员行可点击进成员详情）
+    const wfResolvePath41 = (p36) => {
+      const isAbs = typeof p36 === 'string' && (p36.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p36))
+      return isAbs ? p36 : (String(activeRoot || '').replace(/\/+$/, '') + '/' + String(p36 || '').replace(/^\.\//, ''))
+    }
     const selTask41 = selectedId ? (tasks.find(t => t.id === selectedId) || null) : null
     const selGroupMembers41 = (!selTask41 && selectedId) ? tasks.filter(t => t._loopGroup === selectedId || t._concurrentGroup === selectedId) : null
     const stColor41 = { PENDING: '#94a3b8', RUNNING: '#3b82f6', DONE: '#22c55e', FAILED: '#ef4444', SKIPPED: '#f59e0b' }
@@ -2054,7 +2058,7 @@ if (!WfComponent) {
             React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, '处理器'),
             React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, [
               React.createElement('span', { key: 'p', style: { wordBreak: 'break-all' } }, t.processor || '（无）'),
-              t.processor ? React.createElement('button', { key: 'b', onClick: () => openFileView(t.processor), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看技能') : null,
+              t.processor ? React.createElement('button', { key: 'b', onClick: () => openFileView(wfResolvePath41(t.processor)), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看技能') : null,
             ]),
           ]),
           t.gateChecker ? React.createElement('div', { key: 'gc', style: { display: 'flex', gap: 8 } }, [
@@ -2062,7 +2066,7 @@ if (!WfComponent) {
             React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, [
               React.createElement('span', { key: 'dot', style: { display: 'inline-block', width: 9, height: 9, borderRadius: 5, background: grC41, marginRight: 6 } }),
               React.createElement('span', { key: 'p', style: { wordBreak: 'break-all' } }, t.gateChecker),
-              React.createElement('button', { key: 'b', onClick: () => openFileView(t.gateChecker), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看'),
+              React.createElement('button', { key: 'b', onClick: () => openFileView(wfResolvePath41(t.gateChecker)), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看'),
             ]),
           ]) : null,
           gr41 ? React.createElement('div', { key: 'gr', style: { display: 'flex', gap: 8 } }, [
