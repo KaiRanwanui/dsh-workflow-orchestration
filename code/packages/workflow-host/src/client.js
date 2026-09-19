@@ -1317,8 +1317,10 @@ function lgAggStatus(items) {
         const agg = lgAggStatus(n.items)
         const ac = C[agg.agg] || C.PENDING
         const isConc = n.groupKind === 'conc'
+        // Iter-40 补（用户反馈）：组内含 RUNNING 迭代 → 组节点状态条同款呼吸脉冲
+        const groupPulse = agg.counts && agg.counts.RUNNING > 0 ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
         kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? '#3b82f6' : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5 }))
-        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: ac }))
+        kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: ac, style: groupPulse }))
         kids.push(React.createElement('text', { key: 'lb', x: p.x + 10, y: p.y + 17, fontSize: 11, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc((isConc ? '⚡ ' : '↻ ') + n.name + ' (' + n.items.length + ')', LGEO.gW - 40)))
         const segs = [React.createElement('rect', { key: 'pbg', x: p.x + 10, y: p.y + 30, width: p.w - 20, height: 6, rx: 3, fill: 'rgba(0,0,0,0.35)' })]
         let segX = p.x + 10
@@ -1356,7 +1358,7 @@ function lgAggStatus(items) {
             const rowName = (t._loopItem != null && t._loopItem !== '（占位）') ? t._loopItem : (t.name || t.id)
             rowEls.push(React.createElement('g', { key: 'r' + t.id, style: { cursor: 'pointer' }, onClick: e => { e.stopPropagation(); onSelect(t.id) } }, [
               React.createElement('title', { key: 'tt' }, (t.name || t.id) + '\n' + t.id + ' · ' + t.status),
-              React.createElement('circle', { key: 'd', cx: p.x + 10, cy: ry + LGEO.listRowH / 2, r: 3.5, fill: C[t.status] || C.PENDING }),
+              React.createElement('circle', { key: 'd', cx: p.x + 10, cy: ry + LGEO.listRowH / 2, r: 3.5, fill: C[t.status] || C.PENDING, style: t.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined }),
               React.createElement('text', { key: 'nm', x: p.x + 18, y: ry + 14, fontSize: 10, fill: '#cbd5e1' }, (i + 1) + '. ' + lgTrunc(rowName, LGEO.gW - 52)),
               React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#64748b' }, String(t.status)),
             ]))
@@ -1382,8 +1384,9 @@ function lgAggStatus(items) {
     React.useEffect(() => {
       const el = scrollRef.current
       if (!el) return
-      const runNode = graph.nodes.find(n => n.kind === 'task' && n.status === 'RUNNING')
-      if (!runNode) return
+      const runNode = graph.nodes.find(n =>
+        (n.kind === 'task' && n.status === 'RUNNING') ||
+        (n.kind === 'group' && n.items && n.items.some(i => i.status === 'RUNNING')))
       const pp = geo.pos.get(runNode.key)
       if (!pp) return
       if (Date.now() - lastUserScrollTs.current < 3000) return
@@ -1533,7 +1536,6 @@ if (!WfComponent) {
 
     const snap = latest
     const stateData = (snap && snap.state) ? snap.state : null
-    const hasData = stateData && stateData.workflow
 
     // ── Iter-13：面板创建（"+" + 表单；hooks 全部置于条件返回之前）────
     const [formOpen, setFormOpen] = React.useState(false)
@@ -1664,13 +1666,19 @@ if (!WfComponent) {
 
     // Iter-15：面板控制按钮（Start/Stop/Reset）
     const controlBtns = []
-    const currentStage = stateData && stateData.stage
     // Iter-20：当前实例 = 本会话绑定实例（snap 优先，其次 wfInstances 中绑本会话的实例）
     const boundInstance = wfInstances.find(it => it.sessionId === wfSessionId)
     const currentInstanceId = (snap && snap.instanceId) || (boundInstance && boundInstance.instanceId) || ''
     // Iter-42：定义源（instance.yaml）——DAG 结构层的数据源（所见即所得）。
     // 注意：必须声明在 currentInstanceId 之后（deps 引用之；此前置于 hooks 早期区引发 TDZ 崩溃）
     const [defData41, setDefData41] = React.useState(null)
+    // CREATED（无 state.json）合成最小 stateData 视图：DAG 结构来自定义任务（PENDING 态）
+    const stateDataView = stateData || (defData41 ? {
+      stage: 'CREATED', workflow: defData41.name || null, tasks: [],
+      gateResult: null, retries: 0, error: null,
+    } : null)
+    const hasData = stateDataView && stateDataView.workflow
+    const currentStage = stateDataView && stateDataView.stage
     const reloadDef41 = () => {
       if (!activeRoot || !currentInstanceId) { setDefData41(null); return }
       fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(activeRoot) + '&instanceId=' + encodeURIComponent(currentInstanceId))
@@ -1681,7 +1689,7 @@ if (!WfComponent) {
     React.useEffect(() => { reloadDef41() }, [activeRoot, currentInstanceId])
     // Iter-42（DAG 数据源重构）：结构层=instance.yaml（所见即所得），状态层=state 叠加。
     // 定义新增任务 → 未执行态即刻出现；删除任务即刻消失；state 残留任务计入「上一轮」徽标。
-    const stateTasks41 = stateData && Array.isArray(stateData.tasks) ? stateData.tasks : []
+    const stateTasks41 = stateDataView && Array.isArray(stateDataView.tasks) ? stateDataView.tasks : []
     const defTasks41 = defData41 && Array.isArray(defData41.tasks) ? defData41.tasks : null
     let tasks
     let staleCount41 = 0
@@ -1868,7 +1876,7 @@ if (!WfComponent) {
     // editorOpen state 声明在条件 return 之前的 hooks 区（见 formOpen 旁）。
     // 修正2：RUNNING 时按钮灰色禁用（运行中不可编辑，避免展开空编辑器）
     const EditorPanel = getEditorComponent()
-    const stageNow = (stateData && stateData.stage) || ''
+    const stageNow = (stateDataView && stateDataView.stage) || ''
     const editBtn = (!canCreate && hasData && currentInstanceId)
       ? React.createElement('button', {
           key: 'edit',
@@ -2172,14 +2180,14 @@ if (!WfComponent) {
         // Iter-42：「执行状态为上一轮」徽标（WfComponent 作用域，勿移入 DagCanvas——跨作用域引用）
         staleCount41 > 0 ? React.createElement('div', { key: 'stale41', style: { margin: '0 18px 6px', fontSize: 11, color: '#f59e0b', border: '1px dashed rgba(245,158,11,0.5)', borderRadius: 6, padding: '3px 8px', display: 'inline-block' } }, '⚠ 有 ' + staleCount41 + ' 个任务的执行状态属上一轮定义 · Reset 后对齐') : null,
         React.createElement(DagCanvas, {
-          stage: stateData.stage,
-          gateResult: stateData.gateResult || null,
+          stage: stateDataView.stage,
+          gateResult: stateDataView.gateResult || null,
           tasks,
           selectedId,
           onSelect: id => setSelectedId(prev => prev === id ? null : id),
-          workflowName: stateData.workflow,
-          retries: stateData.retries || 0,
-          error: stateData.error || null,
+          workflowName: (defData41 && defData41.name) || (stateDataView ? stateDataView.workflow : null),
+          retries: stateDataView.retries || 0,
+          error: stateDataView.error || null,
         }),
         // Iter-41：节点详情卡（DAG 下方；编辑器展开时让位）
         detailCardEl,
@@ -2189,7 +2197,7 @@ if (!WfComponent) {
           ? React.createElement(EditorPanel, {
               workspaceRoot: activeRoot,
               instanceId: currentInstanceId,
-              stage: stateData ? stateData.stage : '',
+              stage: stateDataView ? stateDataView.stage : '',
               onClose: () => setEditorOpen(false),
               onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader(); reloadDef41() },
             })
