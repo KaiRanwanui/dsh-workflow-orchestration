@@ -1698,12 +1698,17 @@ if (!WfComponent) {
     } : null)
     const hasData = stateDataView && stateDataView.workflow
     const currentStage = stateDataView && stateDataView.stage
+    const probe41 = (line) => {
+      try { console.log('[wf42-probe] ' + line) } catch (e0) {}
+      try { fetch('/wf/debug-probe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ line }) }) } catch (e1) {}
+    }
     const reloadDef41 = () => {
+      probe41('reloadDef41 enter root=' + String(activeRoot) + ' iid=' + String(currentInstanceId))
       if (!activeRoot || !currentInstanceId) { setDefData41(null); return }
       fetch('/wf/instance-yaml?workspaceRoot=' + encodeURIComponent(activeRoot) + '&instanceId=' + encodeURIComponent(currentInstanceId))
         .then(r41 => r41.json())
-        .then(r41 => setDefData41(r41 && !r41.error ? r41 : null))
-        .catch(() => setDefData41(null))
+        .then(r41 => { probe41('reloadDef41 done tasks=' + String(r41 && r41.tasks ? r41.tasks.length : 'null')); setDefData41(r41 && !r41.error ? r41 : null) })
+        .catch(e41 => { probe41('reloadDef41 FAIL: ' + (e41 && e41.message ? e41.message : String(e41))); setDefData41(null) })
     }
     React.useEffect(() => { reloadDef41() }, [activeRoot, currentInstanceId])
     // Iter-42（DAG 数据源重构）：结构层=instance.yaml（所见即所得），状态层=state 叠加。
@@ -1743,6 +1748,7 @@ if (!WfComponent) {
       staleCount41 = stateTasks41.filter(t => !coveredIds.has(t.id) &&
         !(t._loopGroup && coveredGroups.has(t._loopGroup)) &&
         !(t._concurrentGroup && coveredGroups.has(t._concurrentGroup))).length
+      probe41('merge defTasks=' + defTasks41.length + ' stateTasks=' + stateTasks41.length + ' merged=' + merged41.length + ' stale=' + staleCount41 + ' stage=' + String(stateDataView && stateDataView.stage) + ' hasData=' + String(!!(stateDataView && stateDataView.workflow)))
       tasks = merged41
     } else {
       tasks = stateTasks41 // 定义源不可用（加载失败/无实例）→ 退化为执行快照渲染
@@ -2218,7 +2224,7 @@ if (!WfComponent) {
               instanceId: currentInstanceId,
               stage: stateDataView ? stateDataView.stage : '',
               onClose: () => setEditorOpen(false),
-              onSaved: () => { if (typeof wfListLoader === 'function') wfListLoader(); reloadDef41() },
+              onSaved: () => { probe41('editor onSaved fired'); if (typeof wfListLoader === 'function') wfListLoader(); reloadDef41() },
             })
           : null,
       ),
