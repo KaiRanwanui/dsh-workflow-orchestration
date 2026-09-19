@@ -1452,6 +1452,16 @@ if (!WfComponent) {
       const workspaceHook = props.workspaceHook
     const [, forceUpdate] = React.useReducer(x => x + 1, 0)
     const [selectedId, setSelectedId] = React.useState(null)
+    // Iter-41：文件预览弹层（inputs/outputs/processor 点击 → /wf/skill 通道只读展示）
+    const [fileView, setFileView] = React.useState(null)
+    const openFileView = (p36) => {
+      if (!p36) return
+      setFileView({ path: p36, text: null, err: null })
+      fetch('/wf/skill?path=' + encodeURIComponent(p36))
+        .then(r36 => r36.json())
+        .then(r36 => setFileView({ path: p36, text: r36 && r36.text, err: r36 && r36.error ? r36.error : '' }))
+        .catch(e36 => setFileView({ path: p36, text: null, err: e36 && e36.message ? e36.message : String(e36) }))
+    }
 
     React.useEffect(() => {
       listeners.add(forceUpdate)
@@ -1953,6 +1963,100 @@ if (!WfComponent) {
         if (typeof wfListLoader === 'function') wfListLoader()
       } catch (e) { alert('采用失败: ' + (e && e.message ? e.message : String(e))) }
     }
+    // Iter-41：节点详情卡（选中任务 → 三分区任务卡；选中组 → 成员清单卡，成员行可点击进成员详情）
+    const selTask41 = selectedId ? (tasks.find(t => t.id === selectedId) || null) : null
+    const selGroupMembers41 = (!selTask41 && selectedId) ? tasks.filter(t => t._loopGroup === selectedId || t._concurrentGroup === selectedId) : null
+    const stColor41 = { PENDING: '#94a3b8', RUNNING: '#3b82f6', DONE: '#22c55e', FAILED: '#ef4444', SKIPPED: '#f59e0b' }
+    const detailCardEl = (function () {
+      if (!selectedId || editorOpen) return null
+      const cardStyle = { border: '1px solid rgba(148,163,184,0.25)', borderRadius: 8, padding: '10px 12px', margin: '8px 18px 0', background: 'rgba(148,163,184,0.05)', fontSize: 12 }
+      const secTitle = (txt) => React.createElement('div', { key: 'st' + txt, style: { fontSize: 10, color: '#94a3b8', margin: '6px 0 3px' } }, '── ' + txt)
+      const row = (k, v) => React.createElement('div', { key: k + Math.random(), style: { display: 'flex', gap: 8 } }, [
+        React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, k),
+        React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, v),
+      ])
+      const pathLine = (p36, key) => React.createElement('div', { key: key, style: { paddingLeft: 8 } },
+        React.createElement('span', { style: { color: '#7dd3fc', cursor: 'pointer', wordBreak: 'break-all' }, onClick: () => openFileView(p36), title: '点击预览文件' }, p36))
+      const closeBtn = React.createElement('button', { key: 'close', onClick: () => setSelectedId(null), style: { border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 14 } }, '✕')
+      // 组节点：成员清单卡
+      if (!selTask41 && selGroupMembers41 && selGroupMembers41.length) {
+        const rows = selGroupMembers41.map((t, i) => React.createElement('div', {
+          key: t.id, style: { display: 'flex', gap: 8, alignItems: 'center', padding: '3px 4px', borderRadius: 5, cursor: 'pointer' },
+          onClick: () => setSelectedId(t.id), title: '点击查看成员详情'
+        }, [
+          React.createElement('span', { key: 'i', style: { color: '#94a3b8', flex: '0 0 24px' } }, (i + 1) + '.'),
+          React.createElement('span', { key: 'd', style: { width: 9, height: 9, borderRadius: 5, background: stColor41[t.status] || '#94a3b8', flex: '0 0 9px' } }),
+          React.createElement('span', { key: 'n', style: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, (t._loopItem != null && t._loopItem !== '（占位）' ? t._loopItem + ' · ' : '') + (t.name || t.id)),
+          React.createElement('span', { key: 's', style: { color: stColor41[t.status] || '#94a3b8' } }, t.status || 'PENDING'),
+        ]))
+        return React.createElement('div', { style: cardStyle }, [
+          React.createElement('div', { key: 'h', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+            React.createElement('span', { key: 't', style: { fontWeight: 600 } }, '⚙ 组成员（' + selGroupMembers41.length + '）· ' + selectedId),
+            React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+            closeBtn,
+          ]),
+          secTitle('成员清单（点击行查看成员详情）'),
+          React.createElement.apply(null, [React.Fragment, { key: 'rows' }].concat(rows)),
+        ])
+      }
+      // 任务节点：三分区详情卡
+      if (selTask41) {
+        const t = selTask41
+        const stC41 = stColor41[t.status] || '#94a3b8'
+        const gr41 = t.gateResult
+        const grC41 = gr41 === 'PASS' ? '#22c55e' : gr41 === 'FAIL' ? '#ef4444' : '#94a3b8'
+        const iterRow = (t._loopGroupName || t._loopItem) ? row('迭代', (t._loopGroupName || '') + (t._loopItem && t._loopItem !== '（占位）' ? ' · ' + t._loopItem : '')) : null
+        return React.createElement('div', { style: cardStyle }, [
+          React.createElement('div', { key: 'h', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+            React.createElement('span', { key: 'd', style: { width: 10, height: 10, borderRadius: 5, background: stC41 } }),
+            React.createElement('span', { key: 't', style: { fontWeight: 600 } }, t.name || t.id),
+            React.createElement('span', { key: 'i', style: { color: '#94a3b8', fontSize: 11 } }, t.id),
+            React.createElement('span', { key: 's', style: { color: stC41 } }, t.status || 'PENDING'),
+            React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+            closeBtn,
+          ]),
+          secTitle('基础'),
+          iterRow,
+          row('类型', t.type || '-'),
+          row('重试', String(t.retries || 0)),
+          row('depends-on', (t.dependsOn || []).join(', ') || '（无）'),
+          secTitle('数据流（点击路径预览文件）'),
+        ].concat([
+          (t.inputs && Object.keys(t.inputs).length) ? Object.keys(t.inputs).map(k => React.createElement('div', { key: 'in' + k, style: { display: 'flex', gap: 8 } }, [
+            React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, '输入 · ' + k),
+            React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0 } }, (Array.isArray(t.inputs[k]) ? t.inputs[k] : [t.inputs[k]]).map((p36, i36) =>
+              React.createElement('span', { key: i36, style: { display: 'block' } }, pathLine(p36, i36)))),
+          ])) : [React.createElement('div', { key: 'in0', style: { color: '#64748b' } }, '输入：无')],
+          (t.outputs && t.outputs.length) ? t.outputs.map((p36, i36) => React.createElement('div', { key: 'out' + i36, style: { display: 'flex', gap: 8 } }, [
+            React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, i36 === 0 ? '输出' : ''),
+            React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0 } }, pathLine(p36, 'o' + i36)),
+          ])) : [React.createElement('div', { key: 'out0', style: { color: '#64748b' } }, '输出：无')],
+        ]).concat([
+          secTitle('处理器与门禁'),
+          React.createElement('div', { key: 'proc', style: { display: 'flex', gap: 8 } }, [
+            React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, '处理器'),
+            React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, [
+              React.createElement('span', { key: 'p', style: { wordBreak: 'break-all' } }, t.processor || '（无）'),
+              t.processor ? React.createElement('button', { key: 'b', onClick: () => openFileView(t.processor), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看技能') : null,
+            ]),
+          ]),
+          t.gateChecker ? React.createElement('div', { key: 'gc', style: { display: 'flex', gap: 8 } }, [
+            React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, '门禁'),
+            React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, [
+              React.createElement('span', { key: 'dot', style: { display: 'inline-block', width: 9, height: 9, borderRadius: 5, background: grC41, marginRight: 6 } }),
+              React.createElement('span', { key: 'p', style: { wordBreak: 'break-all' } }, t.gateChecker),
+              React.createElement('button', { key: 'b', onClick: () => openFileView(t.gateChecker), style: { border: '1px solid rgba(148,163,184,0.4)', background: 'transparent', color: '#7dd3fc', borderRadius: 5, padding: '0 8px', marginLeft: 8, cursor: 'pointer', fontSize: 11 } }, '查看'),
+            ]),
+          ]) : null,
+          gr41 ? React.createElement('div', { key: 'gr', style: { display: 'flex', gap: 8 } }, [
+            React.createElement('span', { key: 'k', style: { color: '#94a3b8', flex: '0 0 92px' } }, '门禁结论'),
+            React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, color: grC41 } }, gr41 + (t.gateNote ? ' · ' + t.gateNote : '')),
+          ]) : null,
+        ]))
+      }
+      return null
+    })()
+
     const adoptOverlay = !adoptOpen ? null : React.createElement('div', {
       style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 },
       onClick: () => setAdoptOpen(false)
@@ -2025,6 +2129,8 @@ if (!WfComponent) {
           retries: stateData.retries || 0,
           error: stateData.error || null,
         }),
+        // Iter-41：节点详情卡（DAG 下方；编辑器展开时让位）
+        detailCardEl,
         // Iter-28：折叠编辑器（DAG 下方；默认收起，✎ 编辑展开）；
         // stage=外部 2s 轮询权威值（修正3：编辑器展开期间实例启停 → 权限即时刷新）
         editorOpen && currentInstanceId && activeRoot
@@ -2038,7 +2144,27 @@ if (!WfComponent) {
           : null,
       ),
       formOverlay,
-      adoptOverlay
+      adoptOverlay,
+      // Iter-41：文件/技能只读预览弹层（/wf/skill 通道）
+      fileView ? React.createElement('div', {
+        style: { position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 },
+        onClick: () => setFileView(null),
+      }, React.createElement('div', {
+        onClick: (e) => e.stopPropagation(),
+        style: { background: 'var(--dsw-alias-bg-base, #1e293b)', color: 'var(--dsw-alias-label-primary, #e2e8f0)', borderRadius: 8, padding: 14, width: 720, maxWidth: '92vw', display: 'flex', flexDirection: 'column', gap: 8 },
+      }, [
+        React.createElement('div', { key: 'h', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
+          React.createElement('span', { key: 't', style: { fontWeight: 600, fontSize: 12 } }, '文件预览（只读）'),
+          React.createElement('span', { key: 'p', style: { fontSize: 11, color: '#9ca3af', fontFamily: 'monospace', wordBreak: 'break-all' } }, fileView.path),
+          React.createElement('span', { key: 'sp', style: { flex: 1 } }),
+          React.createElement('button', { key: 'c', onClick: () => setFileView(null), style: { border: 'none', background: 'transparent', color: '#94a3b8', cursor: 'pointer', fontSize: 14 } }, '✕'),
+        ]),
+        fileView.err
+          ? React.createElement('div', { key: 'e', style: { color: '#f87171', fontSize: 12 } }, fileView.err)
+          : React.createElement('pre', {
+              key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'rgba(21,32,51,0.55)', border: '1px solid rgba(148,163,184,0.3)', borderRadius: 6, padding: 10 },
+            }, fileView.text === null || fileView.text === undefined ? '加载中…' : String(fileView.text)),
+      ])) : null,
     )
     }
   }
