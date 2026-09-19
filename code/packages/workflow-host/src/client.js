@@ -3,6 +3,7 @@
 
 export function register(ctx) {
   const slots = ctx.get('slots')
+  const sessionsSvc = ctx.get('sessions') // Iter-39：会话订阅源（conversation 同款服务）
   if (!slots) return
 
   // ── 模块级数据层（防止 remount 闪烁）────────────────────────────
@@ -2015,6 +2016,57 @@ if (!WfComponent) {
   }
 
   const sessionGateMap = new Map() // sessionId → isWorkflowSession 判定缓存（factory 冷查兜底）
+  let disposeRef = null // 当前 entry 的 disposer（null=未注册）
+  let gateBusy = false
+  const disposeEntry = () => {
+    if (!disposeRef) return
+    const d = disposeRef
+    disposeRef = null
+    d() // markDirty 自动刷新页签
+  }
+  const registerEntry = () => {
+    if (disposeRef) return disposeRef // 幂等：已注册不重复（list slot 同 id 重注册会抛错）
+    const d = slots.register(
+      { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
+      function WorkflowGate(props) {
+        const sessionId = props.sessionId
+        const workspaceHook = props.useWorkspaces
+        const useSessions = props.useSessions
+        wfSessionId = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
+        const sessionCwd = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
+          : undefined
+        const parentSessionId = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
+          : undefined
+        const sessionPreset = useSessions
+          ? useSessions((s) => {
+              if (sessionId === undefined || sessionId === null) return undefined
+              const entry = s.byId && s.byId[sessionId]
+              if (!entry) return undefined
+              const projected = entry.projectionValues && entry.projectionValues.agentPreset
+              return typeof projected === 'string' ? projected : entry.agentPreset
+            })
+          : undefined
+        const sessionOrigin = useSessions
+          ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
+          : undefined
+        const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
+        wfSessionActive = isWorkflowSession
+        React.useEffect(() => {
+          if (sessionId !== undefined && sessionId !== null) sessionGateMap.set(String(sessionId), isWorkflowSession)
+          // 仅在「明确非编排」（preset 已加载且错误 / 子会话）时注销；加载中保持注册等待
+          const definitiveNonWf = sessionOrigin === 'subagent' ||
+            (sessionPreset !== undefined && sessionPreset !== 'workflow-orchestrator')
+          if (definitiveNonWf) disposeEntry()
+        }, [sessionId, isWorkflowSession])
+        if (!isWorkflowSession) return null
+        return React.createElement(WfComponent, { sessionId, isWorkflowSession, sessionCwd, parentSessionId, workspaceHook })
+      }
+    )
+    disposeRef = d
+    return d
+  }
   slots.inject('conversation.view', (scopeArg) => {
     // scopeArg 形态运行时自适应（spike 防御）：string sessionId 或携带 sessionId/id 的对象
     const scopeSid = typeof scopeArg === 'string'
@@ -2024,49 +2076,36 @@ if (!WfComponent) {
     if (scopeSid !== undefined && sessionGateMap.get(scopeSid) === false) {
       return () => {} // 已判定非编排会话：不注册 → 该会话 scope 无 Workflow 页签
     }
-    let disposeRef = null
-    const gate = function WorkflowGate(props) {
-      const sessionId = props.sessionId
-      const workspaceHook = props.useWorkspaces
-      const useSessions = props.useSessions
-      wfSessionId = (sessionId === undefined || sessionId === null) ? '' : String(sessionId)
-      const sessionCwd = useSessions
-        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].cwd : undefined))
-        : undefined
-      const parentSessionId = useSessions
-        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].parentSessionId : undefined))
-        : undefined
-      const sessionPreset = useSessions
-        ? useSessions((s) => {
-            if (sessionId === undefined || sessionId === null) return undefined
-            const entry = s.byId && s.byId[sessionId]
-            if (!entry) return undefined
-            const projected = entry.projectionValues && entry.projectionValues.agentPreset
-            return typeof projected === 'string' ? projected : entry.agentPreset
-          })
-        : undefined
-      const sessionOrigin = useSessions
-        ? useSessions((s) => (sessionId === undefined || sessionId === null) ? undefined : (s.byId && s.byId[sessionId] ? s.byId[sessionId].origin : undefined))
-        : undefined
-      const isWorkflowSession = sessionPreset === 'workflow-orchestrator' && sessionOrigin !== 'subagent'
-      wfSessionActive = isWorkflowSession
-      React.useEffect(() => {
-        if (sessionId !== undefined && sessionId !== null) sessionGateMap.set(String(sessionId), isWorkflowSession)
-        if (!isWorkflowSession && disposeRef) {
-          const d = disposeRef
-          disposeRef = null
-          d() // 注销 entry → 页签消失（本组件随之卸载；同 scope factory 已早退不会重注册）
-        }
-      }, [sessionId, isWorkflowSession])
-      if (!isWorkflowSession) return null
-      return React.createElement(WfComponent, { sessionId, isWorkflowSession, sessionCwd, parentSessionId, workspaceHook })
-    }
-    const dispose = slots.register(
-      { name: 'conversation.view', id: 'workflow', order: 25, label: () => 'Workflow' },
-      gate
-    )
-    disposeRef = dispose
-    return dispose
+    return registerEntry()
   })
- 
+
+  // Iter-39 修复：顶层持久订阅——哨兵自注销后失去复活感知的补偿。
+  // 会话切换/preset 投影更新时重判：编排会话确保 entry 注册；非编排确保注销。
+  if (sessionsSvc && sessionsSvc.list) {
+    const applyGate = () => {
+      if (gateBusy) return
+      gateBusy = true
+      try {
+        const snap = sessionsSvc.list.getSnapshot()
+        const sid = snap && snap.current
+        if (sid === undefined || sid === null) return
+        const entry = snap.byId ? snap.byId[sid] : undefined
+        if (!entry) return
+        const preset = entry.projectionValues && entry.projectionValues.agentPreset != null
+          ? entry.projectionValues.agentPreset
+          : entry.agentPreset
+        const origin = entry.origin
+        if (preset === undefined) return // 投影未就绪：维持现状，等下一次订阅通知
+        const isWf = preset === 'workflow-orchestrator' && origin !== 'subagent'
+        sessionGateMap.set(String(sid), isWf)
+        if (isWf) registerEntry()
+        else disposeEntry()
+      } catch (e36) { /* 判定失败维持现状 */ }
+      finally { gateBusy = false }
+    }
+    try {
+      sessionsSvc.list.subscribe(() => { try { applyGate() } catch (e37) {} })
+    } catch (e38) { /* 订阅不可用则退化为 Gate 渲染路径 */ }
+    try { applyGate() } catch (e39) {}
+  }
 }
