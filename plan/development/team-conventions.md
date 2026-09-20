@@ -46,3 +46,25 @@ PoC（Proof of Concept）代码验证了技术可行性，但正式版应比 PoC
 **不做**：直接按"看起来合理"就开写，尤其当设计存在多个可选项（如状态机、命名、边界/异常处理）时，必须先让用户拍板。
 
 **理由**：本项目的绑定模型 / 运行状态机 / 归档命名等设计在开发前经历多轮逐条确认，避免了返工与联调成本；先确认设计可显著降低返工率。
+
+## 防静默失败军规（阶段 4 事故复盘固化，2026-09-20）
+
+背景：阶段 4 验收期出现 7 类静默失败（文本替换 no-op、脚本中途失败整批丢失、sed 基准错位 7 轮断链、pnpm store 缓存旧 tgz、SVG attribute var() 黑框、merge 语义覆盖、apply 期未定义引用）。共性 = 操作无断言 + 门禁无语义。
+
+### 编码期
+1. **一切文本替换必须断言命中 + 逐项写盘**——禁止无断言 replace/裸 sed；批量脚本每项独立 write（单项失败不丢整批）。
+2. **SVG presentation attribute（fill/stroke 等以属性形式出现时）禁用 var()/CSS 函数**——解析失败静默回退黑/默认色；SVG 主题化只能走 style 覆盖或 class。判别：`createElement('rect', { fill: ... })` 是 attribute（禁 var）；`style: { fill: ... }` 是 CSS（允 var）。
+3. **新引用与定义同脚本成对断言**（引入 T.xxx 引用的同时断言 `const T` 存在）。
+
+### 自测门（提交前必跑，全绿才可交付）
+```
+node code/packages/workflow-host/scripts/render-smoke.mjs    # 深渲染语义冒烟
+node code/packages/workflow-host/scripts/verify-deploy.mjs   # 部署产物核验（部署后跑）
+```
+- render-smoke：apply 冒烟 + 深渲染（workspace→defData→深主体全链）+ 语义断言（按钮文案/任务名/状态叠加/脉冲样式/起终点）+ 无 RUNNING 场景 + 非编排门控。**覆盖 stub 局限**：defData 回填依赖真实 React deps 重跑，已注明；渲染路径无崩溃是其核心价值。
+- verify-deploy：部署版本==repo 版本 + 功能标记清单 + 诊断残留清零 + bundle 可求值。
+
+### 部署期
+1. 版本唯一事实源 = repo package.json；manifest 用 python 正则从其**派生**（禁止手写版本号 sed）。
+2. 安装一律 **tar 直解**（pnpm 对 file: tgz 的 store 键不含内容，--force 也不可靠）。
+3. 部署后必跑 verify-deploy.mjs；任一标记缺失即中止交付。

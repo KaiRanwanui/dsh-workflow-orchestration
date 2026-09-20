@@ -23,6 +23,7 @@
 | 事故 | 根因 | 固化 |
 |---|---|---|
 | T 常量静默丢失 → apply 白屏（v0.26.44） | 多锚点 replace 无断言，锚点漂移静默 no-op | verify-client-bundle 增 **apply 冒烟门**（stub ctx 实际执行 apply）；替换必须断言命中 |
+| 渲染/部署无语义门 | 新增 **scripts/render-smoke.mjs**（深渲染语义冒烟）与 **scripts/verify-deploy.mjs**（部署产物核验）两道常驻门禁，提交/部署前必跑 |
 | 多锚点脚本中途断言失败整批丢失（v0.26.46 颜色修复误报完成） | 脚本写盘集中在末尾，中途失败全丢 | **逐项写盘**（每替换独立 write）；逐标记核验源码+部署产物 |
 | 部署断链 7 轮未察觉（v0.26.35~41） | ① sed 基准手写错位静默不命中；② pnpm 对 file: tgz 的 store 缓存键不含内容 | manifest 改 **python 正则从 repo 版本派生**；安装改 **tar 直解**（绕过 pnpm store）；部署后 python 逐标记核验产物 |
 | 诊断探针残留 | 验收期诊断版多次重建 | 收尾清理动作进收尾清单（本阶段已清零） |
