@@ -708,16 +708,6 @@ function registerWebRoutes(ctx, registry) {
       // Iter-38（用户拍板）：/wf/instance-params 路由退役——params 单轨化后由
       // /wf/instance-yaml patch.params 承载（见 applyInstancePatch params 分支）。
 
-      // Iter-42 临时诊断：客户端探针回传（写服务日志；诊断结束即删）
-      if (req.method === 'POST' && pathname === '/wf/debug-probe') {
-        let b41 = ''
-        req.on('data', (c) => { b41 += c })
-        req.on('end', () => {
-          try { console.log('[wf42-probe] ' + String(b41).slice(0, 400)) } catch (e41) {}
-          writeJson(res, 200, { ok: true })
-        })
-        return
-      }
 
 
       // Iter-28：编辑保存（同一闸门；通过才写回 instance.yaml）
