@@ -415,7 +415,7 @@ export function register(ctx) {
               title: warn ? '失效引用（任务已不存在），点击移除' : (on ? '点击移除依赖' : '点击添加依赖'),
               onClick: () => { if (warn && on) toggleDep(id); else if (!warn) toggleDep(id) },
               style: Object.assign({}, btnStyle2, { fontSize: 11, padding: '2px 8px', borderRadius: 10 },
-                on ? { background: T.brand, color: '#fff', border: 'none' } : { opacity: warn ? 0.55 : 1 },
+                on ? { background: '#3b82f6', color: '#fff', border: 'none' } : { opacity: warn ? 0.55 : 1 },
                 warn ? { color: warn && on ? '#fff' : '#d97706', borderColor: 'rgba(217,119,6,0.6)' } : null),
             }, (warn ? '⚠ ' : '') + id)
           }
@@ -449,14 +449,14 @@ export function register(ctx) {
             [['retry', 'retry（重执行）'], ['block', 'block（阻断）'], ['skip', 'skip（跳过）']], '未设置'),
           React.createElement('span', { style: { color: T.textTertiary, fontSize: 11 } }, '门禁 FAIL 处置策略'),
         ]) : null,
-        React.createElement('div', { key: 'r', style: rowStyle }, [
-          React.createElement('span', { key: 'l', style: labelStyle }, 'retries'),
+        getF('gateOnFailure', selTask.gateOnFailure) === 'retry' ? React.createElement('div', { key: 'r', style: rowStyle }, [
+          React.createElement('span', { key: 'l', style: labelStyle }, 'max-retries'),
           React.createElement('input', {
             key: 'in', type: 'number', min: 0, disabled: dis(editable.runtime),
             value: getF('retries', selTask.retries) === null || getF('retries', selTask.retries) === undefined ? 0 : getF('retries', selTask.retries),
             onChange: (e) => setF('retries', e.target.value === '' ? 0 : Number(e.target.value)), style: Object.assign({}, inputStyle, { width: 90 }) }),
           React.createElement('span', { style: { color: T.textTertiary, fontSize: 11 } }, '门禁失败重试次数（仅 on-failure: retry 时生效）'),
-        ]),
+        ]) : null,
         React.createElement('div', { key: 'i', style: rowStyle }, [
           React.createElement('span', { key: 'l', style: labelStyle }, 'inputs'),
           React.createElement('div', { key: 'v', style: { flex: 1, minWidth: 0 } },
@@ -608,7 +608,7 @@ export function register(ctx) {
             React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: (!dirty && !paramsDirty) || busy, style: Object.assign({}, btnStyle2, { opacity: (!dirty && !paramsDirty) || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
             React.createElement('button', {
               key: 's', onClick: () => doAction(true), disabled: (!dirty && !paramsDirty) || busy || editable.readonlyAll,
-              style: Object.assign({}, btnStyle2, { background: T.brand, color: '#fff', border: 'none', opacity: (!dirty && !paramsDirty) || busy || editable.readonlyAll ? 0.5 : 1 })
+              style: Object.assign({}, btnStyle2, ((!dirty && !paramsDirty) || busy || editable.readonlyAll) ? { background: 'rgba(59,130,246,0.3)', color: '#94a3b8', border: 'none' } : { background: '#3b82f6', color: '#fff', border: 'none' })
             }, busy ? '处理中…' : '保存（校验通过才落盘）'),
           ]),
         ],
@@ -1378,7 +1378,7 @@ function lgAggStatus(items) {
               React.createElement('title', { key: 'tt' }, (t.name || t.id) + '\n' + t.id + ' · ' + t.status),
               React.createElement('circle', { key: 'd', cx: p.x + 10, cy: ry + LGEO.listRowH / 2, r: 3.5, fill: C[t.status] || C.PENDING, style: t.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined }),
               React.createElement('text', { key: 'nm', x: p.x + 18, y: ry + 14, fontSize: 10, fill: '#cbd5e1', style: { fill: 'var(--dsw-alias-label-secondary, #cbd5e1)' } }, (i + 1) + '. ' + lgTrunc(rowName, LGEO.gW - 52)),
-              React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#64748b', style: { fill: 'var(--dsw-alias-label-dimmed, #64748b)' } }, String(t.status)),
+              React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#94a3b8', style: { fill: 'var(--dsw-alias-label-secondary, #94a3b8)' } }, String(t.status)),
             ]))
           })
           kids.push(rowEls)
@@ -1996,7 +1996,7 @@ if (!WfComponent) {
       }, formErrItems.map((s, i) => React.createElement('div', { key: i }, '· ' + s))) : null,
       React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } }, [
         React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: btnStyle }, '取消'),
-        React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, { background: T.brand, color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
+        React.createElement('button', { key: 'o', onClick: submitCreate, disabled: busy, style: Object.assign({}, btnStyle, busy ? { background: 'rgba(59,130,246,0.3)', color: '#94a3b8', border: 'none' } : { background: '#3b82f6', color: '#fff', border: 'none' }) }, busy ? '创建中…' : '创建'),
       ]),
     ]))
 

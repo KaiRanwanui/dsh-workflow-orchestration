@@ -2469,10 +2469,10 @@ async function runCase25() {
   check('edit patch: gateChecker 替换 + retries 落 gate', rawPatched.tasks[0]['quality-gate'].checker === 'skills/g/SKILL.md' && rawPatched.tasks[0]['quality-gate']['max-retries'] === 2, JSON.stringify(rawPatched.tasks[0]['quality-gate']))
   check('edit patch: 实例级/任务级 max-concurrency 落值', rawPatched['max-concurrency'] === 5 && rawPatched.tasks[1]['max-concurrency'] === 4)
 
-  // gateChecker 空串 → 删 checker（gate 壳保留）；无 gate 壳设置 → 创建壳
+  // gateChecker 空串 → 整段删除 quality-gate（P2：壳残留会被校验判「门禁必须补全」）；无 gate 壳设置 → 创建壳
   const rawGc = parseYaml(WF25)
   applyInstancePatch(rawGc, { tasks: { a: { gateChecker: '' } } }, pDef)
-  check('edit patch: gateChecker 空串删 checker 保留壳', rawGc.tasks[0]['quality-gate'].checker === undefined && rawGc.tasks[0]['quality-gate']['on-failure'] === 'retry', JSON.stringify(rawGc.tasks[0]['quality-gate']))
+  check('edit patch: gateChecker 空串整段删除 quality-gate', rawGc.tasks[0]['quality-gate'] === undefined, JSON.stringify(rawGc.tasks[0]))
   const rawGc2 = parseYaml(WF25)
   applyInstancePatch(rawGc2, { tasks: { grp: { gateChecker: 'skills/newc/SKILL.md' } } }, pDef)
   check('edit patch: 无 gate 壳设置 checker 创建壳(block)', rawGc2.tasks[1]['quality-gate'].checker === 'skills/newc/SKILL.md' && rawGc2.tasks[1]['quality-gate']['on-failure'] === 'block', JSON.stringify(rawGc2.tasks[1]['quality-gate']))

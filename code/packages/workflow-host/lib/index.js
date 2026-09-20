@@ -1254,9 +1254,8 @@ function applyInstancePatch(raw, patch, perms) {
       else {
         const v = String(ch.gateChecker == null ? '' : ch.gateChecker).trim()
         if (v === '') {
-          // 清空 → 删 checker 行；gate 壳连同 on-failure 保留
-          const g = t['quality-gate']
-          if (g && typeof g === 'object' && !Array.isArray(g)) delete g.checker
+          // 清空 → 整段删除 quality-gate（壳残留会被校验判「门禁必须补全」，P2 修复）
+          delete t['quality-gate']
         } else {
           weEnsureGate(t).checker = v
         }
