@@ -1327,7 +1327,7 @@ function lgAggStatus(items) {
           kids.push(React.createElement('circle', { key: 'gate', cx: p.x + LGEO.gW - 10, cy: p.y + 10, r: 3.5, fill: gc }))
         }
       } else if (n.kind === 'placeholder') {
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(245,158,11,0.10)', stroke: '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3' }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(245,158,11,0.10)', stroke: isSel ? T.brand : '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3' }))
         kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#f59e0b' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
         kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#f59e0b', opacity: 0.85 }, '等待 items：' + (n.items[0]._pendingItems || '')))
       } else {
