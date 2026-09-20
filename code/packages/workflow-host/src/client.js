@@ -359,9 +359,9 @@ export function register(ctx) {
         return { ok: !bad, bad, params: out }
       }
 
-      const stageColor = { CREATED: T.textTertiary, PENDING: T.textTertiary, RUNNING: T.brand, STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
+      const stageColor = { CREATED: T.textTertiary, PENDING: T.textTertiary, RUNNING: T.brand, STOPPED: '#d97706', COMPLETED: '#16a34a', FAILED: '#ef4444' }
       const typeLabel = { 'llm-task': 'LLM', 'loop': '↻ loop', 'concurrent': '⚡ conc', 'human-decision': '人审', 'external-agent': '外部' }
-      const stC = { PENDING: T.textTertiary, RUNNING: T.brand, DONE: '#22c55e', FAILED: '#ef4444', SKIPPED: '#f59e0b' }
+      const stC = { PENDING: T.textTertiary, RUNNING: T.brand, DONE: '#16a34a', FAILED: '#ef4444', SKIPPED: '#d97706' }
 
       const taskListEl = React.createElement('div', {
         style: { flex: '0 0 180px', borderRight: '1px solid ' + T.borderMid + '', overflowY: 'auto', maxHeight: 230, display: 'flex', flexDirection: 'column', gap: 2, paddingRight: 4 }
@@ -416,7 +416,7 @@ export function register(ctx) {
               onClick: () => { if (warn && on) toggleDep(id); else if (!warn) toggleDep(id) },
               style: Object.assign({}, btnStyle2, { fontSize: 11, padding: '2px 8px', borderRadius: 10 },
                 on ? { background: T.brand, color: '#fff', border: 'none' } : { opacity: warn ? 0.55 : 1 },
-                warn ? { color: warn && on ? '#fff' : '#f59e0b', borderColor: 'rgba(245,158,11,0.6)' } : null),
+                warn ? { color: warn && on ? '#fff' : '#d97706', borderColor: 'rgba(217,119,6,0.6)' } : null),
             }, (warn ? '⚠ ' : '') + id)
           }
           return React.createElement('div', { key: 'dep', style: rowStyle }, [
@@ -522,7 +522,7 @@ export function register(ctx) {
 
       const valResEl = !valRes ? null : (
         valRes.ok
-          ? React.createElement('div', { key: 'vok', style: { border: '1px solid rgba(34,197,94,0.45)', background: 'rgba(34,197,94,0.08)', color: '#22c55e', borderRadius: 6, padding: '6px 9px', fontSize: 12 } },
+          ? React.createElement('div', { key: 'vok', style: { border: '1px solid rgba(22,163,74,0.45)', background: 'rgba(22,163,74,0.08)', color: '#16a34a', borderRadius: 6, padding: '6px 9px', fontSize: 12 } },
               (valRes.kind === 'save' ? '✓ 定义已保存（对执行定义/DAG 的生效需 Reset 或重新 begin）' + (valRes.savedNote || '') : '✓ 校验通过') + (valRes.warnings && valRes.warnings.length ? ('；' + valRes.warnings.length + ' 项警告（不阻断）：' + valRes.warnings.join('；')) : '，无警告'))
           : React.createElement('div', { key: 'verr', style: { border: '1px solid rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.08)', color: '#f87171', borderRadius: 6, padding: '6px 9px', fontSize: 12, display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 140, overflowY: 'auto' } }, [
               React.createElement('div', { key: 't', style: { fontWeight: 600 } }, '✗ ' + (valRes.kind === 'save' ? '保存被拦（校验未通过，未落盘）' : '校验未通过')),
@@ -537,7 +537,7 @@ export function register(ctx) {
         React.createElement('div', { key: 'hd', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
           React.createElement('span', { key: 't', style: { fontWeight: 600, fontSize: 13 } }, '✎ 实例编辑'),
           React.createElement('span', { key: 's', style: { fontSize: 11, color: stageColor[editable.stage] || T.textTertiary, border: '1px solid ' + (stageColor[editable.stage] || T.textTertiary) + '66', borderRadius: 5, padding: '0 6px' } }, editable.stage || '…'),
-          editable.readonlyAll ? React.createElement('span', { key: 'ro', style: { color: '#f59e0b', fontSize: 11 } }, '运行中不可编辑（停止后可改并发/重试；定义字段仅 CREATED 可改）') : null,
+          editable.readonlyAll ? React.createElement('span', { key: 'ro', style: { color: '#d97706', fontSize: 11 } }, '运行中不可编辑（停止后可改并发/重试；定义字段仅 CREATED 可改）') : null,
           !editable.definition && !editable.readonlyAll ? React.createElement('span', { key: 'pd', style: { color: T.textTertiary, fontSize: 11 } }, '已启动：processor/gateChecker/inputs/outputs 只读（重定义请 reset 后经编辑器或重新 create）') : null,
           React.createElement('span', { key: 'sp', style: { flex: 1 } }),
           // Iter-35：表单/源码两态切换（未保存改动切换弹确认，防误丢）
@@ -569,7 +569,7 @@ export function register(ctx) {
               style: { flex: 1, minHeight: 380, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre', overflow: 'auto', border: '1px solid ' + T.borderStrong + '', borderRadius: 6, padding: 8, background: 'var(--dsw-alias-markdown-code-block, rgba(21,32,51,0.55))', color: 'var(--dsw-alias-label-primary, #e2e8f0)', boxSizing: 'border-box' },
             }),
             React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
-              (srcText !== ((data && data.text) || '')) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '源码有未保存修改') : null,
+              (srcText !== ((data && data.text) || '')) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#d97706', fontSize: 11 } }, '源码有未保存修改') : null,
               React.createElement('button', {
                 key: 's', onClick: doSaveSrc, disabled: busy || editable.readonlyAll || srcText === ((data && data.text) || ''),
                 style: Object.assign({}, btnStyle2, { background: T.brand, color: '#fff', border: 'none', opacity: busy || editable.readonlyAll || srcText === ((data && data.text) || '') ? 0.5 : 1 }),
@@ -604,7 +604,7 @@ export function register(ctx) {
           React.createElement('div', { key: 'cols', style: { display: 'flex', gap: 10 } }, [taskListEl, taskFormEl]),
           valResEl,
           React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
-            (dirty || paramsDirty) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '有未保存修改') : null,
+            (dirty || paramsDirty) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#d97706', fontSize: 11 } }, '有未保存修改') : null,
             React.createElement('button', { key: 'v', onClick: () => doAction(false), disabled: (!dirty && !paramsDirty) || busy, style: Object.assign({}, btnStyle2, { opacity: (!dirty && !paramsDirty) || busy ? 0.5 : 1 }) }, busy ? '处理中…' : '仅校验'),
             React.createElement('button', {
               key: 's', onClick: () => doAction(true), disabled: (!dirty && !paramsDirty) || busy || editable.readonlyAll,
@@ -668,7 +668,7 @@ export function register(ctx) {
 
       React.useEffect(() => { load() }, [load])
 
-      const stageColor = { CREATED: T.textTertiary, PENDING: T.textTertiary, RUNNING: T.brand, STOPPED: '#f59e0b', COMPLETED: '#22c55e', FAILED: '#ef4444' }
+      const stageColor = { CREATED: T.textTertiary, PENDING: T.textTertiary, RUNNING: T.brand, STOPPED: '#d97706', COMPLETED: '#16a34a', FAILED: '#ef4444' }
       const fmtBytes = (n) => (n == null ? '—' : n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : (n / 1048576).toFixed(1) + ' MB')
       const fmtTime = (iso) => (iso ? String(iso).replace('T', ' ').slice(0, 16) : '—')
       const archivable = (st) => st === 'STOPPED' || st === 'COMPLETED' || st === 'FAILED'
@@ -797,9 +797,9 @@ export function register(ctx) {
           key: 'msg',
           style: {
             fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 6, padding: '6px 9px',
-            border: '1px solid ' + (msg.kind === 'ok' ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)'),
-            background: msg.kind === 'ok' ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
-            color: msg.kind === 'ok' ? '#22c55e' : '#f87171',
+            border: '1px solid ' + (msg.kind === 'ok' ? 'rgba(22,163,74,0.45)' : 'rgba(239,68,68,0.45)'),
+            background: msg.kind === 'ok' ? 'rgba(22,163,74,0.08)' : 'rgba(239,68,68,0.08)',
+            color: msg.kind === 'ok' ? '#16a34a' : '#f87171',
           },
         }, msg.text) : null,
         React.createElement('div', { key: 'active', style: { display: 'flex', flexDirection: 'column' } },
@@ -899,9 +899,9 @@ export function register(ctx) {
   const C = {
     PENDING: T.textTertiary,
     RUNNING: T.brand,
-    DONE: '#22c55e',
+    DONE: '#16a34a',
     FAILED: '#ef4444',
-    SKIPPED: '#f59e0b'
+    SKIPPED: '#d97706'
   }
 
 
@@ -1323,13 +1323,13 @@ function lgAggStatus(items) {
         // Iter-40（U1 修复）：门禁角点条件接快照稳定字段 gateChecker（原 n.task.gate
         // 在 client 数据模型中不存在 → 角点从未渲染）；色值随 gateResult 全程可见
         if (n.task.gateChecker) {
-          const gc = n.task.gateResult === 'PASS' ? '#22c55e' : n.task.gateResult === 'FAIL' ? '#ef4444' : '#64748b'
+          const gc = n.task.gateResult === 'PASS' ? '#16a34a' : n.task.gateResult === 'FAIL' ? '#ef4444' : '#64748b'
           kids.push(React.createElement('circle', { key: 'gate', cx: p.x + LGEO.gW - 10, cy: p.y + 10, r: 3.5, fill: gc }))
         }
       } else if (n.kind === 'placeholder') {
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(245,158,11,0.10)', stroke: isSel ? T.brand : '#f59e0b', strokeWidth: 2, strokeDasharray: '6,3' }))
-        kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#f59e0b' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
-        kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#f59e0b', opacity: 0.85 }, '等待 items：' + (n.items[0]._pendingItems || '')))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(217,119,6,0.10)', stroke: isSel ? T.brand : '#d97706', strokeWidth: 2, strokeDasharray: '6,3' }))
+        kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#d97706' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
+        kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#d97706', opacity: 0.85 }, '等待 items：' + (n.items[0]._pendingItems || '')))
       } else {
         const agg = lgAggStatus(n.items)
         const ac = C[agg.agg] || C.PENDING
@@ -1393,7 +1393,7 @@ function lgAggStatus(items) {
     paths.forEach(p => svgKids.push(React.createElement('path', { key: p.id, d: p.d, fill: 'none', stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#wfdag-arrow)', opacity: 0.85, style: { stroke: 'var(--dsw-alias-label-secondary, #94a3b8)' } })))
     const sp = geo.pos.get('__wf_start__'), ep = geo.pos.get('__wf_end__')
     if (sp) svgKids.push(React.createElement('circle', { key: 'cap-s', cx: sp.x + 10, cy: sp.cy, r: 10, fill: '#475569' }, React.createElement('title', null, '开始')))
-    if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: '#475569', stroke: '#475569', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
+    if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: 'none', stroke: '#475569', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
     graph.nodes.forEach(n => svgKids.push(nodeEls(n)))
 
     // Iter-40 修订（用户反馈）：RUNNING 节点在视口外即持续自动居中（状态轮询随渲染校正）；
@@ -1434,7 +1434,7 @@ function lgAggStatus(items) {
           (stage || '-') + ' ' + (stage === 'PENDING' ? 'Pd' : stage === 'RUNNING' ? 'Rn' : stage === 'COMPLETED' ? 'Cp' : stage === 'STOPPED' ? 'St' : 'Fl'))),
         React.createElement('span', { key: 'pb', style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, [
           React.createElement('span', { key: 'bar', style: { width: 110, height: 6, borderRadius: 3, background: 'rgba(148,163,184,0.25)', overflow: 'hidden', display: 'inline-block' } },
-            React.createElement('span', { style: { display: 'block', height: '100%', width: pct + '%', background: '#22c55e' } })),
+            React.createElement('span', { style: { display: 'block', height: '100%', width: pct + '%', background: '#16a34a' } })),
           '✓' + doneN + '/' + flat.length,
         ]),
         React.createElement('span', { key: 'g' }, 'G: ', gateResult
@@ -1815,7 +1815,7 @@ if (!WfComponent) {
               alert('启动失败: ' + e.message)
             }
           },
-          style: { border: '1px solid rgba(34,197,94,0.5)', background: 'rgba(34,197,94,0.1)', color: '#22c55e', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+          style: { border: '1px solid rgba(22,163,74,0.5)', background: 'rgba(22,163,74,0.1)', color: '#16a34a', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
         }, '▶ Start'))
       }
     }
@@ -1907,7 +1907,7 @@ if (!WfComponent) {
             alert('重置失败: ' + e.message)
           }
         },
-        style: { border: '1px solid rgba(245,158,11,0.5)', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
+        style: { border: '1px solid rgba(217,119,6,0.5)', background: 'rgba(217,119,6,0.1)', color: '#d97706', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
       }, '↻ Reset'))
     }
 
@@ -1973,13 +1973,13 @@ if (!WfComponent) {
       onClick: (e) => e.stopPropagation()
     }, createResult ? [
       // Iter-28：创建成功结果视图（warnings / 解绑冲突清单展示）
-      React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#22c55e' } }, '✓ 创建成功（' + (createResult.instanceId || '') + '）'),
+      React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600, color: '#16a34a' } }, '✓ 创建成功（' + (createResult.instanceId || '') + '）'),
       createResult.recoveredConflict.length > 0 ? React.createElement('div', {
         key: 'cf', style: { border: '1px solid rgba(59,130,246,0.45)', background: 'rgba(59,130,246,0.08)', color: T.link, borderRadius: 6, padding: '6px 9px', whiteSpace: 'pre-wrap' }
       }, '检测到实例绑定冲突：已自动解绑 [' + createResult.recoveredConflict.join(', ') + '] 回未绑定池；当前实例已绑定本会话。') : null,
       React.createElement('div', { key: 'wl', style: { fontWeight: 600 } }, createResult.warnings.length > 0 ? '⚠ 校验警告（' + createResult.warnings.length + ' 项，不阻断创建）' : '校验通过，无警告'),
       createResult.warnings.length > 0 ? React.createElement('div', {
-        key: 'ws', style: { border: '1px solid rgba(245,158,11,0.45)', background: 'rgba(245,158,11,0.08)', color: '#f59e0b', borderRadius: 6, padding: '6px 9px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }
+        key: 'ws', style: { border: '1px solid rgba(217,119,6,0.45)', background: 'rgba(217,119,6,0.08)', color: '#d97706', borderRadius: 6, padding: '6px 9px', display: 'flex', flexDirection: 'column', gap: 3, maxHeight: 180, overflowY: 'auto' }
       }, createResult.warnings.map((w, i) => React.createElement('div', { key: i }, '· ' + w))) : null,
       React.createElement('div', { key: 'btns', style: { display: 'flex', justifyContent: 'flex-end' } }, [
         React.createElement('button', { key: 'c', onClick: () => setFormOpen(false), style: Object.assign({}, btnStyle, { background: T.brand, color: '#fff', border: 'none' }) }, '关闭'),
@@ -2065,7 +2065,7 @@ if (!WfComponent) {
     // 客户端不再预拼接（预拼接产生的绝对路径会让服务端跳过链解析，.dsh 回退失效）
     const selTask41 = selectedId ? (tasks.find(t => t.id === selectedId) || null) : null
     const selGroupMembers41 = (!selTask41 && selectedId) ? tasks.filter(t => t._loopGroup === selectedId || t._concurrentGroup === selectedId) : null
-    const stColor41 = { PENDING: T.textSecondary, RUNNING: T.brand, DONE: '#22c55e', FAILED: '#ef4444', SKIPPED: '#f59e0b' }
+    const stColor41 = { PENDING: T.textSecondary, RUNNING: T.brand, DONE: '#16a34a', FAILED: '#ef4444', SKIPPED: '#d97706' }
     const detailCardEl = (function () {
       if (!selectedId || editorOpen) return null
       const cardStyle = { border: '1px solid ' + T.borderMid + '', borderRadius: 8, padding: '10px 12px', margin: '8px 18px 0', background: 'rgba(148,163,184,0.05)', fontSize: 12 }
@@ -2103,7 +2103,7 @@ if (!WfComponent) {
         const t = selTask41
         const stC41 = stColor41[t.status] || T.textSecondary
         const gr41 = t.gateResult
-        const grC41 = gr41 === 'PASS' ? '#22c55e' : gr41 === 'FAIL' ? '#ef4444' : T.textSecondary
+        const grC41 = gr41 === 'PASS' ? '#16a34a' : gr41 === 'FAIL' ? '#ef4444' : T.textSecondary
         const iterRow = (t._loopGroupName || t._loopItem) ? row('迭代', (t._loopGroupName || '') + (t._loopItem && t._loopItem !== '（占位）' ? ' · ' + t._loopItem : '')) : null
         return React.createElement('div', { style: cardStyle }, [
           React.createElement('div', { key: 'h', style: { display: 'flex', alignItems: 'center', gap: 8 } }, [
@@ -2219,7 +2219,7 @@ if (!WfComponent) {
       // Iter-29：管理子页签打开时替换 DAG+编辑器主区（互斥切换）
       mgmtView ? mgmtView : React.createElement(React.Fragment, { key: 'dagview' },
         // Iter-42：「执行状态为上一轮」徽标（WfComponent 作用域，勿移入 DagCanvas——跨作用域引用）
-        staleCount41 > 0 ? React.createElement('div', { key: 'stale41', style: { margin: '0 18px 6px', fontSize: 11, color: '#f59e0b', border: '1px dashed rgba(245,158,11,0.5)', borderRadius: 6, padding: '3px 8px', display: 'inline-block' } }, '⚠ 有 ' + staleCount41 + ' 个任务的执行状态属上一轮定义 · Reset 后对齐') : null,
+        staleCount41 > 0 ? React.createElement('div', { key: 'stale41', style: { margin: '0 18px 6px', fontSize: 11, color: '#d97706', border: '1px dashed rgba(217,119,6,0.5)', borderRadius: 6, padding: '3px 8px', display: 'inline-block' } }, '⚠ 有 ' + staleCount41 + ' 个任务的执行状态属上一轮定义 · Reset 后对齐') : null,
         React.createElement(DagCanvas, {
           stage: stateDataView.stage,
           gateResult: stateDataView.gateResult || null,
