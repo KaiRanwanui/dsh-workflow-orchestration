@@ -4,6 +4,23 @@
 export function register(ctx) {
   const slots = ctx.get('slots')
   const sessionsSvcGet = () => { try { return ctx.get('sessions') } catch (eS) { return undefined } } // Iter-39：惰性获取（启动时序竞态防御）
+  // Iter-43：主题 token（DSW 皮肤 CSS 变量 + 原色 fallback）——换肤随动，异常环境不劣化。
+  // 教训：此定义曾静默丢失（锚点漂移 replace 无断言）致 apply 期 "T is not defined" 白屏
+  const T = {
+    textPrimary: 'var(--dsw-alias-label-primary, #e2e8f0)',
+    textSecondary: 'var(--dsw-alias-label-secondary, #94a3b8)',
+    textTertiary: 'var(--dsw-alias-label-tertiary, #9ca3af)',
+    textDimmed: 'var(--dsw-alias-label-dimmed, #64748b)',
+    textCaption: 'var(--dsw-alias-label-caption, #cbd5e1)',
+    bgBase: 'var(--dsw-alias-bg-base, #1e293b)',
+    bgLayer: 'var(--dsw-alias-bg-layer-1, #16203a)',
+    bgMask: 'var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.45))',
+    borderStrong: 'var(--dsw-alias-border-l1, rgba(148, 163, 184, 0.5))',
+    borderMid: 'var(--dsw-alias-border-l2, rgba(148, 163, 184, 0.3))',
+    borderTint: 'var(--dsw-alias-interactive-bg-hover, rgba(148, 163, 184, 0.15))',
+    brand: 'var(--dsw-alias-brand-primary, #3b82f6)',
+    link: 'var(--dsw-alias-link, #7dd3fc)',
+  }
   if (!slots) return
 
   // ── 模块级数据层（防止 remount 闪烁）────────────────────────────
