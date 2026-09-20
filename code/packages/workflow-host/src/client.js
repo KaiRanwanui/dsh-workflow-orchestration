@@ -1328,7 +1328,7 @@ function lgAggStatus(items) {
         }
       } else if (n.kind === 'placeholder') {
         kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(217,119,6,0.10)', stroke: isSel ? T.brand : '#d97706', strokeWidth: 2, strokeDasharray: '6,3' }))
-        kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#d97706' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
+        kids.push(React.createElement('text', { key: 't1', x: p.x + 12, y: p.y + p.h / 2 - 3, textAnchor: 'start', fontSize: 12, fontWeight: 600, fill: '#d97706' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
         kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#d97706', opacity: 0.85 }, '等待 items'))
       } else {
         const agg = lgAggStatus(n.items)
@@ -1816,7 +1816,7 @@ if (!WfComponent) {
             }
           },
           style: { border: '1px solid rgba(22,163,74,0.5)', background: 'rgba(22,163,74,0.1)', color: '#16a34a', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-        }, '▶ Start'))
+        }, '▶ 启动'))
       }
     }
           
@@ -1849,7 +1849,7 @@ if (!WfComponent) {
             }
           },
           style: { border: '1px solid rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-        }, '⏹ Stop'))
+        }, '⏹ 停止'))
       }
     }
           
@@ -1908,7 +1908,7 @@ if (!WfComponent) {
           }
         },
         style: { border: '1px solid rgba(217,119,6,0.5)', background: 'rgba(217,119,6,0.1)', color: '#d97706', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-      }, '↻ Reset'))
+      }, '↻ 重置'))
     }
 
     // Iter-19：创建按钮仅当会话 UNBOUND（无绑定实例）时显示
@@ -1937,7 +1937,7 @@ if (!WfComponent) {
       : null
     const plusBtn = canCreate ? React.createElement('button', {
       key: 'plus', title: '新建 workflow 实例（只创建，不启动）', onClick: openForm,
-      style: { border: '1px solid ' + T.borderMid + '', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 14, cursor: 'pointer', lineHeight: '18px' }
+      style: { border: '1px solid ' + T.borderMid + '', background: 'transparent', color: 'inherit', borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer', lineHeight: '18px' }
     }, '+ 创建') : null
     // Iter-20(R3)：会话 UNBOUND 时提供"采用"入口（选未绑定实例并绑定本会话）
     const adoptBtn = canCreate ? React.createElement('button', {
