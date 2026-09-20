@@ -914,8 +914,9 @@ function register(ctx) {
 
   // ── 颜色映射 ────────────────────────────────────────────────────
   const C = {
-    PENDING: T.textTertiary,
-    RUNNING: T.brand,
+    // Iter-43 微调：PENDING/RUNNING 不得用 var()——SVG stroke attribute 不支持 var()，解析失败回退黑色
+    PENDING: '#475569',
+    RUNNING: '#3b82f6',
     DONE: '#16a34a',
     FAILED: '#ef4444',
     SKIPPED: '#d97706'
