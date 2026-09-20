@@ -93,3 +93,9 @@
 - **Phase 2 已执行（2026-09-13，迁移迭代）**：§3.3 七项映射全部落地（inject 两处/prompt×4 新签名含 delivery/listChildren+interruptByParent/probe sendMessage/snap 字段核对）；563 单测全绿（桩同步新服务形状）；host v0.21.0/client v0.9.1；**修复 build.js 模板硬编码旧 inject 的漂移隐患**（改从 mjs 提取）；全新环境重挂载完成（`dsh plugin add` 官方通道 + preset 全量部署 `~/.dsh/.agent-presets/workflow-orchestrator/`）；开工前全量备份 `workflow-agent-backup-pre-0.1.5-migration-full-20260913-202833.tar.gz`。**待办**：用户重启 `dsh.service` → journalctl 验证激活；Phase 3 行为回归另行报设计。报告 `phase-2-dsh-migration/iterations/iter-migration-015rc2-report.md`。
 - **Phase 3 已执行（2026-09-13，迁移回归迭代）**：四键真实感知/A1 停止链路/demo 端到端×2/客户端面板/孤儿回收全绿；**发现并修复 6 项迁移缺陷**（persona prefix schema、client projection 门控、prompt signal 必填、agents 判活失效、面板 Stop 架构修订为路由层权威直停 `sessionController.cancel` 原生级联、重启后 hasState 磁盘水合）；delivery 两态+probe-inject 以「单测已覆盖 + 已知限制」关闭（无真实父子拓扑）。报告 `phase-2-dsh-migration/iterations/iter-migration-015rc2-verification-report.md`。
 - **迁移收尾 Phase 4 已执行（2026-09-13）**：迁移计划抬头改「已执行（Phase 0–4）」+ 基线/Phase 4 勾选 + §3.3 三处执行期实证修正就地标注；版本锁定矩阵落档（DSH 0.1.5-rc.2 + 10 卫星包同版 + host 0.21.0/client 0.9.1）；`build-preset.js` 废弃化（DEPRECATED + 运行即 exit 1，杜绝误跑覆盖现役 mjs）；delivery 两态/probe-inject 以「单测已覆盖 + 已知限制」关闭落档。验证报告 `phase-2-dsh-migration/iterations/iter-migration-015rc2-verification-report.md`。
+
+## 阶段 4 · 现有功能修复（2026-09-16 ~ 09-20，host v0.26.50，✅ 已完成）
+
+- 13 个迭代（Iter-31~43）全部验收关闭：8 缺陷闭环 + 全文编辑/表单补全/params 单轨化 + 页签门控 + RUNNING 运行视觉（脉冲/自动居中/门禁角点）+ 节点详情卡/组清单/文件预览 + DAG 数据源重构（结构=instance.yaml 所见即所得，状态叠加）+ 主题适配（HTML 层 DSW 皮肤变量 token 化，浅色主题全面适配）。
+- 验收期工程资产：verify-client-bundle 增 apply 冒烟门；部署流程固化（manifest 从 repo 版本派生 + tar 直解绕过 pnpm store + 部署产物逐标记核验）。
+- 遗留：权限矩阵对齐专项（用户发起，待专项）；/wf/skill 围栏收口（独立候选）。细节见 phases/phase-4-ui-enhance/README.md（封版）。
