@@ -1346,14 +1346,14 @@ function lgAggStatus(items) {
       } else if (n.kind === 'placeholder') {
         kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(217,119,6,0.10)', stroke: isSel ? T.brand : '#d97706', strokeWidth: 2, strokeDasharray: '6,3' }))
         kids.push(React.createElement('text', { key: 't1', x: p.x + p.w / 2, y: p.y + p.h / 2 - 3, textAnchor: 'middle', fontSize: 12, fontWeight: 600, fill: '#d97706' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
-        kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#d97706', opacity: 0.85 }, '等待 items：' + (n.items[0]._pendingItems || '')))
+        kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#d97706', opacity: 0.85 }, '等待 items'))
       } else {
         const agg = lgAggStatus(n.items)
         const ac = C[agg.agg] || C.PENDING
         const isConc = n.groupKind === 'conc'
         // Iter-40 补（用户反馈）：组内含 RUNNING 迭代 → 组节点状态条同款呼吸脉冲
         const groupPulse = agg.counts && agg.counts.RUNNING > 0 ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? T.brand : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-1, #16203a)' } }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? '#3b82f6' : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-1, #16203a)' } }))
         kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: ac, style: groupPulse }))
         kids.push(React.createElement('text', { key: 'lb', x: p.x + 10, y: p.y + 17, fontSize: 11, fontWeight: 600, fill: '#e2e8f0', style: { fill: 'var(--dsw-alias-label-primary, #e2e8f0)' } }, lgTrunc((isConc ? '⚡ ' : '↻ ') + n.name + ' (' + n.items.length + ')', LGEO.gW - 40)))
         const segs = [React.createElement('rect', { key: 'pbg', x: p.x + 10, y: p.y + 30, width: p.w - 20, height: 6, rx: 3, fill: 'rgba(0,0,0,0.35)' })]
@@ -1400,7 +1400,7 @@ function lgAggStatus(items) {
           kids.push(rowEls)
         }
       }
-      return React.createElement('g', { key: 'n-' + n.key, style: { cursor: 'pointer' }, onClick: () => onSelect(n.key) }, kids)
+      return React.createElement('g', { key: 'n-' + n.key, style: { cursor: 'pointer', outline: 'none' }, onClick: () => onSelect(n.key) }, kids)
     }
 
     const svgKids = [React.createElement('style', { key: 'kf' }, '@keyframes wfdag-pulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }'),
@@ -1899,7 +1899,7 @@ if (!WfComponent) {
             }
           },
           style: { border: '1px solid rgba(59,130,246,0.5)', background: 'rgba(59,130,246,0.1)', color: T.brand, borderRadius: 6, padding: '1px 9px', fontSize: 12, cursor: 'pointer' }
-        }, '▶ Resume'))
+        }, '▶ 恢复'))
       }
     }
           
@@ -2086,7 +2086,7 @@ if (!WfComponent) {
     const detailCardEl = (function () {
       if (!selectedId || editorOpen) return null
       const cardStyle = { border: '1px solid ' + T.borderMid + '', borderRadius: 8, padding: '10px 12px', margin: '8px 18px 0', background: 'rgba(148,163,184,0.05)', fontSize: 12 }
-      const secTitle = (txt) => React.createElement('div', { key: 'st' + txt, style: { fontSize: 10, color: T.textSecondary, margin: '6px 0 3px' } }, '── ' + txt)
+      const secTitle = (txt) => React.createElement('div', { key: 'st' + txt, style: { fontSize: 11, fontWeight: 700, color: T.textPrimary, margin: '6px 0 3px' } }, '▍' + txt)
       const row = (k, v) => React.createElement('div', { key: k + Math.random(), style: { display: 'flex', gap: 8 } }, [
         React.createElement('span', { key: 'k', style: { color: T.textSecondary, flex: '0 0 92px' } }, k),
         React.createElement('span', { key: 'v', style: { flex: 1, minWidth: 0, wordBreak: 'break-all' } }, v),
