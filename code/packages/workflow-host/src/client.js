@@ -288,7 +288,7 @@ export function register(ctx) {
       const dis = (allowed) => busy || !allowed || editable.readonlyAll
 
       // Iter-36：枚举下拉（option 显式配色对齐 Iter-30 修法——未选中项字色可见）
-      const optStyle = { color: T.bgBase, background: '#f8fafc' }
+      const optStyle = { color: '#1e293b', background: '#f8fafc' }
       const mkEnumSelect = (value, onChange, disabled, options, placeholder) => {
         const opts = []
         if (placeholder !== null && placeholder !== undefined) opts.push({ v: '', label: placeholder })
@@ -566,7 +566,7 @@ export function register(ctx) {
               key: 'ta', value: srcText, spellCheck: false,
               readOnly: dis(editable.definition),
               onChange: (e) => { setSrcText(e.target.value); setValRes(null) },
-              style: { flex: 1, minHeight: 380, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre', overflow: 'auto', border: '1px solid ' + T.borderStrong + '', borderRadius: 6, padding: 8, background: 'rgba(21,32,51,0.55)', color: 'inherit', boxSizing: 'border-box' },
+              style: { flex: 1, minHeight: 380, resize: 'vertical', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre', overflow: 'auto', border: '1px solid ' + T.borderStrong + '', borderRadius: 6, padding: 8, background: 'var(--dsw-alias-markdown-code-block, rgba(21,32,51,0.55))', color: 'var(--dsw-alias-label-primary, #e2e8f0)', boxSizing: 'border-box' },
             }),
             React.createElement('div', { key: 'ft', style: { display: 'flex', justifyContent: 'flex-end', gap: 8, alignItems: 'center' } }, [
               (srcText !== ((data && data.text) || '')) && !editable.readonlyAll ? React.createElement('span', { key: 'dh', style: { color: '#f59e0b', fontSize: 11 } }, '源码有未保存修改') : null,
@@ -629,7 +629,7 @@ export function register(ctx) {
           skillView.err
             ? React.createElement('div', { key: 'e', style: { color: '#f87171', fontSize: 12 } }, skillView.err)
             : React.createElement('pre', {
-                key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'rgba(21,32,51,0.55)', border: '1px solid ' + T.borderMid + '', borderRadius: 6, padding: 10 },
+                key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'var(--dsw-alias-markdown-code-block, rgba(21,32,51,0.55))', color: 'var(--dsw-alias-label-primary, #e2e8f0)', border: '1px solid ' + T.borderMid + '', borderRadius: 6, padding: 10 },
               }, skillView.text === null || skillView.text === undefined ? '加载中…' : String(skillView.text)),
         ])) : null,
       ])
@@ -1315,11 +1315,11 @@ function lgAggStatus(items) {
         const c = C[n.status] || C.PENDING
         // Iter-40：RUNNING 呼吸脉冲（opacity 呼吸不动几何；状态迁移后条件不命中即停）
         const pulseStyle = n.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? '#3b82f6' : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5 }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? T.brand : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-2, #1a2439)' } }))
         kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: c, style: pulseStyle }))
         kids.push(React.createElement('circle', { key: 'dot', cx: p.x + 15, cy: p.y + 16, r: 4, fill: c, style: pulseStyle }))
-        kids.push(React.createElement('text', { key: 'nm', x: p.x + 24, y: p.y + 20, fontSize: 12, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc(n.name, LGEO.gW - 34)))
-        kids.push(React.createElement('text', { key: 'idt', x: p.x + 15, y: p.y + 35, fontSize: 10, fill: '#94a3b8' }, lgTrunc(n.key, LGEO.gW - 26)))
+        kids.push(React.createElement('text', { key: 'nm', x: p.x + 24, y: p.y + 20, fontSize: 12, fontWeight: 600, fill: '#e2e8f0', style: { fill: 'var(--dsw-alias-label-primary, #e2e8f0)' } }, lgTrunc(n.name, LGEO.gW - 34)))
+        kids.push(React.createElement('text', { key: 'idt', x: p.x + 15, y: p.y + 35, fontSize: 10, fill: '#94a3b8', style: { fill: 'var(--dsw-alias-label-secondary, #94a3b8)' } }, lgTrunc(n.key, LGEO.gW - 26)))
         // Iter-40（U1 修复）：门禁角点条件接快照稳定字段 gateChecker（原 n.task.gate
         // 在 client 数据模型中不存在 → 角点从未渲染）；色值随 gateResult 全程可见
         if (n.task.gateChecker) {
@@ -1336,9 +1336,9 @@ function lgAggStatus(items) {
         const isConc = n.groupKind === 'conc'
         // Iter-40 补（用户反馈）：组内含 RUNNING 迭代 → 组节点状态条同款呼吸脉冲
         const groupPulse = agg.counts && agg.counts.RUNNING > 0 ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? '#3b82f6' : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5 }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#16203a', stroke: isSel ? T.brand : lgRgba(ac, 0.9), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-1, #16203a)' } }))
         kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: ac, style: groupPulse }))
-        kids.push(React.createElement('text', { key: 'lb', x: p.x + 10, y: p.y + 17, fontSize: 11, fontWeight: 600, fill: '#e2e8f0' }, lgTrunc((isConc ? '⚡ ' : '↻ ') + n.name + ' (' + n.items.length + ')', LGEO.gW - 40)))
+        kids.push(React.createElement('text', { key: 'lb', x: p.x + 10, y: p.y + 17, fontSize: 11, fontWeight: 600, fill: '#e2e8f0', style: { fill: 'var(--dsw-alias-label-primary, #e2e8f0)' } }, lgTrunc((isConc ? '⚡ ' : '↻ ') + n.name + ' (' + n.items.length + ')', LGEO.gW - 40)))
         const segs = [React.createElement('rect', { key: 'pbg', x: p.x + 10, y: p.y + 30, width: p.w - 20, height: 6, rx: 3, fill: 'rgba(0,0,0,0.35)' })]
         let segX = p.x + 10
         const barW = p.w - 20
@@ -1352,7 +1352,7 @@ function lgAggStatus(items) {
         kids.push(segs)
         const parts = []
         ;[['DONE', '✓'], ['RUNNING', '●'], ['FAILED', '✗'], ['SKIPPED', '⏭']].forEach(x => { if (agg.counts[x[0]]) parts.push(agg.counts[x[0]] + x[1]) })
-        kids.push(React.createElement('text', { key: 'ct', x: p.x + 10, y: p.y + 51, fontSize: 9, fill: 'rgba(255,255,255,0.85)' }, parts.join(' ')))
+        kids.push(React.createElement('text', { key: 'ct', x: p.x + 10, y: p.y + 51, fontSize: 9, fill: 'rgba(255,255,255,0.85)', style: { fill: 'var(--dsw-alias-label-secondary, rgba(255,255,255,0.85))' } }, parts.join(' ')))
         kids.push(React.createElement('text', {
           key: 'ex', x: p.x + p.w - 8, y: p.y + 17, textAnchor: 'end', fontSize: 11, fill: '#cbd5e1',
           onClick: e => { e.stopPropagation(); toggleGroup(n.key) }, style: { cursor: 'pointer' }
@@ -1362,7 +1362,7 @@ function lgAggStatus(items) {
           const dFill = 'M ' + p.x + ',' + ly + ' L ' + (p.x + p.w) + ',' + ly +
             ' L ' + (p.x + p.w) + ',' + (ly + lh - lr) + ' Q ' + (p.x + p.w) + ',' + (ly + lh) + ' ' + (p.x + p.w - lr) + ',' + (ly + lh) +
             ' L ' + (p.x + lr) + ',' + (ly + lh) + ' Q ' + p.x + ',' + (ly + lh) + ' ' + p.x + ',' + (ly + lh - lr) + ' Z'
-          kids.push(React.createElement('path', { key: 'lfill', d: dFill, fill: '#131c30' }))
+          kids.push(React.createElement('path', { key: 'lfill', d: dFill, fill: '#131c30', style: { fill: 'var(--dsw-alias-bg-layer-2, #131c30)' } }))
           const dLine = 'M ' + p.x + ',' + ly + ' L ' + p.x + ',' + (ly + lh - lr) +
             ' Q ' + p.x + ',' + (ly + lh) + ' ' + (p.x + lr) + ',' + (ly + lh) +
             ' L ' + (p.x + p.w - lr) + ',' + (ly + lh) +
@@ -1376,8 +1376,8 @@ function lgAggStatus(items) {
             rowEls.push(React.createElement('g', { key: 'r' + t.id, style: { cursor: 'pointer' }, onClick: e => { e.stopPropagation(); onSelect(t.id) } }, [
               React.createElement('title', { key: 'tt' }, (t.name || t.id) + '\n' + t.id + ' · ' + t.status),
               React.createElement('circle', { key: 'd', cx: p.x + 10, cy: ry + LGEO.listRowH / 2, r: 3.5, fill: C[t.status] || C.PENDING, style: t.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined }),
-              React.createElement('text', { key: 'nm', x: p.x + 18, y: ry + 14, fontSize: 10, fill: '#cbd5e1' }, (i + 1) + '. ' + lgTrunc(rowName, LGEO.gW - 52)),
-              React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#64748b' }, String(t.status)),
+              React.createElement('text', { key: 'nm', x: p.x + 18, y: ry + 14, fontSize: 10, fill: '#cbd5e1', style: { fill: 'var(--dsw-alias-label-secondary, #cbd5e1)' } }, (i + 1) + '. ' + lgTrunc(rowName, LGEO.gW - 52)),
+              React.createElement('text', { key: 'st', x: p.x + p.w - 8, y: ry + 14, textAnchor: 'end', fontSize: 9, fill: '#64748b', style: { fill: 'var(--dsw-alias-label-dimmed, #64748b)' } }, String(t.status)),
             ]))
           })
           kids.push(rowEls)
@@ -1389,11 +1389,11 @@ function lgAggStatus(items) {
     const svgKids = [React.createElement('style', { key: 'kf' }, '@keyframes wfdag-pulse { 0% { opacity: 1; } 50% { opacity: 0.35; } 100% { opacity: 1; } }'),
       React.createElement('defs', { key: 'defs' },
       React.createElement('marker', { id: 'wfdag-arrow', viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse' },
-        React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8' })))]
-    paths.forEach(p => svgKids.push(React.createElement('path', { key: p.id, d: p.d, fill: 'none', stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#wfdag-arrow)', opacity: 0.85 })))
+        React.createElement('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: '#94a3b8', style: { fill: 'var(--dsw-alias-label-secondary, #94a3b8)' } })))]
+    paths.forEach(p => svgKids.push(React.createElement('path', { key: p.id, d: p.d, fill: 'none', stroke: '#94a3b8', strokeWidth: 2, markerEnd: 'url(#wfdag-arrow)', opacity: 0.85, style: { stroke: 'var(--dsw-alias-label-secondary, #94a3b8)' } })))
     const sp = geo.pos.get('__wf_start__'), ep = geo.pos.get('__wf_end__')
-    if (sp) svgKids.push(React.createElement('circle', { key: 'cap-s', cx: sp.x + 10, cy: sp.cy, r: 10, fill: '#22c55e' }, React.createElement('title', null, '开始')))
-    if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: 'none', stroke: '#ef4444', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
+    if (sp) svgKids.push(React.createElement('circle', { key: 'cap-s', cx: sp.x + 10, cy: sp.cy, r: 10, fill: '#475569' }, React.createElement('title', null, '开始')))
+    if (ep) svgKids.push(React.createElement('circle', { key: 'cap-e', cx: ep.x + 10, cy: ep.cy, r: 10, fill: '#475569', stroke: '#475569', strokeWidth: 2.5 }, React.createElement('title', null, '结束')))
     graph.nodes.forEach(n => svgKids.push(nodeEls(n)))
 
     // Iter-40 修订（用户反馈）：RUNNING 节点在视口外即持续自动居中（状态轮询随渲染校正）；
@@ -1429,7 +1429,7 @@ function lgAggStatus(items) {
 
     return React.createElement('div', { style: { padding: '14px 18px 10px' } }, [
       React.createElement('div', { key: 'sb', style: { display: 'flex', alignItems: 'center', gap: 14, marginBottom: 6, fontSize: 12, color: '#64748b', flexWrap: 'wrap' } }, [
-        React.createElement('span', { key: 'w', style: { fontWeight: 600, color: '#334155' } }, workflowName || '-'),
+        React.createElement('span', { key: 'w', style: { fontWeight: 600, color: 'var(--dsw-alias-label-primary, #334155)' } }, workflowName || '-'),
         React.createElement('span', { key: 's' }, 'S: ', React.createElement('span', { style: { color: mc, fontWeight: 700 } },
           (stage || '-') + ' ' + (stage === 'PENDING' ? 'Pd' : stage === 'RUNNING' ? 'Rn' : stage === 'COMPLETED' ? 'Cp' : stage === 'STOPPED' ? 'St' : 'Fl'))),
         React.createElement('span', { key: 'pb', style: { display: 'inline-flex', alignItems: 'center', gap: 6 } }, [
@@ -1988,7 +1988,7 @@ if (!WfComponent) {
       React.createElement('div', { key: 't', style: { fontSize: 13, fontWeight: 600 } }, '新建 workflow 实例（只创建，不启动）'),
       React.createElement('label', { key: 'l1' }, '模板 / 来源'),
       React.createElement('select', { key: 's1', value: tplSel, onChange: e => pickTpl(e.target.value), style: fieldStyle },
-        tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: T.bgBase, background: '#f8fafc' } }, o.label))
+        tplOpts.map(o => React.createElement('option', { key: o.v, value: o.v, style: { color: '#1e293b', background: '#f8fafc' } }, o.label))
       ),
       tplSel === 'custom' ? React.createElement('input', { key: 'p', value: pathText, onChange: e => setPathText(e.target.value), placeholder: 'workflow YAML 绝对路径', style: fieldStyle }) : null,
       tplSel.indexOf('tpl:') === 0 ? React.createElement('div', { key: 'y', style: { fontSize: 11, color: T.textTertiary } }, '创建后可在实例编辑器（表单 / 源码）中调整定义全文。') : null,
@@ -2263,7 +2263,7 @@ if (!WfComponent) {
         fileView.err
           ? React.createElement('div', { key: 'e', style: { color: '#f87171', fontSize: 12 } }, fileView.err)
           : React.createElement('pre', {
-              key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'rgba(21,32,51,0.55)', border: '1px solid ' + T.borderMid + '', borderRadius: 6, padding: 10 },
+              key: 'pre', style: { margin: 0, maxHeight: '65vh', overflow: 'auto', fontSize: 12, lineHeight: '17px', whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: 'var(--dsw-alias-markdown-code-block, rgba(21,32,51,0.55))', color: 'var(--dsw-alias-label-primary, #e2e8f0)', border: '1px solid ' + T.borderMid + '', borderRadius: 6, padding: 10 },
             }, fileView.text === null || fileView.text === undefined ? '加载中…' : String(fileView.text)),
       ])) : null,
     )
