@@ -1332,7 +1332,7 @@ function lgAggStatus(items) {
         const c = C[n.status] || C.PENDING
         // Iter-40：RUNNING 呼吸脉冲（opacity 呼吸不动几何；状态迁移后条件不命中即停）
         const pulseStyle = n.status === 'RUNNING' ? { animation: 'wfdag-pulse 1.6s ease-in-out infinite' } : undefined
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? T.brand : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-2, #1a2439)' } }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: '#1a2439', stroke: isSel ? '#3b82f6' : lgRgba(c, 0.75), strokeWidth: isSel ? 2.5 : 1.5, style: { fill: 'var(--dsw-alias-bg-layer-2, #1a2439)' } }))
         kids.push(React.createElement('rect', { key: 'bar', x: p.x + 1, y: p.y + 4, width: 3.5, height: p.h - 8, rx: 2, fill: c, style: pulseStyle }))
         kids.push(React.createElement('circle', { key: 'dot', cx: p.x + 15, cy: p.y + 16, r: 4, fill: c, style: pulseStyle }))
         kids.push(React.createElement('text', { key: 'nm', x: p.x + 24, y: p.y + 20, fontSize: 12, fontWeight: 600, fill: '#e2e8f0', style: { fill: 'var(--dsw-alias-label-primary, #e2e8f0)' } }, lgTrunc(n.name, LGEO.gW - 34)))
@@ -1344,7 +1344,7 @@ function lgAggStatus(items) {
           kids.push(React.createElement('circle', { key: 'gate', cx: p.x + LGEO.gW - 10, cy: p.y + 10, r: 3.5, fill: gc }))
         }
       } else if (n.kind === 'placeholder') {
-        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(217,119,6,0.10)', stroke: isSel ? T.brand : '#d97706', strokeWidth: 2, strokeDasharray: '6,3' }))
+        kids.push(React.createElement('rect', { key: 'bg', x: p.x, y: p.y, width: p.w, height: p.h, rx: 8, fill: 'rgba(217,119,6,0.10)', stroke: isSel ? '#3b82f6' : '#d97706', strokeWidth: 2, strokeDasharray: '6,3' }))
         kids.push(React.createElement('text', { key: 't1', x: p.x + 12, y: p.y + p.h / 2 - 3, textAnchor: 'start', fontSize: 12, fontWeight: 600, fill: '#d97706' }, lgTrunc('⏳ ' + n.name, LGEO.gW - 16)))
         kids.push(React.createElement('text', { key: 't2', x: p.x + p.w / 2, y: p.y + p.h / 2 + 14, textAnchor: 'middle', fontSize: 10, fill: '#d97706', opacity: 0.85 }, '等待 items'))
       } else {
