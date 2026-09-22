@@ -1,12 +1,13 @@
-# 系统分析与设计作业流（阶段 5 · Iter-44 基本框架）
+# 系统分析与设计作业流（阶段 5 · Iter-45 任务与门禁 skill 初版）
 # 12 任务纯串行链：设计准备 → 需求澄清 → … → 设计基线。
-# 框架期（Iter-44）：processor 为占位 skill，不要求实质性内容输出；不配门禁
-# （门禁自 Iter-45 引入，锚点=req-review / design-review）。
-# 输入：input/PRD.md（产品需求定义，随模板静态复制进实例目录）。
-# 技能：skills/<id>/SKILL.md —— 物化后按两级链（工作空间 → 预定义根）解析。
+# v0.2（Iter-45）：全部任务挂 quality-gate（checker=skills/gate-<id>/SKILL.md，
+# on-failure: retry + max-retries 1——FAIL 时 gateNote 反馈重做一轮，耗尽 FAILED 停链）。
+# 任务 skill 为初版：LLM 依据 PRD 与上游产物真实开展分析设计（不追求内容质量上限）。
+# 输入：input/PRD.md（产品需求定义，随模板静态复制进实例目录；不用 params）。
+# 技能：两级链（工作空间 → 预定义根）解析。
 name: sys-design
-version: "0.1"
-description: "系统分析与设计作业流（12 任务串行：设计准备→需求澄清→用例分析→功能影响→DFX分析→SR定义→需求评审→功能设计→DFX设计→AR定义→设计评审→设计基线）"
+version: "0.2"
+description: "系统分析与设计作业流（12 任务串行：设计准备→需求澄清→用例分析→功能影响→DFX分析→SR定义→需求评审→功能设计→DFX设计→AR定义→设计评审→设计基线；全任务门禁 v0.2）"
 tasks:
   - id: design-init
     name: "设计准备"
@@ -14,6 +15,10 @@ tasks:
     inputs:
       prd: "input/PRD.md"
     outputs: ["output/00-design-init.md"]
+    quality-gate:
+      checker: skills/gate-design-init/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: req-clarify
     name: "需求澄清"
@@ -23,6 +28,10 @@ tasks:
       prep: "output/00-design-init.md"
     outputs: ["output/01-req-clarify.md"]
     depends-on: [design-init]
+    quality-gate:
+      checker: skills/gate-req-clarify/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: uc-analy
     name: "用例分析"
@@ -32,6 +41,10 @@ tasks:
       clarify: "output/01-req-clarify.md"
     outputs: ["output/02-uc-analy.md"]
     depends-on: [req-clarify]
+    quality-gate:
+      checker: skills/gate-uc-analy/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: func-impact
     name: "功能影响分析"
@@ -41,6 +54,10 @@ tasks:
       ucanaly: "output/02-uc-analy.md"
     outputs: ["output/03-func-impact.md"]
     depends-on: [uc-analy]
+    quality-gate:
+      checker: skills/gate-func-impact/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: dfx-analy
     name: "DFX 分析"
@@ -50,6 +67,10 @@ tasks:
       impact: "output/03-func-impact.md"
     outputs: ["output/04-dfx-analy.md"]
     depends-on: [func-impact]
+    quality-gate:
+      checker: skills/gate-dfx-analy/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: sr-def
     name: "SR 定义"
@@ -60,6 +81,10 @@ tasks:
       dfx: "output/04-dfx-analy.md"
     outputs: ["output/05-sr-def.md"]
     depends-on: [func-impact, dfx-analy]
+    quality-gate:
+      checker: skills/gate-sr-def/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: req-review
     name: "需求评审"
@@ -69,6 +94,10 @@ tasks:
       sr: "output/05-sr-def.md"
     outputs: ["output/06-req-review.md"]
     depends-on: [sr-def]
+    quality-gate:
+      checker: skills/gate-req-review/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: func-design
     name: "功能设计"
@@ -78,6 +107,10 @@ tasks:
       review: "output/06-req-review.md"
     outputs: ["output/07-func-design.md"]
     depends-on: [req-review]
+    quality-gate:
+      checker: skills/gate-func-design/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: dfx-design
     name: "DFX 设计"
@@ -87,6 +120,10 @@ tasks:
       fdesign: "output/07-func-design.md"
     outputs: ["output/08-dfx-design.md"]
     depends-on: [func-design]
+    quality-gate:
+      checker: skills/gate-dfx-design/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: ar-def
     name: "AR 定义"
@@ -97,6 +134,10 @@ tasks:
       dfxd: "output/08-dfx-design.md"
     outputs: ["output/09-ar-def.md"]
     depends-on: [func-design, dfx-design]
+    quality-gate:
+      checker: skills/gate-ar-def/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: design-review
     name: "设计评审"
@@ -106,6 +147,10 @@ tasks:
       ar: "output/09-ar-def.md"
     outputs: ["output/10-design-review.md"]
     depends-on: [ar-def]
+    quality-gate:
+      checker: skills/gate-design-review/SKILL.md
+      on-failure: retry
+      max-retries: 1
 
   - id: design-baseline
     name: "设计基线"
@@ -115,3 +160,7 @@ tasks:
       review: "output/10-design-review.md"
     outputs: ["output/11-design-baseline.md"]
     depends-on: [design-review]
+    quality-gate:
+      checker: skills/gate-design-baseline/SKILL.md
+      on-failure: retry
+      max-retries: 1
