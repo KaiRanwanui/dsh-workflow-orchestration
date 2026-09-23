@@ -68,3 +68,11 @@ node code/packages/workflow-host/scripts/verify-deploy.mjs   # 部署产物核�
 1. 版本唯一事实源 = repo package.json；manifest 用 python 正则从其**派生**（禁止手写版本号 sed）。
 2. 安装一律 **tar 直解**（pnpm 对 file: tgz 的 store 键不含内容，--force 也不可靠）。
 3. 部署后必跑 verify-deploy.mjs；任一标记缺失即中止交付。
+
+## 版本号规则（2026-09-23 用户定稿）
+
+host/client 包版本 `0.<阶段号>.<构建号>`：
+
+1. **中间段 = 阶段号**：每进入一个新阶段 +1（阶段 4 = 0.26.x，阶段 5 = **0.27.x**）；
+2. **第三段 = 阶段内构建发布序号**：阶段内每次构建发布 +1，**从 1 起**（阶段 5 首次发行 = **0.27.1**，不延续上一阶段的尾号）；
+3. 版本号不在方案中预设（工作规则），发行时按上述规则取值；唯一事实源 = repo package.json（见「防静默失败军规·部署期」）。
