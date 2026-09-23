@@ -673,11 +673,13 @@ async function runCase15() {
     if (n === 'sessionController') return { prompt: async (p) => { promptCalls.push(p); return { accepted: true } } }
     return undefined
   }
-  const rr = await call('POST', '/wf/reset', { workspaceRoot: cwd, instanceId: b.instanceId, sessionId: 'sess-a' })
+  // Iter-46-2（F-1）：实例绑定 sess-a，客户端冒名 sess-imposter——注入必须落权威绑定
+  const rr = await call('POST', '/wf/reset', { workspaceRoot: cwd, instanceId: b.instanceId, sessionId: 'sess-imposter' })
   const lastPrompt = promptCalls[promptCalls.length - 1]
   const lastText = lastPrompt && Array.isArray(lastPrompt.content) && lastPrompt.content[0] ? lastPrompt.content[0].text : ''
   check('S4 /wf/reset: 状态重置为 PENDING + 注入已重置消息', rr.code === 200 && rr.body.stage === 'PENDING' && rr.body.messageInjected === true, JSON.stringify({ code: rr.code, stage: rr.body.stage, mi: rr.body.messageInjected, error: rr.body.error }))
-  check('S4 /wf/reset: 文案含"已重置至 PENDING"+"等待启动指令"、无续跑指示、含清理契约 + queue', /已重置至 PENDING/.test(lastText) && /等待用户发出启动指令/.test(lastText) && !/按全新工作流继续执行/.test(lastText) && /清理契约/.test(lastText) && lastPrompt.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.mode, text: String(lastText).slice(0, 80) }))
+  check('S4 /wf/reset: 注入目标=实例权威绑定（非客户端上送值）', lastPrompt && lastPrompt.sessionId === 'sess-a', lastPrompt && lastPrompt.sessionId)
+  check('S4 /wf/reset: 文案含"已重置至 PENDING"+"等待启动指令"、无续跑指示、无清理契约 + queue', /已重置至 PENDING/.test(lastText) && /等待用户发出启动指令/.test(lastText) && !/按全新工作流继续执行/.test(lastText) && !/清理契约/.test(lastText) && lastPrompt.mode === 'queue', JSON.stringify({ mode: lastPrompt && lastPrompt.mode, text: String(lastText).slice(0, 80) }))
 
   // 4) forSession 根修复：未绑定会话 → undefined（绝不取工作区最新实例）；已绑定 → 返回本会话实例
   const r1 = await registry.forSession({ agent: { session: { header: { id: 'sess-zzz', cwd } } } })
@@ -1347,7 +1349,7 @@ async function runCase21() {
       process.env.DSH_HOME = savedDsh
     }
 
-    // 8) reset 备份后清空（pendingCleanup，fs 无删除 API 的会话执行适配）
+    // 8) reset 备份后清空（工具侧 pendingCleanup 契约保留：会话内执行可靠；面板路由侧 Iter-46-2 已改引擎直执行）
     await mf.writeText({ path: cr.dir + '/output/md-loop/login.md' }, '# 子目录产物') // 验证备份递归
     await bag.workflow_stop.execute({}, exec)
     const rr = await bag.workflow_reset.execute({}, exec)

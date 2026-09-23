@@ -896,17 +896,20 @@ function registerWebRoutes(ctx, registry) {
             // Iter-21：面板控制统一经 session 注入指令（与 Start 一致——此前 Stop/Resume 只改实例态而 session 不感知，导致按钮"无效"）
             // 0.1.5 迁移：apiProxy 退役 → sessionController.prompt（普通会话）/ subagents.prompt（continuable 子代理，
             // queue/steer 语义由 delivery 字段承担）；requestId 拍平进请求体，返回直接量 {accepted:true} / {messageId}。
-            async function injectSessionCmd(args, root, instanceId, verb, extraText) {
-              const sessionId = args.sessionId
-              if (!sessionId) return { messageInjected: false, reason: 'no sessionId' }
+            async function injectSessionCmd(args, root, instanceId, verb, extraText, boundSessionId) {
+              // Iter-46-2（F-1）：目标会话以实例 metadata.sessionId（创建/采纳时登记的权威绑定）为准；
+              // 客户端上送 sessionId 仅在无绑定时兜底——杜绝面板把控制指令投进会话内任意活动子代理
+              //（F-1 实证：Mnemon idle checkpoint review 子代理抢收 reset 指令，流程误入其中）。
+              const sessionId = boundSessionId || args.sessionId
+              if (!sessionId) return { messageInjected: false, reason: 'no sessionId (meta & args)' }
               const sessionController = ctx.get('sessionController')
               if (!sessionController) return { messageInjected: false, reason: 'sessionController unavailable' }
               const subagents = ctx.get('subagents')
               const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
                 : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
-                // Iter-31（用户 D2 拍板）：reset 后停留 PENDING 等用户手动 Start——通知不得指示续跑；
-                // extraText（清理契约）仍需会话执行清理命令，清理完毕即待命。
-                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置至 PENDING（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准。请勿自行 begin 或启动工作流；清理契约（如有）执行完毕后即待命，等待用户发出启动指令。${extraText ? '\n\n' + extraText : ''}`
+                // Iter-31（用户 D2 拍板）：reset 后停留 PENDING 等用户手动 Start——通知不得指示续跑。
+                // Iter-46-2：清理已由引擎直执行（node:fs），注入退化为纯告知，不再携带清理契约 extraText。
+                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置至 PENDING（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准。请勿自行 begin 或启动工作流，等待用户发出启动指令。${extraText ? '\n\n' + extraText : ''}`
                 : `请继续工作流实例 ${instanceId}，工作区：${root}`
               // 停止是紧急指令：agent 正在执行任务，队列消息会等本轮结束——用 steer 打断当前轮让 LLM 尽快响应；
               // start/resume 在 agent 空闲/暂停时投递，用 queue。
@@ -948,7 +951,8 @@ function registerWebRoutes(ctx, registry) {
               snap.instanceId = entry.instanceId
               
               // Iter-15：向当前 session 发送启动消息（0.1.5 迁移：sessionController/subagents 新签名）
-              const sessionId = args.sessionId
+              // Iter-46-2（F-1）：与 injectSessionCmd 同规——目标会话以实例权威绑定（meta.sessionId）为准
+              const sessionId = (entry.meta && entry.meta.sessionId) || args.sessionId
               if (sessionId) {
                 const sessionController = ctx.get('sessionController')
                 const subagents = ctx.get('subagents')
@@ -1059,12 +1063,13 @@ function registerWebRoutes(ctx, registry) {
                     ' children=' + childIds.length + ' (' + childIds.slice(-3).join(',') + ')' + '\n')
                 } catch (e4) { /* 留痕失败不阻断 */ }
               }
-              const inj = await injectSessionCmd(args, root, instanceId, 'stop')
+              const inj = await injectSessionCmd(args, root, instanceId, 'stop', null, entry.meta && entry.meta.sessionId)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               snap.messageInjected = inj.messageInjected
               snap.stoppedChildren = stoppedChildren
               if (inj.error) snap.messageInjectionError = inj.error
+              if (inj.reason) snap.messageInjectionReason = inj.reason
               writeJson(res, 200, snap)
               return
             }
@@ -1089,30 +1094,37 @@ function registerWebRoutes(ctx, registry) {
               // Iter-33（用户拍板「reset 语义=从模板全新建立」）：清空范围扩展到 inputs/——
               // 运行期物化残留（上游产物副本）一并清除；有模板来源（defDir 锚点 + 模板子目录
               // 存在 inputs/）时用 cp -r 恢复模板初始 inputs；inline/手工实例退化为仅清 output/logs。
-              const q21 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
-              const nfz33 = require('node:fs')
-              const defDir33 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
-              const tplInputs33 = defDir33 ? defDir33 + '/inputs' : null
-              const hasTplInputs33 = !!(tplInputs33 && nfz33.existsSync(tplInputs33))
-              let cmd33 = 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
-                + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
-              if (hasTplInputs33) cmd33 += ' && cp -R ' + q21(tplInputs33 + '/.') + ' ' + q21(entry.dir + '/inputs/')
-              snap.pendingCleanup = {
-                outputDir: entry.dir + '/output',
-                logsDir: entry.dir + '/logs',
-                inputsDir: entry.dir + '/inputs',
-                inputsRestoredFrom: hasTplInputs33 ? tplInputs33 : null,
-                cmd: cmd33,
+              // Iter-26（重置重来拍板）：备份后清空 output/logs。旧实现因「fs 服务无删除 API」返回
+              // pendingCleanup 由编排会话代执行——F-1 实证注入静默失败即无人清理。
+              // Iter-46-2：改引擎直执行——node:fs 在路由作用域可用（先例 existsSync）；
+              // pendingCleanup 会话契约退役。模板子目录存在 inputs/ 时恢复初始内容。
+              const nfz462 = require('node:fs')
+              const defDir462 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
+              const tplInputs462 = defDir462 ? defDir462 + '/inputs' : null
+              const hasTplInputs462 = !!(tplInputs462 && nfz462.existsSync(tplInputs462))
+              let cleanupError462 = null
+              try {
+                if (!entry.dir || entry.dir === '/' || String(entry.dir).length < 4) throw new Error('instance dir 异常，拒绝清理')
+                for (const sub of ['output', 'logs', 'inputs']) nfz462.rmSync(entry.dir + '/' + sub, { recursive: true, force: true })
+                for (const sub of ['output', 'logs', 'inputs']) nfz462.mkdirSync(entry.dir + '/' + sub, { recursive: true })
+                if (hasTplInputs462) nfz462.cpSync(tplInputs462, entry.dir + '/inputs', { recursive: true })
+              } catch (e462) {
+                // 引擎清理失败（不应发生）→ 保留 legacy pendingCleanup 作为面板可见的手动兜底
+                cleanupError462 = (e462 && e462.message) || String(e462)
+                const q462 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+                let cmd462 = 'rm -rf ' + q462(entry.dir + '/output') + ' ' + q462(entry.dir + '/logs') + ' ' + q462(entry.dir + '/inputs')
+                  + ' && mkdir -p ' + q462(entry.dir + '/output') + ' ' + q462(entry.dir + '/logs') + ' ' + q462(entry.dir + '/inputs')
+                if (hasTplInputs462) cmd462 += ' && cp -R ' + q462(tplInputs462 + '/.') + ' ' + q462(entry.dir + '/inputs/')
+                snap.pendingCleanup = { outputDir: entry.dir + '/output', logsDir: entry.dir + '/logs', inputsDir: entry.dir + '/inputs', inputsRestoredFrom: hasTplInputs462 ? tplInputs462 : null, cmd: cmd462 }
               }
-              snap.resetNote = 'state reset; instance dir (output/logs/inputs) backed up to ' + backupDir + ', run pendingCleanup.cmd now'
-              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递，reset 时 agent 通常空闲）。
-              // Iter-31（用户 D2 拍板）：通知改纯告知——reset 停留 PENDING 等用户手动 Start，不再指示
-              // "按全新工作流继续执行"；pendingCleanup 清理契约仍随行（Iter-26：fs 无删除 API，清空由
-              // 会话 bash 执行），但明确"仅清理、不含启动指令"。
-              const injReset = await injectSessionCmd(args, root, instanceId, 'reset',
-                '[清理契约] 实例 output/logs/inputs 已归档备份至 ' + backupDir + (hasTplInputs33 ? '，inputs 将从模板初始内容恢复' : '') + '，请立即用 bash 执行以下命令（仅清理与恢复，不含启动指令）：\n' + snap.pendingCleanup.cmd)
+              snap.resetNote = 'state reset; prior output/logs/inputs archived to ' + backupDir + (cleanupError462 ? '; ENGINE CLEANUP FAILED: ' + cleanupError462 + '（见 pendingCleanup 手动兜底）' : '; cleaned by engine')
+              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递）。
+              // Iter-31：通知为纯告知——reset 停留 PENDING 等用户手动 Start，不含续跑指示。
+              // Iter-46-2：清理已引擎直执行，注入不再承载清理契约；目标会话=权威绑定（见 injectSessionCmd）。
+              const injReset = await injectSessionCmd(args, root, instanceId, 'reset', null, entry.meta && entry.meta.sessionId)
               snap.messageInjected = injReset.messageInjected
               if (injReset.error) snap.messageInjectionError = injReset.error
+              if (injReset.reason) snap.messageInjectionReason = injReset.reason
               writeJson(res, 200, snap)
               return
             }
@@ -1122,11 +1134,12 @@ function registerWebRoutes(ctx, registry) {
               const st = entry.engine.snapshot().stage
               if (st !== 'STOPPED') { writeJson(res, 400, { error: 'resume 仅 STOPPED（当前 ' + st + '）' }); return }
               // Iter-21：继续只经 session 注入指令，由 agent 调 workflow_resume 置 RUNNING（避免双写导致的 UI 提前回弹/状态冲突）
-              const inj = await injectSessionCmd(args, root, instanceId, 'resume')
+              const inj = await injectSessionCmd(args, root, instanceId, 'resume', null, entry.meta && entry.meta.sessionId)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               snap.messageInjected = inj.messageInjected
               if (inj.error) snap.messageInjectionError = inj.error
+              if (inj.reason) snap.messageInjectionReason = inj.reason
               writeJson(res, 200, snap)
               return
             }

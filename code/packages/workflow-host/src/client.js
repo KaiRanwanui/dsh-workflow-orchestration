@@ -1806,6 +1806,14 @@ if (!WfComponent) {
                 const err = await resp.json()
                 alert('启动失败: ' + (err.error || '未知错误'))
               }
+
+              // Iter-46-2（F-1）：消费注入结果——messageInjected=false 时醒目提示（reset 清理已引擎直执行，此提示仅告知消息未达）
+              const data462 = await resp.json().catch(() => ({}))
+              if (data462 && data462.messageInjected === false) {
+                const why = data462.messageInjectionError || data462.messageInjectionReason || '未知原因'
+                const extra = data462.pendingCleanup ? ('\n清理未由引擎完成，请手动执行：' + data462.pendingCleanup.cmd) : ''
+                alert('注意：指令已执行，但会话消息未送达（' + why + '）。' + extra)
+              }
             } catch (e) {
               alert('启动失败: ' + e.message)
             }
@@ -1838,6 +1846,14 @@ if (!WfComponent) {
               if (!resp.ok) {
                 const err = await resp.json()
                 alert('停止失败: ' + (err.error || '未知错误'))
+              }
+
+              // Iter-46-2（F-1）：消费注入结果——messageInjected=false 时醒目提示（reset 清理已引擎直执行，此提示仅告知消息未达）
+              const data462 = await resp.json().catch(() => ({}))
+              if (data462 && data462.messageInjected === false) {
+                const why = data462.messageInjectionError || data462.messageInjectionReason || '未知原因'
+                const extra = data462.pendingCleanup ? ('\n清理未由引擎完成，请手动执行：' + data462.pendingCleanup.cmd) : ''
+                alert('注意：指令已执行，但会话消息未送达（' + why + '）。' + extra)
               }
             } catch (e) {
               alert('停止失败: ' + e.message)
@@ -1872,6 +1888,14 @@ if (!WfComponent) {
                 const err = await resp.json()
                 alert('恢复失败: ' + (err.error || '未知错误'))
               }
+
+              // Iter-46-2（F-1）：消费注入结果——messageInjected=false 时醒目提示（reset 清理已引擎直执行，此提示仅告知消息未达）
+              const data462 = await resp.json().catch(() => ({}))
+              if (data462 && data462.messageInjected === false) {
+                const why = data462.messageInjectionError || data462.messageInjectionReason || '未知原因'
+                const extra = data462.pendingCleanup ? ('\n清理未由引擎完成，请手动执行：' + data462.pendingCleanup.cmd) : ''
+                alert('注意：指令已执行，但会话消息未送达（' + why + '）。' + extra)
+              }
             } catch (e) {
               alert('恢复失败: ' + e.message)
             }
@@ -1887,7 +1911,7 @@ if (!WfComponent) {
         key: 'reset', title: '重置实例（清空状态，保留产物）',
         onClick: async () => {
           if (!currentInstanceId || !activeRoot) return
-          if (!confirm('确定要重置实例吗？状态将被清空，产物文件保留。')) return
+          if (!confirm('确定要重置实例吗？状态将被清空；产物目录（output/logs/inputs）将由引擎清空（自动备份后）。')) return
           try {
             const resp = await fetch('/wf/reset', {
               method: 'POST',
@@ -1898,6 +1922,14 @@ if (!WfComponent) {
               const err = await resp.json()
               alert('重置失败: ' + (err.error || '未知错误'))
             }
+
+              // Iter-46-2（F-1）：消费注入结果——messageInjected=false 时醒目提示（reset 清理已引擎直执行，此提示仅告知消息未达）
+              const data462 = await resp.json().catch(() => ({}))
+              if (data462 && data462.messageInjected === false) {
+                const why = data462.messageInjectionError || data462.messageInjectionReason || '未知原因'
+                const extra = data462.pendingCleanup ? ('\n清理未由引擎完成，请手动执行：' + data462.pendingCleanup.cmd) : ''
+                alert('注意：指令已执行，但会话消息未送达（' + why + '）。' + extra)
+              }
           } catch (e) {
             alert('重置失败: ' + e.message)
           }
