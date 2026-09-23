@@ -26,7 +26,7 @@
 
 ## 迭代计划
 
-见 `iteration-plan.md`（用户总体拍板 Iter-44~57，次序可按执行情况调整）。当前：**Iter-44 ✅（2026-09-22）、Iter-45 ✅（2026-09-22）相继关闭**，下一迭代 **Iter-46 环境准备**（design-init 任务滚动充实，方案待出）。
+见 `iteration-plan.md`（用户总体拍板 Iter-44~57，次序可按执行情况调整）。当前：**Iter-44/45 ✅ 已关闭；Iter-46（环境准备初充：design-init 六步 + block 门禁 + 镜像发布模型）编码完成，待 GUI 验收**。
 非阻塞性待优化问题：`optimization-backlog.md`（O-1 DAG 连线交叉/遮挡，待开单）。
 
 已有遗留（/wf/skill 围栏、权限矩阵对齐）保留在迭代池，视跑通情况插入。
