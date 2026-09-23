@@ -26,7 +26,7 @@
 
 ## 迭代计划
 
-见 `iteration-plan.md`（用户总体拍板 Iter-44~57 + 46-2，次序可按执行情况调整）。当前：**Iter-44/45/46 ✅ 已关闭；Iter-46-2（Reset 注入修复，v0.27.1）方案已报待确认**。
+见 `iteration-plan.md`（用户总体拍板 Iter-44~57 + 46-2，次序可按执行情况调整）。当前：**Iter-44/45/46 ✅ 已关闭；Iter-46-2（Reset 注入修复，v0.27.1）编码部署完成，待用户重启 DSH 复验**（`iterations/iter-46-2-report.md`）。
 非阻塞性待优化问题：`optimization-backlog.md`（O-1 DAG 连线交叉/遮挡，待开单）。
 
 已有遗留（/wf/skill 围栏、权限矩阵对齐）保留在迭代池，视跑通情况插入。
