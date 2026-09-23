@@ -2,7 +2,7 @@
 
 - **状态**：⚠️ 编码与自验完成，待用户 GUI 验收（design-trial 新建实例跑环境初始化 + block 门禁）
 - **阶段**：阶段 5（设计作业流专项）
-- **版本**：无插件发行（不动 `code/`，host 基线维持 `v0.26.52`）；资产 `sys-design.yaml` v0.2 → **v0.3**
+- **版本**：无插件发行（不动 `code/`，host 基线维持 `v0.26.52`）；资产 `sys-design.yaml` v0.2 → **v0.4**（v0.3 环境初始化六步；v0.4 验收修复——PRD 移出 inputs）
 - **测试**：602 单测全绿 + 渲染冒烟 PASS + 定义/门禁/镜像结构断言
 - **提交**：见 git log（资产+报告一并提交）
 
@@ -24,6 +24,7 @@
 | 6 | 技能元数据 | 准备过程与门禁检查均写成标准 SKILL.md，frontmatter 含 name/version/**description** | 两份 v0.3 技能已带 description |
 | 7 | 技能自检取消 | 工作流技能不需环境自检——构建发布机制保证，运行即视为 OK | 原方案第 2 项检查删除 |
 | 8 | 发布模型 | `workflow_samples/sys-design/` = 预置镜像（唯一发布源，1:1 发布）；`workflow_samples/sys-design-local/` = 本地独立目录（样例 PRD/materialize.sh/README） | 目录重组；materialize.sh 重写 |
+| 9 | **PRD 不声明为 inputs**（验收期修复拍板） | 创建期 preset 语境校验仅锚定模板子目录，工作空间外部输入件声明为 inputs 必报 E-INPUT-MISSING——PRD 从 12 个任务 inputs 全部移除，创建默认成功；PRD 存在性由 design-init 运行时检查（缺失→不就绪→FAIL→block），下游技能经 00 报告获取 PRD 路径 | yaml v0.4；11 份下游技能「输入」小节同步改写 |
 
 ## 3. 改动面
 
@@ -60,6 +61,7 @@
 | # | 现象 | 根因 | 修复 | 证据 |
 |---|---|---|---|---|
 | 1 | 断言脚本报两份技能缺 description | 脚本正则缺多行标志（^ 只匹配首行） | grep 复核 frontmatter 确认存在；脚本 bug 非资产 bug | head -5 输出 |
+| 2 | **创建实例报 12 条 E-INPUT-MISSING（inputs.prd: prd/PRD.md）** | `/wf/create` 对预置模板走 **definition-preset 校验语境：相对路径仅锚定模板子目录（defDir），不走工作空间两级链**（Iter-27 定语义：静态输入件须随模板发布）——工作空间外部输入件声明为 inputs 与该语义冲突 | 按用户拍板：PRD 从全部 inputs 移除（yaml v0.4）+ 11 份下游技能输入小节改写（旧 `input/PRD.md` 文案一并修正）；创建期校验天然通过；PRD 检查归 design-init 运行时 | 引擎源码 `webserver-routes.js` create 校验调用 + `workflow-validate.js` §probeStaticPath definition-preset 分支；修复后 parser 断言 PASS + 重新物化 |
 
 ## 7. 遗留与后续
 

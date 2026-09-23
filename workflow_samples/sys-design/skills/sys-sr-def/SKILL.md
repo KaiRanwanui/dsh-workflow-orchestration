@@ -8,7 +8,7 @@ version: "0.2"
 汇总前序分析，产出条目化系统需求与追溯关系。
 
 ## 输入
-- `input/PRD.md`：产品需求定义（全局需求源）。
+- `prd/PRD.md`：产品需求定义（工作空间根，外部输入件，不在本任务 inputs 声明；以 00 设计准备报告「输入件检查（PRD）」记录的路径为准）。
 - `output/03-func-impact.md`：功能影响分析产物。
 - `output/04-dfx-analy.md`：DFX 分析产物。
 

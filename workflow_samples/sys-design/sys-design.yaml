@@ -5,17 +5,20 @@
 # v0.3（Iter-46）：design-init 升级为环境初始化六步（目录/工具/知识库占位/输入件/git 建仓/环境报告），
 #   其门禁改 on-failure: block（环境不就绪阻断工作流）；PRD 输入改 prd/PRD.md（工作空间根，
 #   外部输入件不再随工作流发布）；知识库目录树 knowledge-base/ 由 design-init 创建。
+# v0.4（Iter-46 验收修复）：PRD 从全部 inputs 移除——创建期 preset 语境校验仅锚定模板子目录，
+#   工作空间外部输入件不可声明为 inputs（E-INPUT-MISSING）；PRD 存在性由 design-init 运行时
+# v0.4（Iter-46 验收修复）：PRD 从全部 inputs 移除——创建期 preset 语境校验仅锚定模板子目录，
+#   工作空间外部输入件不可声明为 inputs（E-INPUT-MISSING）；PRD 存在性由 design-init 运行时
+#   检查（缺失→判不就绪→门禁 FAIL→block 阻断），下游技能经 00 报告获取 PRD 绝对路径。
 # 任务 skill 为初版：LLM 依据 PRD 与上游产物真实开展分析设计（不追求内容质量上限）。
 # 技能：两级链（工作空间 → 预定义根）解析。
 name: sys-design
-version: "0.3"
-description: "系统分析与设计作业流（12 任务串行：设计准备→需求澄清→用例分析→功能影响→DFX分析→SR定义→需求评审→功能设计→DFX设计→AR定义→设计评审→设计基线；全任务门禁 v0.3；design-init 环境初始化六步 block）"
+version: "0.4"
+description: "系统分析与设计作业流（12 任务串行：设计准备→需求澄清→用例分析→功能影响→DFX分析→SR定义→需求评审→功能设计→DFX设计→AR定义→设计评审→设计基线；全任务门禁 v0.4；design-init 环境初始化六步 block）"
 tasks:
   - id: design-init
     name: "设计准备"
     processor: skills/sys-design-init/SKILL.md
-    inputs:
-      prd: "prd/PRD.md"
     outputs: ["output/00-design-init.md"]
     quality-gate:
       checker: skills/gate-design-init/SKILL.md
@@ -25,7 +28,6 @@ tasks:
     name: "需求澄清"
     processor: skills/sys-req-clarify/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       prep: "output/00-design-init.md"
     outputs: ["output/01-req-clarify.md"]
     depends-on: [design-init]
@@ -38,7 +40,6 @@ tasks:
     name: "用例分析"
     processor: skills/sys-uc-analy/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       clarify: "output/01-req-clarify.md"
     outputs: ["output/02-uc-analy.md"]
     depends-on: [req-clarify]
@@ -51,7 +52,6 @@ tasks:
     name: "功能影响分析"
     processor: skills/sys-func-impact/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       ucanaly: "output/02-uc-analy.md"
     outputs: ["output/03-func-impact.md"]
     depends-on: [uc-analy]
@@ -64,7 +64,6 @@ tasks:
     name: "DFX 分析"
     processor: skills/sys-dfx-analy/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       impact: "output/03-func-impact.md"
     outputs: ["output/04-dfx-analy.md"]
     depends-on: [func-impact]
@@ -77,7 +76,6 @@ tasks:
     name: "SR 定义"
     processor: skills/sys-sr-def/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       impact: "output/03-func-impact.md"
       dfx: "output/04-dfx-analy.md"
     outputs: ["output/05-sr-def.md"]
@@ -91,7 +89,6 @@ tasks:
     name: "需求评审"
     processor: skills/sys-req-review/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       sr: "output/05-sr-def.md"
     outputs: ["output/06-req-review.md"]
     depends-on: [sr-def]
@@ -104,7 +101,6 @@ tasks:
     name: "功能设计"
     processor: skills/sys-func-design/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       review: "output/06-req-review.md"
     outputs: ["output/07-func-design.md"]
     depends-on: [req-review]
@@ -117,7 +113,6 @@ tasks:
     name: "DFX 设计"
     processor: skills/sys-dfx-design/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       fdesign: "output/07-func-design.md"
     outputs: ["output/08-dfx-design.md"]
     depends-on: [func-design]
@@ -130,7 +125,6 @@ tasks:
     name: "AR 定义"
     processor: skills/sys-ar-def/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       fdesign: "output/07-func-design.md"
       dfxd: "output/08-dfx-design.md"
     outputs: ["output/09-ar-def.md"]
@@ -144,7 +138,6 @@ tasks:
     name: "设计评审"
     processor: skills/sys-design-review/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       ar: "output/09-ar-def.md"
     outputs: ["output/10-design-review.md"]
     depends-on: [ar-def]
@@ -157,7 +150,6 @@ tasks:
     name: "设计基线"
     processor: skills/sys-design-baseline/SKILL.md
     inputs:
-      prd: "prd/PRD.md"
       review: "output/10-design-review.md"
     outputs: ["output/11-design-baseline.md"]
     depends-on: [design-review]

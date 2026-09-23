@@ -8,7 +8,7 @@ version: "0.2"
 定义架构需求条目并建立与 SR 的分配关系。
 
 ## 输入
-- `input/PRD.md`：产品需求定义（全局需求源）。
+- `prd/PRD.md`：产品需求定义（工作空间根，外部输入件，不在本任务 inputs 声明；以 00 设计准备报告「输入件检查（PRD）」记录的路径为准）。
 - `output/07-func-design.md`：功能设计产物。
 - `output/08-dfx-design.md`：DFX 设计产物。
 
