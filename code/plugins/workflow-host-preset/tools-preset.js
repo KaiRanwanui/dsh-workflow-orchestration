@@ -149,11 +149,35 @@ function injectInputsMap(map, params, vars, itemCtx) {
   return out
 }
 
+// workflowPath 相对路径两级链解析（MIG7 验收修复，用户拍板 2026-10-04）：
+// 优先级 = 当前工作空间（wsRoot）> 插件预置目录（detectPredefinedRoot）。
+// 替代旧的「fs.resolve 直解」——后者以 dsh web 进程 cwd（默认工作空间）为基准，
+// 属隐式硬编码（验收立即问题：进程 cwd 随启动位置漂移，报错指向错误目录）。
+// 全 miss 时返回工作区拼合路径（让报错指向工作区而非进程 cwd）。
+async function resolveWorkflowPath(fs, p, wsRoot) {
+  const raw = String(p || '')
+  if (!raw) return raw
+  if (raw.startsWith('/') || raw.startsWith('~') || /^[a-zA-Z]:[\\/]/.test(raw)) return raw
+  const rel = raw.replace(/^\.\//, '')
+  const bases = []
+  if (wsRoot) bases.push(String(wsRoot).replace(/\/+$/, ''))
+  if (typeof detectPredefinedRoot === 'function') {
+    const pd = detectPredefinedRoot()
+    if (pd) bases.push(pd)
+  }
+  for (const b of bases) {
+    const cand = b + '/' + rel
+    try { const st = await fs.stat(await fs.resolve(cand)); if (st) return cand } catch (e) { /* 下一级 */ }
+  }
+  return bases.length ? bases[0] + '/' + rel : raw
+}
+
 // 工作流文件加载：优先 workflowPath（读文件），兜底 workflowText（直接用）。
 // Iter-24：相对引用不再以定义文件目录为基准，统一两级链（workspace 根优先）。
+// MIG7：workflowPath 相对路径经 resolveWorkflowPath 两级链解析（见上）。
 async function loadWorkflowSource(fs, args, wsRoot) {
   if (args.workflowPath) {
-    const p = String(args.workflowPath)
+    const p = await resolveWorkflowPath(fs, args.workflowPath, wsRoot)
     const text = await fs.readText(await fs.resolve(p))
     return { text, workspaceRoot: wsRoot }
   }
@@ -676,12 +700,13 @@ function sessionCwd(exec) {
 //   - 显式 statePath/workspaceRoot 参数或无会话上下文 → 回退单实例绑定
 //     （engine/storage 形参，保持既有行为与旧布局兼容）。
 function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
-  const fs = ctx.get('fs')
+  const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
 
   // ── Iter-24：预定义目录物化（模板+技能+骨架；幂等覆盖；失败不阻断工具注册）──
-  // 兼任探针：journalctl 搜 "[workflow-agent] materialize" 即见 Host fs 对
-  // ~/.dsh/ 的写能力与物化结果。fire-and-forget，不等待。
-  if (fs) {
+  // 兼任探针：控制台搜 "[workflow-agent] materialize" 即见物化结果。fire-and-forget。
+  // 0.2.0 / B4：物化已改 node:fs 直写（DSH fs 服务为 workspace-write 沙箱，home 目标
+  // 必拒）→ 不再以 fs 服务存在为前置，始终执行（物化自身容错，失败仅记日志）。
+  {
     try {
       materializeBuiltinAssets(fs)
         .then((r) => {
@@ -1279,6 +1304,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         // 官方契约「absent/idle/completed 目标 = accepted no-op」→ **放弃判活，对全部 child 条目
         // 直接下发 interrupt**：活着的被打断，死的自动 no-op。单子失败不阻断 stop 主流程。
         // Iter-23(方向A)：手工停 DSH 会话路径（A1 事件 tap / A2 sync 轮询）走 applyUserStop 同语义。
+        // 0.2.0（阶段 6 / B1）：SubagentCatalogEntry 无 kind 字段——有 id 即纳入，kind 存在时才校验。
         let stoppedChildren = 0
         try {
           const sid = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.id : undefined
@@ -1286,7 +1312,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
           if (subagents && typeof subagents.listChildren === 'function' && sid) {
             const entries = await subagents.listChildren(sid)
             const list = Array.isArray(entries) ? entries : []
-            const childIds = list.filter((ch) => ch && ch.kind === 'child' && ch.id).map((ch) => ch.id)
+            const childIds = list.filter((ch) => ch && ch.id && (!('kind' in ch) || ch.kind === 'child')).map((ch) => ch.id)
             for (const cid of childIds) {
               try {
                 await subagents.interruptByParent(cid, sid, 'continuable')
@@ -1527,5 +1553,5 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
 
 // 供 Node 独立验证（与宿主体内同构）：{ registerWorkflowToolsPreset, resolveRefPath, injectParams, injectArray, injectInputsMap, sessionCwd }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath: E_isAbsoluteishPath, resolveStaticPath: E_resolveStaticPath, presetTemplateDirOf: E_presetTemplateDirOf, copyTemplateStaticTree, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError, finalizeDataflow, absolutizeDataflowPath }
+  module.exports = { registerWorkflowToolsPreset, resolveRefPath, isAbsoluteishPath: E_isAbsoluteishPath, resolveStaticPath: E_resolveStaticPath, presetTemplateDirOf: E_presetTemplateDirOf, copyTemplateStaticTree, mergeTemplateLists, injectParams, injectArray, injectInputsMap, sessionCwd, expandLoopTasks, expandConcurrentTasks, stripInstanceHeader, expandDefinition, definitionError, finalizeDataflow, absolutizeDataflowPath, loadWorkflowSource, resolveWorkflowPath }
 }

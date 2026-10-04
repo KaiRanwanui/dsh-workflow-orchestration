@@ -228,6 +228,14 @@ async function validateWorkflow(opts) {
     // E-GATE-CHECKER-MISSING（自 parser warning 升级；gateRaw 属性仅在 quality-gate 对象存在时由 parser 设置）
     if ('gateRaw' in t && t.gateRaw == null) {
       pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'quality-gate 未指定 checker——该门禁必须补全')
+    } else if ('gateRaw' in t && t.gateRaw != null && fs) {
+      // MIG7 验收修复（用户拍板 2026-10-04）：checker 技能存在性两级链检查——与 processor
+      //（E-SKILL-MISSING）同语义同实现。修订 iter27b「checker 文件缺失不入校验（保持
+      // 启动期报错）」的旧决策：验收实证「填了不存在的 checker 也能通过创建」属校验漏洞。
+      const gref = wvNormalize(expandRef(t.gateRaw, params, dirVars))
+      if (gref.indexOf('${') === -1 && !(await skillRefExists(fs, gref, o.workspaceRoot, o.predefinedRoot))) {
+        pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'checker 技能不存在（两级链 miss）: ' + gref)
+      }
     }
     // W-GATE-RETRY-MISMATCH（Iter-36）：max-retries 仅在 on-failure: retry 时生效——
     // 配在 skip/block 模式下静默无效（verify-gate-4423b98e 验证混淆实证），保存时提示
@@ -271,7 +279,15 @@ async function validateWorkflow(opts) {
         }
         const found = await probeStaticPath(fs, raw, probeOpts)
         if (found.status === 'miss') {
-          pushE('E-INPUT-MISSING', t.id, 'inputs.' + key, '输入文件不存在且非上游产出: ' + expanded)
+          // MIG7 修复（用户验收反馈 2026-10-04）：断链场景智能提示——上游改名 outputs 后
+          // 下游未同步，旧文案「输入文件不存在」会误导为「output 存在性校验」。现检测同目录
+          // 下的上游 outputs 候选（疑似改名），错误消息直接指认断链（文案按用户反馈精简：
+          // 只列当前上游声明，不附修复指引括号）。
+          const dir = expanded.slice(0, expanded.lastIndexOf('/'))
+          const hints = allOutputs.filter((ov) => ov !== expanded && ov.slice(0, ov.lastIndexOf('/')) === dir).slice(0, 3)
+          let msg = '输入文件不存在且非上游产出: ' + expanded
+          if (hints.length) msg += '——疑似上游 outputs 已改名/断链，当前上游声明为: ' + hints.join(' ; ')
+          pushE('E-INPUT-MISSING', t.id, 'inputs.' + key, msg)
         }
       }
     }

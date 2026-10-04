@@ -3,7 +3,7 @@
 > **给新会话 / 新成员的工程导航**：本文回答「代码在哪、机制怎么跑、改一处要动什么」。
 > 项目是什么、当前进展 → 根 [`README.md`](README.md) 与 [`plan/status.md`](plan/status.md)；文档地图 → [`plan/README.md`](plan/README.md)。
 
-**最后校订**：2026-09-14（对齐 DSH 0.1.5-rc.2 / host v0.21.0 / client v0.9.1）
+**最后校订**：2026-10-03（对齐 DSH 0.2.0-rc.2 / host v0.28.7 / macOS；阶段 6 迁移完成后刷新，细节以 [`plan/phases/phase-6-dsh-020-migration/`](plan/phases/phase-6-dsh-020-migration/) 为准）
 
 ---
 
@@ -65,11 +65,14 @@ workflow-agent/
 
 | 用途 | 位置 |
 |---|---|
-| 运行中的 DSH 安装（插件加载的实包） | `/home/zhaokai/.npm-global/lib/node_modules/@deepseek-ai/dsh/`（卫星包在该目录 `node_modules/@deepseek-ai/` 下） |
-| 本地 DSH 源码镜像 / 升级调研包 | `~/Projects/dsh_projects/deepseek-harness-master/`、`~/Projects/dsh_projects/dsh-upgrade-lab/` |
-| 进行中的 profile | `~/.dsh/profiles/web/`（`package.json` + `cordis.patch.yml` + `node_modules`） |
-| Agent preset 部署点 | `~/.dsh/.agent-presets/workflow-orchestrator/` |
-| 内建资产物化点 | `~/.dsh/workflow-agent/`（模板/技能/samples/docs） |
+| 运行中的 DSH 安装（0.2.0-rc.2，macOS） | `~/.local/share/dsh-cli/node_modules/@deepseek-ai/`（289 卫星包；该目录为残留工具代码，**不做迁移关注对象**） |
+| 本地 DSH 源码（git 克隆，双 tag 齐） | `~/Projects/dsh_projects/deepseek-harness/`（`git diff dsh-v0.1.5-rc.2 dsh-v0.2.0-rc.2 -- <路径>` 对照） |
+| 开发 home / 进行中的 profile | `~/.dsh-dev/`（`DSH_HOME`）；profile 在 `~/.dsh-dev/profiles/web/`。**`~/.dsh` 属 dsh-desktop，勿混用** |
+| Agent preset | **随包声明**：`code/packages/workflow-host/presets/workflow-orchestrator.patch.yml`（0.2.0 起无目录部署） |
+| 内建资产物化点 | `~/.dsh-dev/workflow-agent/`（模板/技能/samples/docs；node:fs 直写，B4） |
+| 安装方式 | `node code/scripts/install.js --tgz release`（只从打包产物安装；bundles 自动注册） |
+
+**0.2.0 关键语义（真机实证，迁移细节见阶段 6 报告）**：fs 服务 workspace-write 沙箱（插件私有写入走 `shared/fs-host.js` node:fs 直写）；`sessions` 快照无 `current`（页签门控改哨兵复活，B6）；`listChildren` 返回 `SubagentCatalogEntry`（无 kind）；preset 目录扫描退役（agent-preset-registry 声明制）。
 
 **查服务契约的正确姿势**：
 ```bash
@@ -135,15 +138,19 @@ node code/scripts/verify-client-bundle.js
 # persona：改 system-prompt.md → 重部署 preset 即生效（3g 起运行时读取，无构建步骤）
 ```
 
-| 你要改的东西 | 编辑文件 | 必跑命令 | 生效方式 |
+| 你要改的东西 | 编辑文件 | 必跑命令 | 生效方式（MIG6 真机实证 2026-10-03） |
 |---|---|---|---|
-| 引擎 / 状态机 | `code/plugins/workflow-host/engine.js` | build → test | 重启 `dsh.service` |
+| 引擎 / 状态机 | `code/plugins/workflow-host/engine.js` | build → test → release → install | **重启 dsh web**（实证：Host 模块进程启动时一次性 require，无 HMR） |
 | 存储 / 注册表 / 归档 | `code/plugins/workflow-host/{storage,instance-store}.js` | 同上 | 同上 |
 | 工具（`workflow_*`） | `code/plugins/workflow-host-preset/tools-preset.js` | 同上 | 同上 |
 | `/wf/*` 路由、面板 Stop | `code/plugins/workflow-host/webserver-routes.js` | 同上 | 同上 |
 | inject / 探针 / A1 tap | `code/plugins/workflow-host/apply-prologue.js` | 同上 | 同上 |
-| 面板 UI | `code/packages/workflow-host/src/client.js` | client build → verify | 刷新页面 |
-| persona 提示词 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | 改后重部署 preset（install.js --preset-only） | 新建/重载 preset 会话 |
+| fs 适配层（B5） | `code/shared/fs-host.js` | 同上 | 同上 |
+| 面板 UI | `code/packages/workflow-host/src/client.js` | client build → verify → release → install | **强刷浏览器即可，无需重启 web**（实证：client bundle 按请求读盘；0.2.0 client-hmr 需 rebuild watcher，常规开发走刷新） |
+| persona 提示词 | `code/agent-presets/workflow-orchestrator/system-prompt.md` | build（复制进包）→ release → install | 新建/重载 preset 会话（3g 运行时读取机制延续） |
+
+> 完整开发循环：`node code/packages/workflow-host/build.js && node code/packages/workflow-host/build-client.mjs` → `node code/scripts/build-release.js` → `node code/scripts/install.js --tgz release` →（Host 改动）重启 dsh web /（Client 改动）强刷页面。
+> 页签门控机制（显示/隐藏）设计详见 [`plan/design/client-tab-gating-design.md`](plan/design/client-tab-gating-design.md)。
 
 > 构建链历史（sync-modules 两步链、build-preset.js）已退役，脚本在 `code/legacy/scripts/`。
 > **构建/打包/安装完整说明**：[`plan/build/build-and-release.md`](plan/build/build-and-release.md)。

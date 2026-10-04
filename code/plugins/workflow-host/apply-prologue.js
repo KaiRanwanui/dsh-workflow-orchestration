@@ -60,25 +60,26 @@ function applyInternal(ctx) {
     if (!a) return false
     try { return a.inbox ? a.inbox.hasPending === true : false } catch (e) { return false }
   }
-  // Iter-SUBA(P1/P3)：子会话聚合探针——subagents Host 服务生产实现（0.1.5 迁移：apiProxy.subagents.list
-  // 已移除，改 subagents.listChildren(parentSessionId) → SubagentListEntry[]（durable，按 createdAt/id 排序）；
-  // 旧响应双层包裹解包废弃，activity 由本插件用 agents.get(id)?.status==='running' 重算（官方判活，与
-  // 迁移前等价）。探针故障降级为空（不守卫，保持可停）。
+  // Iter-SUBA(P1/P3)：子会话聚合探针——subagents Host 服务生产实现。
+  // 0.1.5：listChildren(parentSessionId) → SubagentListEntry[]（{kind:'child',id,activity,hasChildren}）；
+  // 0.2.0（阶段 6 / B1）：返回重构为 SubagentCatalogEntry[]（{id,createdAt,mode:'one-shot'|'continuable'|'unknown',label}
+  //   ——**无 kind/activity 字段**）。过滤条件改为「有 id 即纳入；kind 字段存在时才校验」，两种形状通吃。
+  // 判活：0.1.5 实证（Phase 3）agents store 不含子会话（agents.get(childId) 恒 undefined），
+  //   activity 亦不可靠（子会话在跑仍报 inactive）→ 主源 sessions.get(child)（resident = live
+  //   activation）；agents 兜底保留。探针故障降级为空（不守卫，保持可停）。
   const listRunningChildren = async (parentSessionId) => {
     try {
       const subagents = ctx.get('subagents')
       if (!subagents || typeof subagents.listChildren !== 'function') return []
       const entries = await subagents.listChildren(parentSessionId)
       const list = Array.isArray(entries) ? entries : []
-      // 0.1.5 实证（Phase 3）：agents store 不含子会话（agents.get(childId) 恒 undefined）；
-      // activity 字段亦不可靠（子会话在跑仍报 inactive）。判活主源改为 sessions.get(child)
-      // （resident = live activation，0.1.1 同源语义）；activity/agents 仅作兜底。
       const liveChild = (id) => {
         try { return !!(sessions && typeof sessions.get === 'function' && sessions.get(id)) } catch (e0) { return false }
       }
       const running = list
         .filter((e) => {
-          if (!e || e.kind !== 'child' || !e.id) return false
+          if (!e || !e.id) return false
+          if ('kind' in e && e.kind !== 'child') return false // 仅 0.1.5 形状含 kind（diagnostic 条目剔除）
           return liveChild(e.id) || e.activity === 'running' || isAgentRunning(e.id) === true
         })
         .map((e) => e.id)

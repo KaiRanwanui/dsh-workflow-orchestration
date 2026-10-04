@@ -4,6 +4,9 @@
 // 用法：node code/scripts/test-host.js
 // ============================================================================
 
+// B5：关闭 Host fs 适配层直写——单测对产物直测时走 mock 注入的 fs 服务形状
+process.env.WF_HOST_FS = '0'
+
 const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
 const { createWorkflowEngine } = require('../plugins/workflow-host/engine.js')
 const { TASK_TYPES, TASK_STATUS, STAGE } = require('../shared/workflow-schema.js')
@@ -715,9 +718,9 @@ async function runCase16() {
       if (n === 'tools') return { register(t) { bag[t.name] = t } }
       if (n === 'subagents') {
         return {
-          // 0.1.5 迁移：apiProxy.subagents 退役 → subagents 服务新形状 mock
-          // listChildren(parentSessionId) → SubagentListEntry[]（durable；activity 由插件用 agents 重算）
-          listChildren: async (parentSessionId) => (childrenBySession[parentSessionId] || []).map((id) => ({ kind: 'child', id })),
+          // 阶段 6（B1）：mock 改 0.2.0 SubagentCatalogEntry 形状（{id,createdAt,mode,label}，无 kind/activity）
+          // listChildren(parentSessionId) → SubagentCatalogEntry[]（durable）
+          listChildren: async (parentSessionId) => (childrenBySession[parentSessionId] || []).map((id) => ({ id, createdAt: 0, mode: 'continuable', label: 'subtask' })),
           // interruptByParent(childSessionId, parentSessionId, mode) → { accepted: true }
           interruptByParent: async (childSessionId) => { interrupted.push(childSessionId); runningChildren.delete(childSessionId); return { accepted: true } },
         }
@@ -812,29 +815,34 @@ async function runCase18() {
     if (savedEnv.HOME !== undefined) process.env.HOME = savedEnv.HOME
   }
 
-  // 2) 首次物化：全量复制（幂等覆盖语义——含 README/docs）
-  const r = await materializeBuiltinAssets(mockFs, { assetsDir })
-  check('c18 物化: ok', r.ok === true)
-  check('c18 物化: 根路径回传', r.root === detectPredefinedRoot())
-  check('c18 物化: 全量复制（文件数一致）', r.written.length === rels.length, r.written.length + ' vs ' + rels.length)
-  check('c18 物化: 技能写出', r.written.some((p) => p.indexOf('skills/deep-analysis/SKILL.md') >= 0))
-  check('c18 物化: 模板写出（子目录布局）', r.written.some((p) => p.indexOf('templates/serial-demo/serial-demo.yaml') >= 0))
-  check('c18 物化: README 写出', r.written.some((p) => p.indexOf('docs/README.md') >= 0))
-  const skillPath = r.root + '/skills/spec-writer/SKILL.md'
-  check('c18 技能: 内容含 frontmatter name', String(files.get(skillPath)).startsWith('---\nname: spec-writer\n---'))
+  // 2) 首次物化：node:fs 直写（0.2.0 / B4——不再经 DSH fs 服务）→ 注入临时 root
+  const os = require('os')
+  const tmpRoot = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), 'wf-mat-'))
+  try {
+    const r = await materializeBuiltinAssets(null, { assetsDir, root: tmpRoot })
+    check('c18 物化: ok', r.ok === true, r.failed && r.failed[0])
+    check('c18 物化: 根路径回传', r.root === tmpRoot)
+    check('c18 物化: 全量复制（文件数一致）', r.written.length === rels.length, r.written.length + ' vs ' + rels.length)
+    check('c18 物化: 技能写出', r.written.some((p) => p.indexOf('skills/deep-analysis/SKILL.md') >= 0))
+    check('c18 物化: 模板写出（子目录布局）', r.written.some((p) => p.indexOf('templates/serial-demo/serial-demo.yaml') >= 0))
+    check('c18 物化: README 写出', r.written.some((p) => p.indexOf('docs/README.md') >= 0))
+    const skillPath = nodePath.join(tmpRoot, 'skills/spec-writer/SKILL.md')
+    check('c18 技能: 内容含 frontmatter name', nodeFs.readFileSync(skillPath, 'utf8').startsWith('---\nname: spec-writer\n---'))
 
-  // 3) 幂等覆盖：用户改写后再物化 → 覆盖回包内规范内容（幂等覆盖语义：README 也覆盖）
-  files.set(r.root + '/skills/spec-writer/SKILL.md', 'user edited\n')
-  files.set(r.root + '/docs/README.md', 'user custom\n')
-  const srcSpec = nodeFs.readFileSync(nodePath.join(assetsDir, 'skills/spec-writer/SKILL.md'), 'utf8')
-  const r2 = await materializeBuiltinAssets(mockFs, { assetsDir })
-  check('c18 幂等: ok', r2.ok === true)
-  check('c18 幂等: 用户改写被包内规范内容覆盖', String(files.get(r.root + '/skills/spec-writer/SKILL.md')).startsWith('---\nname: spec-writer\n---'))
-  check('c18 幂等: docs/README 覆盖回包内内容', String(files.get(r.root + '/docs/README.md')) === nodeFs.readFileSync(nodePath.join(assetsDir, 'docs/README.md'), 'utf8'))
+    // 3) 幂等覆盖：用户改写后再物化 → 覆盖回包内规范内容（幂等覆盖语义：README 也覆盖）
+    nodeFs.writeFileSync(nodePath.join(tmpRoot, 'skills/spec-writer/SKILL.md'), 'user edited\n')
+    nodeFs.writeFileSync(nodePath.join(tmpRoot, 'docs/README.md'), 'user custom\n')
+    const r2 = await materializeBuiltinAssets(null, { assetsDir, root: tmpRoot })
+    check('c18 幂等: ok', r2.ok === true)
+    check('c18 幂等: 用户改写被包内规范内容覆盖', nodeFs.readFileSync(nodePath.join(tmpRoot, 'skills/spec-writer/SKILL.md'), 'utf8').startsWith('---\nname: spec-writer\n---'))
+    check('c18 幂等: docs/README 覆盖回包内内容', nodeFs.readFileSync(nodePath.join(tmpRoot, 'docs/README.md'), 'utf8') === nodeFs.readFileSync(nodePath.join(assetsDir, 'docs/README.md'), 'utf8'))
 
-  // 4) fs 不可用 / 根不可定位降级
-  const rNoFs = await materializeBuiltinAssets(null, { assetsDir })
-  check('c18 降级: fs 缺失 → ok:false + reason', rNoFs.ok === false && !!rNoFs.reason)
+    // 4) 降级：assetsDir 不可列表 → ok:false + reason（B4：不再依赖 fs 服务，降级点移至资产源）
+    const rBad = await materializeBuiltinAssets(null, { assetsDir: '/nonexistent-wf-assets', root: tmpRoot })
+    check('c18 降级: assetsDir 缺失 → ok:false + reason', rBad.ok === false && !!rBad.reason)
+  } finally {
+    nodeFs.rmSync(tmpRoot, { recursive: true, force: true })
+  }
 }
 
 // ── 用例 19：两级解析链（Iter-24）──
@@ -1051,7 +1059,7 @@ function check(name, cond, extra) {
 // ── 用例 20：数据流显性化（Iter-25：目录变量 + inputs/outputs 绝对化 + 落盘 + 创建警告）──
 async function runCase20() {
   console.log('［用例 20］数据流显性化 — 目录变量注入 + inputs/outputs 绝对化 + 落盘 + create 警告')
-  const { expandDefinition, finalizeDataflow, injectParams, registerWorkflowToolsPreset } = require('../plugins/workflow-host-preset/tools-preset.js')
+  const { expandDefinition, finalizeDataflow, injectParams, registerWorkflowToolsPreset, loadWorkflowSource } = require('../plugins/workflow-host-preset/tools-preset.js')
   const { parseWorkflow, parseYaml } = require('../shared/workflow-parser')
   const { validateWorkflow } = require('../shared/workflow-validate')
 
@@ -1066,6 +1074,37 @@ async function runCase20() {
   check('c20 validate: fs 缺失降级不误报（无 E-SKILL/E-INPUT）', !mv.errors.some(e => e.code === 'E-SKILL-MISSING' || e.code === 'E-INPUT-MISSING'), JSON.stringify(mv.errors))
   const okParsed = parseWorkflow('name: o\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/SKILL.md\n')
   check('c20 parser: 完好定义零警告', okParsed.warnings.length === 0, okParsed.warnings)
+
+  // 1b) MIG7 验收修复：checker 存在性两级链检查（与 E-SKILL-MISSING 同语义）
+  {
+    const { files, fs: mockFs } = makeMockFs()
+    files.set('/x/proc.md', 'p'); files.set('/x/real-gate.md', 'g') // processor 与真 checker 在场，假 checker 缺席
+    const gw = 'name: gc\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/proc.md\n    quality-gate:\n      checker: /x/fake-gate.md\n      on-failure: retry\n'
+    const gv = await validateWorkflow({ parsed: parseWorkflow(gw), context: 'definition', fs: mockFs, workspaceRoot: '/ws' })
+    check('c20 MIG7: 假 checker → E-GATE-CHECKER-MISSING（两级链 miss）', gv.errors.some(e => e.code === 'E-GATE-CHECKER-MISSING' && e.task === 'a' && /fake-gate/.test(e.message || '')), JSON.stringify(gv.errors))
+    const gw2 = gw.replace('fake-gate', 'real-gate')
+    const gv2 = await validateWorkflow({ parsed: parseWorkflow(gw2), context: 'definition', fs: mockFs, workspaceRoot: '/ws' })
+    check('c20 MIG7: 真 checker 不误报', !gv2.errors.some(e => e.code === 'E-GATE-CHECKER-MISSING'), JSON.stringify(gv2.errors))
+  }
+
+  // 1d) MIG7 验收修复：E-INPUT-MISSING 断链智能提示（上游改名场景）
+  {
+    const renameWf = 'name: rn\nversion: "1"\ntasks:\n  - id: up\n    processor: /x/up.md\n    outputs: [output/analysis2.md]\n  - id: down\n    processor: /x/down.md\n    inputs:\n      a: output/analysis.md\n    outputs: [output/s.md]\n    depends-on: [up]\n'
+    const rv = await validateWorkflow({ parsed: parseWorkflow(renameWf), context: 'definition', fs: makeMockFs().fs, workspaceRoot: '/ws' })
+    const rErr = rv.errors.find(e => e.code === 'E-INPUT-MISSING')
+    check('c20 MIG7: 断链提示指认疑似改名', !!rErr && rErr.message.includes('疑似上游 outputs 已改名') && rErr.message.includes('output/analysis2.md') && !rErr.message.includes('请同步更新'), rErr && rErr.message)
+  }
+
+  // 1c) MIG7 验收修复：workflowPath 相对路径两级链（工作空间 > 预置目录；不再以进程 cwd 为基准）
+  {
+    const { files, fs: mockFs } = makeMockFs()
+    files.set('/ws/wf/rel.yaml', 'name: r\nversion: "1"\ntasks:\n  - id: a\n    processor: /x/SKILL.md\n')
+    const src1 = await loadWorkflowSource(mockFs, { workflowPath: 'wf/rel.yaml' }, '/ws')
+    check('c20 MIG7: 相对路径命中工作空间', !!(src1 && src1.text && src1.text.includes('name: r')), JSON.stringify(src1 && src1.text).slice(0, 80))
+    let errPath = ''
+    try { await loadWorkflowSource(mockFs, { workflowPath: 'no/such.yaml' }, '/ws') } catch (e) { errPath = String(e.message || e) }
+    check('c20 MIG7: miss 路径以工作空间为前缀', errPath.includes('/ws/no/such.yaml'), errPath)
+  }
 
   // 2) D2：目录变量保留字优先于同名 params
   check('c20 D2: 保留字优先', injectParams('${workspace}', { workspace: 'FROM_PARAM' }, { workspace: '/realws' }) === '/realws')

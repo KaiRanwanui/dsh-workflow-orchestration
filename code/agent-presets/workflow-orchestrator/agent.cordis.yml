@@ -1,3 +1,10 @@
+# ============================================================================
+# ⚠️ 阶段 6 / B2 已退役（2026-10）：本文件不再参与构建与部署，仅留档。
+#    preset 组成的唯一权威 → code/packages/workflow-host/presets/workflow-orchestrator.patch.yml
+#    （随包声明，经 dsh.bundle.patch 链生效；目录式扫描机制在 DSH 0.2.0 已删除）
+#    本目录中 persona-file.mjs + system-prompt.md 仍为构建源（build.js 复制进包）。
+# ============================================================================
+
 # workflow-orchestrator agent preset
 # 通用工作流编排 Agent：串行执行 + 质量门禁 + 重试。
 #

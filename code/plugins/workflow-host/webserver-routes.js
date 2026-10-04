@@ -166,7 +166,7 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 function registerWebRoutes(ctx, registry) {
   const webserver = ctx.get('webServer')
   if (!webserver) return // 可选能力：webServer 不存在时静默跳过
-  const fs = ctx.get('fs')
+  const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
   // Iter-29：下载产物暂存（token → {bytes, filename, at}；一次性取走即焚 + 数量/总量上限）
   const downloadArtifacts = new Map()
 
@@ -331,7 +331,10 @@ function registerWebRoutes(ctx, registry) {
             let text = srcText
             if (!text && srcPath) {
               try {
-                text = await fs.readText(await fs.resolve(srcPath))
+                // MIG7 验收修复：相对路径两级链（当前工作空间 > 插件预置目录）——
+                // 替代进程 cwd 基准（隐式硬编码，验收立即问题）
+                const resolved = await resolveWorkflowPath(fs, srcPath, root)
+                text = await fs.readText(await fs.resolve(resolved))
               } catch (e) {
                 writeJson(res, 400, { error: 'cannot read workflowPath: ' + (e && e.message ? e.message : String(e)) })
                 return
@@ -423,10 +426,13 @@ function registerWebRoutes(ctx, registry) {
           const rel = path.replace(/^\.\//, '')
           const wsRoot36 = (query.get('workspaceRoot') || '').replace(/\\/g, '/').replace(/\/+$/, '')
           const pre36 = detectPredefinedRoot()
+          // MIG7 修复（用户复验反馈 2026-10-04）：候选全 miss 后不再「相对路径原样直解」——
+          // fs-host 的 fs.resolve 以 dsh web 进程 cwd（默认工作空间）为基准，报错路径误导
+          //（验收复验：normal_ws/output/analysis.md）。相对路径仅两级链（工作空间/预置目录），
+          // miss 即明确报错；「未绑定实例的相对 outputs」由 absolutize 基准问题单独立项（O-12）。
           const candidates = isAbs ? [path] : [].concat(
             wsRoot36 ? [wsRoot36 + '/' + rel] : [],
-            pre36 ? [pre36.replace(/\/+$/, '') + '/' + rel] : [],
-            [path]
+            pre36 ? [pre36.replace(/\/+$/, '') + '/' + rel] : []
           )
           let text = null
           let lastErr36 = null
@@ -437,7 +443,10 @@ function registerWebRoutes(ctx, registry) {
               break
             } catch (e36) { lastErr36 = e36 }
           }
-          if (text === null) throw (lastErr36 || new Error('not found: ' + path))
+          if (text === null) {
+            const scope = isAbs ? '' : (candidates.length ? '（两级链：工作空间/预置目录均未命中）' : '（无工作空间上下文，相对路径无法定位——请先绑定实例或指定工作空间）')
+            throw (lastErr36 || new Error('not found: ' + path + scope))
+          }
           writeJson(res, 200, { text, error: null })
         } catch (e) {
           writeJson(res, 200, { text: null, error: e && e.message ? e.message : String(e) })
@@ -998,7 +1007,7 @@ function registerWebRoutes(ctx, registry) {
               // 与 instance-store.recoverOrphan 同款模式；无 state.json（CREATED）维持 400。
               if (!entry.hasState) {
                 try {
-                  const fsSvc = ctx.get('fs')
+                  const fsSvc = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
                   const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
                   if (state && state.workflow) { entry.engine.hydrate(state); entry.hasState = true }
                 } catch (e0) { /* 无 state.json（CREATED）→ 保持 hasState=false */ }
@@ -1030,12 +1039,13 @@ function registerWebRoutes(ctx, registry) {
                   try { await sessionController.cancel({ sessionId: sid }); cancelled = true } catch (e2) { /* 主会话未挂载等 → 走 ②③ */ }
                 }
                 // ② 枚举全部子会话（durable 条目，含已结束者——对结束目标 interrupt/drain 均为 no-op）
+                //    0.2.0（B1）：SubagentCatalogEntry 无 kind 字段——有 id 即纳入，kind 存在时才校验（兼容 0.1.5 形状）
                 let childIds = []
                 if (sid && subagents && typeof subagents.listChildren === 'function') {
                   try {
                     const entries = await subagents.listChildren(sid)
                     childIds = (Array.isArray(entries) ? entries : [])
-                      .filter(c => c && c.kind === 'child' && c.id).map(c => c.id)
+                      .filter(c => c && c.id && (!('kind' in c) || c.kind === 'child')).map(c => c.id)
                   } catch (e2) { /* 枚举失败不阻断 */ }
                 }
                 // ③ 硬释放：drain 主会话名下的 resident continuable 激活（不依赖判活；

@@ -42,7 +42,7 @@ function createWorkflowStorage(ctx, engine) {
   // 延迟计算状态文件绝对路径（首次读写时解析）
   async function ensurePath() {
     if (statePath) return statePath
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return null
     if (explicitStatePath) {
       statePath = await fs.resolve(explicitStatePath)
@@ -72,7 +72,7 @@ function createWorkflowStorage(ctx, engine) {
   }
 
   async function save() {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return 'err: no fs'
     try {
       const p = await ensurePath()
@@ -105,7 +105,7 @@ function createWorkflowStorage(ctx, engine) {
 
   // 恢复：仅当存在有效状态文件时执行
   async function load() {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return false
     try {
       const p = await ensurePath()

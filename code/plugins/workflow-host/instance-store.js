@@ -174,7 +174,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── 创建实例目录 + 引擎条目（workflow_begin 成功路径调用）────────────────
   async function beginInstance(opts) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const cwd = normalizeDir(opts.cwd)
     if (!cwd) throw new Error('session cwd 未提供，无法创建实例目录')
@@ -242,7 +242,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── 扫描实例目录恢复最新实例（metadata.sessionId 精确匹配优先）────────────
   async function hydrateLatest(cwd, sessionId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return undefined
     let dirs = []
     try {
@@ -281,7 +281,7 @@ function createInstanceRegistry(ctx, deps) {
   // 返回 entry 或 undefined（目录/metadata 不存在）。opts.active=true 时标记为
   // 当前会话活跃实例。
   async function loadEntry(cwd, instanceId, opts) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs || !instanceId) return undefined
     const dir = instanceDirPath(cwd, instanceId)
     let meta
@@ -336,7 +336,7 @@ function createInstanceRegistry(ctx, deps) {
   // （session 状态按设计是派生的，无存储字段；这里给一个轻量判定。）
   async function sessionBindState(cwd, sessionId) {
     if (!sessionId) return { state: 'UNBOUND' }
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { state: 'UNBOUND' }
     let dirs = []
     try {
@@ -356,7 +356,7 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   async function listInstances(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return []
     let dirs = []
     try {
@@ -436,7 +436,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-11：更新实例 metadata 的辅助字段（如 reset 的 lastResetAt）────────
   async function patchMeta(cwd, instanceId, patch) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return undefined
     const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
     try {
@@ -457,7 +457,7 @@ function createInstanceRegistry(ctx, deps) {
   // （fs.writeText 自动建父目录）。骨架在场是完整性判定（checkWorkspaceTreeIntegrity）
   // 的前置，但物化本身不判定缺场（缺场=删除后异常，由完整性检查单独识别根异常）。
   async function ensureWorkspaceSkeleton(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const root = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
     await fs.writeText(await fs.resolve(root + '/instances/.gitkeep'), '')
@@ -467,7 +467,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // 读取某实例的有效 metadata（能解析且 instanceId 匹配目录名；否则视为损坏）
   async function tryReadMeta(cwd, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
     try {
       const meta = JSON.parse(await fs.readText(await fs.resolve(p)))
@@ -481,7 +481,7 @@ function createInstanceRegistry(ctx, deps) {
   // 扫描 archive/<instanceId>/<ts>_<kind>_<state>/metadata.json 是否含绑定 sessionId
   // （Iter-19 起产生归档；DONE 派生依赖。当前无归档时恒 false）。
   async function archiveDeclaresSession(cwd, sessionId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     let instanceDirs = []
     try {
       const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
@@ -509,7 +509,7 @@ function createInstanceRegistry(ctx, deps) {
   // 判定标准 = .workflow-agent 整树：在场且自洽 → ok；骨架缺场 / 退化（实例目录
   // 损坏）/ 冲突（1:1 违反）→ not ok。返回 {ok, reason?, instances, archives}。
   async function checkWorkspaceTreeIntegrity(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { ok: false, reason: 'fs-unavailable' }
     const agentRoot = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
     let children = []
@@ -573,7 +573,7 @@ function createInstanceRegistry(ctx, deps) {
   // 所有涉及冲突绑定的实例解绑（sessionId→null 回 UNBOUND 池），新建实例绑定
   // 当前会话；调用方须把 unbound 列表明确告知用户。
   async function recoverBindingConflicts(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { unbound: [], conflicts: [] }
     let dirs = []
     try {
@@ -622,7 +622,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-17：adopt（UNBOUND→BOUND，采用池中 sessionId==null 实例并写 S）──
   async function adoptInstance(cwd, sessionId, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     if (!sessionId) throw new Error('adopt 需要 sessionId')
     await ensureWorkspaceSkeleton(cwd)
@@ -674,7 +674,7 @@ function createInstanceRegistry(ctx, deps) {
     // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
     // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
     try {
-      const fsSvc = ctx.get('fs')
+      const fsSvc = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
       const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
       if (state && state.workflow) {
         if (!entry.hasState) { entry.engine.hydrate(state); entry.hasState = true }
@@ -711,7 +711,7 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   async function writeArchiveBackup(cwd, instanceId, kind, state) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const ts = archiveTimestamp()
     const dest = archiveRootPath(cwd) + '/' + instanceId + '/' + ts + '_' + kind + '_' + state
@@ -742,7 +742,7 @@ function createInstanceRegistry(ctx, deps) {
   // + metadata.json（sessionId，reset 备份可能缺失）+ listDir 递归计文件数/字节。
   // 空 <instanceId> 父目录（删除后残留）自然跳过；残缺条目（无 manifest）跳过不报错。
   async function listArchives(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return []
     let instanceDirs = []
     try {
@@ -804,7 +804,7 @@ function createInstanceRegistry(ctx, deps) {
   // activeBySession）→ node:fs 直删原实例目录（备份已落 archive，删除失败=重复不丢数据，
   // 报错可重试）。绑定会话经 archiveDeclaresSession 读备份内 metadata.json → DONE。
   async function archiveInstance(cwd, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const iid = sanitizeSegment(instanceId)
     if (!iid) throw new Error('非法 instanceId: ' + instanceId)

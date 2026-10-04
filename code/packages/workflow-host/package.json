@@ -1,19 +1,23 @@
 {
   "name": "@workflow-agent/workflow-host",
-  "version": "0.27.1",
-  "description": "Workflow Agent Host 端插件 - 提供工作流引擎、工具注册（workflow_begin / workflow_status）与 webServer HTTP 路由（/wf/*）",
+  "version": "0.29.5",
+  "description": "Workflow Agent Host 端插件 - 提供工作流引擎、工具注册（workflow_begin / workflow_status）、webServer HTTP 路由（/wf/*）与 workflow-orchestrator agent preset（随包声明）",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
+    "./persona": "./lib/persona-file.mjs",
     "./package.json": "./package.json"
   },
   "dsh": {
     "engines": {
-      "dsh": ">=0.1.5-rc.1"
+      "dsh": ">=0.2.0-rc.2"
     },
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": [
+        "./cordis.patch.yml",
+        "./presets/workflow-orchestrator.patch.yml"
+      ]
     },
     "client": {
       "inject": [],
@@ -23,7 +27,9 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
-    "presets/workflow-orchestrator/",
+    "lib/persona-file.mjs",
+    "lib/system-prompt.md",
+    "presets/workflow-orchestrator.patch.yml",
     "builtin-assets/",
     "src/",
     "build-client.mjs",

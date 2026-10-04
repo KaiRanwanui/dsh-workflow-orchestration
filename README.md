@@ -2,7 +2,7 @@
 
 基于 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的**通用工作流编排框架** —— 用 YAML 定义工作流，由 DSH Agent 驱动执行、由插件提供引擎与可视化面板。
 
-> **项目状态**：阶段 1（核心功能，30 迭代）与阶段 2（DSH 0.1.5-rc.2 迁移，5 个阶段任务）均已完成并归档；下一阶段为构建链合并重构。
+> **项目状态**：阶段 1~4 已归档；阶段 5（设计作业流）因设备迁移暂停中；**阶段 6 · DSH 0.2.0-rc.2 迁移（Mac 环境重建）已完成**——恢复阶段 5。
 > **当前状态权威 → [`plan/status.md`](plan/status.md)**（阶段表 / 版本基线 / 已知限制 / 下一步）。
 
 ---
@@ -13,7 +13,7 @@
 |---|---|
 | 它是什么 | 一个 **DSH 插件工程**（不是 DSH 修改版）：通过 Cordis 插件扩展 DSH，实现工作流的定义、编排、执行、监控与人工干预 |
 | 怎么工作 | **Agent 驱动编排**：编排 Agent 读工作流定义 → 按引擎返回的就绪顺序用 `subagent` 派发每个 Task（独立 LLM 会话）→ 用 `workflow_*` 工具上报进度；Host 插件持引擎/持久化/HTTP 路由；Client 插件渲染 DAG 面板 |
-| 当前版本 | host `v0.21.0` · client `v0.9.1`（DSH `0.1.5-rc.2`，563 单测全绿） |
+| 当前版本 | host `v0.28.7`（DSH `0.2.0-rc.2`，macOS，603 单测全绿） |
 | 现在能做什么 | 定义（YAML + 语义校验）· 编排（并发/循环/门禁）· 执行（状态机 + 停止/恢复）· 呈现（DAG 面板四键 + 实例管理）· 资产（预定义模板与技能开箱即用） |
 | 从哪看起 | 本文 → [`plan/status.md`](plan/status.md) → [`plan/README.md`](plan/README.md)（文档地图）→ [`GUIDE.md`](GUIDE.md)（代码结构与机制速查） |
 
@@ -26,7 +26,7 @@
 | 执行控制 | 引擎状态机（CREATED/PENDING/RUNNING/STOPPED/COMPLETED/FAILED）；Start/Stop/Resume/Reset 四键；权威停止（面板与 UI 停止同级） |
 | 实时监控 | `conversation.view` DAG 面板：分层布局、状态着色、执行日志、实例管理（归档/下载/删除） |
 | 数据流 | inputs/outputs 绝对路径显性化；目录变量两阶段注入；运行时 items 展开（`_loopItem`） |
-| 预定义资产 | 启动时物化到 `~/.dsh/workflow-agent/`：4 个工作流模板 + 7 个技能；模板子目录 1:1 复制到实例目录 |
+| 预定义资产 | 启动时物化到 `${DSH_HOME:-~/.dsh}/workflow-agent/`（0.2.0 起 node:fs 直写，Mac 实证 `~/.dsh-dev/workflow-agent/`）：4+ 工作流模板 + 7+ 技能；模板子目录 1:1 复制到实例目录 |
 | 语义校验 | 8 类错误码硬拦（create/start 关口）+ 2 类警告；实例编辑器（双栏 + 权限矩阵） |
 
 ## 仓库结构
@@ -49,28 +49,27 @@ workflow-agent/
 └── GUIDE.md                  # 工程导览：代码结构、关键机制、开发流程
 ```
 
-## 快速开始（开发环境）
+## 快速开始（开发环境，macOS + DSH 0.2.0）
 
-前置：DSH `0.1.5-rc.2` 已安装，web profile 在 `~/.dsh/profiles/web/`，Node ≥ 22。
+前置：DSH `0.2.0-rc.2`，开发 home 为 `~/.dsh-dev`（`DSH_HOME` 已导出；`~/.dsh` 属 dsh-desktop 勿混用），Node ≥ 22。
 
 ```bash
-# 1) 构建 Host 产物（npm 包 CJS）
+# 1) 构建三件套（Host CJS + persona 资产 + 面板 bundle）
 node code/packages/workflow-host/build.js
-
-# 2) 构建 Client 产物并做产物级验证
-node code/packages/workflow-host/build.js && node code/packages/workflow-host/build-client.mjs
+node code/packages/workflow-host/build-client.mjs
 node code/scripts/verify-client-bundle.js
 
-# 3) 单测（563 用例）
+# 2) 单测（603 用例）
 node code/scripts/test-host.js
 
-# 4) 挂载到 profile（首次/全新环境）——profile 以 link: 依赖本仓库，无需重新安装
-dsh plugin --profile web add ./code/packages/workflow-host ./code/packages/client-ui-monitor
-#    preset 部署：cp code/agent-presets/workflow-orchestrator/* ~/.dsh/.agent-presets/workflow-orchestrator/
+# 3) 发行打包 → 从打包产物安装（拍板：不直接挂源码目录）
+node code/scripts/build-release.js
+node code/scripts/install.js --tgz release       # dsh plugin add 自动注册 bundles；preset 随包生效
 
-# 5) 生效：Host 改动需重启 dsh.service；Client 改动刷新页面即可
+# 4) 生效：Host 改动重启 dsh web；Client 改动刷新页面
 ```
 
+> preset（workflow-orchestrator）随包声明（`presets/workflow-orchestrator.patch.yml` 进 bundle patch 链），安装即生效，**无独立部署步骤**。
 > 构建链细节与「改哪里 → 跑什么」对照表见 [`GUIDE.md`](GUIDE.md) 与 `plan/build/`。
 > 注意：`code/scripts/build-preset.js` 已**废弃**（运行即退出并提示现役构建链）。
 

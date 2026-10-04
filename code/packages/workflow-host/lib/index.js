@@ -1,6 +1,6 @@
 // @workflow-agent/workflow-host — CJS 产物（AUTO-GENERATED，勿手编）
 // 生成器：code/packages/workflow-host/build.js；清单：code/scripts/module-manifest.js
-// 源模块：plugins/workflow-host/apply-prologue.js, shared/workflow-schema.js, shared/workflow-parser.js, shared/workflow-paths.js, shared/workflow-validate.js, shared/workflow-edit.js, shared/zip-writer.js, shared/items-extract.js, plugins/workflow-host/engine.js, plugins/workflow-host/storage.js, plugins/workflow-host/instance-store.js, plugins/workflow-host/builtin-materialize.js, plugins/workflow-host-preset/tools-preset.js, plugins/workflow-host/webserver-routes.js
+// 源模块：plugins/workflow-host/apply-prologue.js, shared/fs-host.js, shared/workflow-schema.js, shared/workflow-parser.js, shared/workflow-paths.js, shared/workflow-validate.js, shared/workflow-edit.js, shared/zip-writer.js, shared/items-extract.js, plugins/workflow-host/engine.js, plugins/workflow-host/storage.js, plugins/workflow-host/instance-store.js, plugins/workflow-host/builtin-materialize.js, plugins/workflow-host-preset/tools-preset.js, plugins/workflow-host/webserver-routes.js
 
 const name = "workflow-host"
 const inject = ["fs","tools","subagents","agents","sessionController","sessions"]
@@ -67,25 +67,26 @@ function applyInternal(ctx) {
     if (!a) return false
     try { return a.inbox ? a.inbox.hasPending === true : false } catch (e) { return false }
   }
-  // Iter-SUBA(P1/P3)：子会话聚合探针——subagents Host 服务生产实现（0.1.5 迁移：apiProxy.subagents.list
-  // 已移除，改 subagents.listChildren(parentSessionId) → SubagentListEntry[]（durable，按 createdAt/id 排序）；
-  // 旧响应双层包裹解包废弃，activity 由本插件用 agents.get(id)?.status==='running' 重算（官方判活，与
-  // 迁移前等价）。探针故障降级为空（不守卫，保持可停）。
+  // Iter-SUBA(P1/P3)：子会话聚合探针——subagents Host 服务生产实现。
+  // 0.1.5：listChildren(parentSessionId) → SubagentListEntry[]（{kind:'child',id,activity,hasChildren}）；
+  // 0.2.0（阶段 6 / B1）：返回重构为 SubagentCatalogEntry[]（{id,createdAt,mode:'one-shot'|'continuable'|'unknown',label}
+  //   ——**无 kind/activity 字段**）。过滤条件改为「有 id 即纳入；kind 字段存在时才校验」，两种形状通吃。
+  // 判活：0.1.5 实证（Phase 3）agents store 不含子会话（agents.get(childId) 恒 undefined），
+  //   activity 亦不可靠（子会话在跑仍报 inactive）→ 主源 sessions.get(child)（resident = live
+  //   activation）；agents 兜底保留。探针故障降级为空（不守卫，保持可停）。
   const listRunningChildren = async (parentSessionId) => {
     try {
       const subagents = ctx.get('subagents')
       if (!subagents || typeof subagents.listChildren !== 'function') return []
       const entries = await subagents.listChildren(parentSessionId)
       const list = Array.isArray(entries) ? entries : []
-      // 0.1.5 实证（Phase 3）：agents store 不含子会话（agents.get(childId) 恒 undefined）；
-      // activity 字段亦不可靠（子会话在跑仍报 inactive）。判活主源改为 sessions.get(child)
-      // （resident = live activation，0.1.1 同源语义）；activity/agents 仅作兜底。
       const liveChild = (id) => {
         try { return !!(sessions && typeof sessions.get === 'function' && sessions.get(id)) } catch (e0) { return false }
       }
       const running = list
         .filter((e) => {
-          if (!e || e.kind !== 'child' || !e.id) return false
+          if (!e || !e.id) return false
+          if ('kind' in e && e.kind !== 'child') return false // 仅 0.1.5 形状含 kind（diagnostic 条目剔除）
           return liveChild(e.id) || e.activity === 'running' || isAgentRunning(e.id) === true
         })
         .map((e) => e.id)
@@ -148,6 +149,68 @@ function applyInternal(ctx) {
   if (offUserAbortTap) ctx.effect(() => offUserAbortTap, 'wf-user-abort-tap')
   ctx.effect(() => () => {})
 }
+
+// ---- module: fs-host (shared/fs-host.js) ----
+// ============================================================================
+// workflow-agent — Host 侧 fs 适配层（阶段 6 / B5，2026-10-03）
+// 文件：code/shared/fs-host.js
+//
+// 背景（真机实证）：DSH 0.2.0 fs 服务引入 workspace-write 文件沙箱（fs-sandbox，
+// 可写根 = policy.workspaceRoot + /tmp），插件在 Host 进程作用域的写入（实例目录、
+// 状态、gitkeep；目标在用户会话工作区内也会被拒——Host fs 的 workspaceRoot ≠ 会话
+// 工作区）。实例/状态数据属插件私有装配（同 B4 物化的信任层级），改 node:fs 直写。
+//
+// 形状契约：与 DSH fs 服务及 test-host makeMockFs 逐字段对齐——
+//   resolve(p) -> {path}          writeText(target, content)（自动建父目录）
+//   readText(target) -> string    （缺失抛错，与 mock/服务一致）
+//   stat(target) -> undefined | {path,size}（不存在返回 undefined，不抛）
+//   listDir(target) -> [{name,type:'file'|'directory',target:{path},size?}]
+//
+// 开关：WF_HOST_FS=0 时置 null（test-host 对产物直测时走 mock 注入的 fs 服务形状）。
+// 消费点统一形态：const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
+// ============================================================================
+
+function createHostFs() {
+  const nodeFs = require('fs')
+  const nodePath = require('path')
+  const asPath = (t) => (typeof t === 'string' ? t : t.path)
+  return {
+    async resolve(p) { return { path: nodePath.resolve(String(p)) } },
+    async writeText(t, content) {
+      const p = asPath(t)
+      nodeFs.mkdirSync(nodePath.dirname(p), { recursive: true })
+      nodeFs.writeFileSync(p, String(content))
+      return { operation: 'create' }
+    },
+    async readText(t) {
+      return nodeFs.readFileSync(asPath(t), 'utf8')
+    },
+    async stat(t) {
+      const p = asPath(t)
+      try {
+        const st = nodeFs.statSync(p)
+        return { path: p, size: st.size }
+      } catch (e) { return undefined }
+    },
+    async listDir(t) {
+      let ents
+      try { ents = nodeFs.readdirSync(asPath(t), { withFileTypes: true }) } catch (e) { return [] }
+      return ents.map((e) => {
+        const full = nodePath.join(asPath(t), e.name)
+        const isFile = e.isFile()
+        let size
+        if (isFile) { try { size = nodeFs.statSync(full).size } catch (e2) { /* 竞态忽略 */ } }
+        return Object.assign(
+          { name: e.name, type: isFile ? 'file' : 'directory', target: { path: full } },
+          isFile ? { size } : {}
+        )
+      })
+    },
+  }
+}
+
+// 产物内恒可用（WF_HOST_FS=0 关闭，供测试走注入 mock）；单模块 require 时同样成立
+const hostFs = process.env && process.env.WF_HOST_FS === '0' ? null : createHostFs()
 
 // ---- module: workflow-schema (shared/workflow-schema.js) ----
 // ============================================================================
@@ -939,6 +1002,14 @@ async function validateWorkflow(opts) {
     // E-GATE-CHECKER-MISSING（自 parser warning 升级；gateRaw 属性仅在 quality-gate 对象存在时由 parser 设置）
     if ('gateRaw' in t && t.gateRaw == null) {
       pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'quality-gate 未指定 checker——该门禁必须补全')
+    } else if ('gateRaw' in t && t.gateRaw != null && fs) {
+      // MIG7 验收修复（用户拍板 2026-10-04）：checker 技能存在性两级链检查——与 processor
+      //（E-SKILL-MISSING）同语义同实现。修订 iter27b「checker 文件缺失不入校验（保持
+      // 启动期报错）」的旧决策：验收实证「填了不存在的 checker 也能通过创建」属校验漏洞。
+      const gref = wvNormalize(expandRef(t.gateRaw, params, dirVars))
+      if (gref.indexOf('${') === -1 && !(await skillRefExists(fs, gref, o.workspaceRoot, o.predefinedRoot))) {
+        pushE('E-GATE-CHECKER-MISSING', t.id, 'quality-gate', 'checker 技能不存在（两级链 miss）: ' + gref)
+      }
     }
     // W-GATE-RETRY-MISMATCH（Iter-36）：max-retries 仅在 on-failure: retry 时生效——
     // 配在 skip/block 模式下静默无效（verify-gate-4423b98e 验证混淆实证），保存时提示
@@ -982,7 +1053,15 @@ async function validateWorkflow(opts) {
         }
         const found = await probeStaticPath(fs, raw, probeOpts)
         if (found.status === 'miss') {
-          pushE('E-INPUT-MISSING', t.id, 'inputs.' + key, '输入文件不存在且非上游产出: ' + expanded)
+          // MIG7 修复（用户验收反馈 2026-10-04）：断链场景智能提示——上游改名 outputs 后
+          // 下游未同步，旧文案「输入文件不存在」会误导为「output 存在性校验」。现检测同目录
+          // 下的上游 outputs 候选（疑似改名），错误消息直接指认断链（文案按用户反馈精简：
+          // 只列当前上游声明，不附修复指引括号）。
+          const dir = expanded.slice(0, expanded.lastIndexOf('/'))
+          const hints = allOutputs.filter((ov) => ov !== expanded && ov.slice(0, ov.lastIndexOf('/')) === dir).slice(0, 3)
+          let msg = '输入文件不存在且非上游产出: ' + expanded
+          if (hints.length) msg += '——疑似上游 outputs 已改名/断链，当前上游声明为: ' + hints.join(' ; ')
+          pushE('E-INPUT-MISSING', t.id, 'inputs.' + key, msg)
         }
       }
     }
@@ -2353,7 +2432,7 @@ function createWorkflowStorage(ctx, engine) {
   // 延迟计算状态文件绝对路径（首次读写时解析）
   async function ensurePath() {
     if (statePath) return statePath
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return null
     if (explicitStatePath) {
       statePath = await fs.resolve(explicitStatePath)
@@ -2383,7 +2462,7 @@ function createWorkflowStorage(ctx, engine) {
   }
 
   async function save() {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return 'err: no fs'
     try {
       const p = await ensurePath()
@@ -2416,7 +2495,7 @@ function createWorkflowStorage(ctx, engine) {
 
   // 恢复：仅当存在有效状态文件时执行
   async function load() {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return false
     try {
       const p = await ensurePath()
@@ -2611,7 +2690,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── 创建实例目录 + 引擎条目（workflow_begin 成功路径调用）────────────────
   async function beginInstance(opts) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const cwd = normalizeDir(opts.cwd)
     if (!cwd) throw new Error('session cwd 未提供，无法创建实例目录')
@@ -2679,7 +2758,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── 扫描实例目录恢复最新实例（metadata.sessionId 精确匹配优先）────────────
   async function hydrateLatest(cwd, sessionId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return undefined
     let dirs = []
     try {
@@ -2718,7 +2797,7 @@ function createInstanceRegistry(ctx, deps) {
   // 返回 entry 或 undefined（目录/metadata 不存在）。opts.active=true 时标记为
   // 当前会话活跃实例。
   async function loadEntry(cwd, instanceId, opts) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs || !instanceId) return undefined
     const dir = instanceDirPath(cwd, instanceId)
     let meta
@@ -2773,7 +2852,7 @@ function createInstanceRegistry(ctx, deps) {
   // （session 状态按设计是派生的，无存储字段；这里给一个轻量判定。）
   async function sessionBindState(cwd, sessionId) {
     if (!sessionId) return { state: 'UNBOUND' }
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { state: 'UNBOUND' }
     let dirs = []
     try {
@@ -2793,7 +2872,7 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   async function listInstances(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return []
     let dirs = []
     try {
@@ -2873,7 +2952,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-11：更新实例 metadata 的辅助字段（如 reset 的 lastResetAt）────────
   async function patchMeta(cwd, instanceId, patch) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return undefined
     const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
     try {
@@ -2894,7 +2973,7 @@ function createInstanceRegistry(ctx, deps) {
   // （fs.writeText 自动建父目录）。骨架在场是完整性判定（checkWorkspaceTreeIntegrity）
   // 的前置，但物化本身不判定缺场（缺场=删除后异常，由完整性检查单独识别根异常）。
   async function ensureWorkspaceSkeleton(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const root = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
     await fs.writeText(await fs.resolve(root + '/instances/.gitkeep'), '')
@@ -2904,7 +2983,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // 读取某实例的有效 metadata（能解析且 instanceId 匹配目录名；否则视为损坏）
   async function tryReadMeta(cwd, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     const p = instanceDirPath(cwd, instanceId) + '/metadata.json'
     try {
       const meta = JSON.parse(await fs.readText(await fs.resolve(p)))
@@ -2918,7 +2997,7 @@ function createInstanceRegistry(ctx, deps) {
   // 扫描 archive/<instanceId>/<ts>_<kind>_<state>/metadata.json 是否含绑定 sessionId
   // （Iter-19 起产生归档；DONE 派生依赖。当前无归档时恒 false）。
   async function archiveDeclaresSession(cwd, sessionId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     let instanceDirs = []
     try {
       const ar = await fs.listDir(await fs.resolve(archiveRootPath(cwd)))
@@ -2946,7 +3025,7 @@ function createInstanceRegistry(ctx, deps) {
   // 判定标准 = .workflow-agent 整树：在场且自洽 → ok；骨架缺场 / 退化（实例目录
   // 损坏）/ 冲突（1:1 违反）→ not ok。返回 {ok, reason?, instances, archives}。
   async function checkWorkspaceTreeIntegrity(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { ok: false, reason: 'fs-unavailable' }
     const agentRoot = (normalizeDir(cwd) + '/.workflow-agent').replace(/\/+/g, '/')
     let children = []
@@ -3010,7 +3089,7 @@ function createInstanceRegistry(ctx, deps) {
   // 所有涉及冲突绑定的实例解绑（sessionId→null 回 UNBOUND 池），新建实例绑定
   // 当前会话；调用方须把 unbound 列表明确告知用户。
   async function recoverBindingConflicts(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return { unbound: [], conflicts: [] }
     let dirs = []
     try {
@@ -3059,7 +3138,7 @@ function createInstanceRegistry(ctx, deps) {
 
   // ── Iter-17：adopt（UNBOUND→BOUND，采用池中 sessionId==null 实例并写 S）──
   async function adoptInstance(cwd, sessionId, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     if (!sessionId) throw new Error('adopt 需要 sessionId')
     await ensureWorkspaceSkeleton(cwd)
@@ -3111,7 +3190,7 @@ function createInstanceRegistry(ctx, deps) {
     // Iter-22(D4 修复)：以磁盘 state.json 为准（缓存 entry 可能 hasState=false 或陈旧）。
     // RUNNING 孤儿先 stop 并落盘——否则 state.json 残留 RUNNING 进采用池 → 被误标"未启动"。
     try {
-      const fsSvc = ctx.get('fs')
+      const fsSvc = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
       const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
       if (state && state.workflow) {
         if (!entry.hasState) { entry.engine.hydrate(state); entry.hasState = true }
@@ -3148,7 +3227,7 @@ function createInstanceRegistry(ctx, deps) {
   }
 
   async function writeArchiveBackup(cwd, instanceId, kind, state) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const ts = archiveTimestamp()
     const dest = archiveRootPath(cwd) + '/' + instanceId + '/' + ts + '_' + kind + '_' + state
@@ -3179,7 +3258,7 @@ function createInstanceRegistry(ctx, deps) {
   // + metadata.json（sessionId，reset 备份可能缺失）+ listDir 递归计文件数/字节。
   // 空 <instanceId> 父目录（删除后残留）自然跳过；残缺条目（无 manifest）跳过不报错。
   async function listArchives(cwd) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) return []
     let instanceDirs = []
     try {
@@ -3241,7 +3320,7 @@ function createInstanceRegistry(ctx, deps) {
   // activeBySession）→ node:fs 直删原实例目录（备份已落 archive，删除失败=重复不丢数据，
   // 报错可重试）。绑定会话经 archiveDeclaresSession 读备份内 metadata.json → DONE。
   async function archiveInstance(cwd, instanceId) {
-    const fs = ctx.get('fs')
+    const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
     if (!fs) throw new Error('fs service unavailable')
     const iid = sanitizeSegment(instanceId)
     if (!iid) throw new Error('非法 instanceId: ' + instanceId)
@@ -3432,8 +3511,8 @@ function createInstanceRegistry(ctx, deps) {
 //     builtin-assets/（随 npm 包分发；唯一源，勿在本文件内嵌资产内容）。
 //   - materializeBuiltinAssets(fs, options)：启动时把包内 builtin-assets/ 递归复制到
 //     ${DSH_HOME:-$HOME/.dsh}/workflow-agent/（**幂等覆盖**——用户拍板 2026-09-15；
-//     任一文件失败不阻断其余）。读取走 node:fs（CJS 形态可用）；写入走 DSH fs
-//     服务（目标作用域，Iter-24 探针实证）。兼任探针：journalctl 搜
+//     任一文件失败不阻断其余）。读写均走 node:fs（0.2.0 起 DSH fs 服务为 workspace-write
+//     沙箱，home 目标改 Host 进程直写——B4，2026-10-03）。兼任探针：控制台搜
 //     '[workflow-agent] materialize' 即见物化结果。
 //   - detectPredefinedRoot：预定义目录根解析（${DSH_HOME:-$HOME/.dsh}/workflow-agent）。
 // 历史：本文件原名 builtin-skills.js，曾以 JS 字符串内嵌全部资产（Iter-24~29）；
@@ -3479,10 +3558,11 @@ function resolveBuiltinAssetsDir() {
 // options.assetsDir：覆盖默认资产目录（单测注入虚拟目录用）。
 // 返回：{ ok, root, written[], failed[] } 或 { ok:false, reason }
 async function materializeBuiltinAssets(fs, options) {
-  if (!fs) return { ok: false, reason: 'fs service unavailable' }
-  const root = detectPredefinedRoot()
-  if (!root) return { ok: false, reason: 'cannot locate home directory' }
+  // 0.2.0 / B4：不再依赖 DSH fs 服务（node:fs 直写），fs 参数仅为兼容签名保留；
+  // options.root 可覆盖物化根（单测注入临时目录用）
   const opts = options || {}
+  const root = opts.root || detectPredefinedRoot()
+  if (!root) return { ok: false, reason: 'cannot locate home directory' }
   const assetsDir = opts.assetsDir || resolveBuiltinAssetsDir()
   if (!assetsDir) return { ok: false, reason: 'builtin-assets dir unavailable (esm form)' }
   const nodePath = typeof require !== 'undefined' ? require('path') : null
@@ -3505,11 +3585,16 @@ async function materializeBuiltinAssets(fs, options) {
 
   const written = []
   const failed = []
+  // 0.2.0（阶段 6 / B4，真机实证 2026-10-03）：DSH fs 服务引入 workspace-write 沙箱，
+  // 对 home 物化目标（插件自有配置目录）一律拒绝（全部文件 file access denied under
+  // workspace-write mode）。物化语义是 Host 进程启动时装配自有目录（与 dsh 自身写
+  // ~/.dsh-dev/profiles 同一信任层级），改用 node:fs 直写，不再经 fs 服务。
   for (const rel of files) {
     const target = root + '/' + rel
     try {
       const content = nodeFs.readFileSync(nodePath.join(assetsDir, rel), 'utf8')
-      await fs.writeText(await fs.resolve(target), content)
+      nodeFs.mkdirSync(nodePath.dirname(target), { recursive: true })
+      nodeFs.writeFileSync(target, content)
       written.push(rel)
     } catch (e) {
       failed.push(rel + ': ' + (e && e.message ? e.message : String(e)))
@@ -3670,11 +3755,35 @@ function injectInputsMap(map, params, vars, itemCtx) {
   return out
 }
 
+// workflowPath 相对路径两级链解析（MIG7 验收修复，用户拍板 2026-10-04）：
+// 优先级 = 当前工作空间（wsRoot）> 插件预置目录（detectPredefinedRoot）。
+// 替代旧的「fs.resolve 直解」——后者以 dsh web 进程 cwd（默认工作空间）为基准，
+// 属隐式硬编码（验收立即问题：进程 cwd 随启动位置漂移，报错指向错误目录）。
+// 全 miss 时返回工作区拼合路径（让报错指向工作区而非进程 cwd）。
+async function resolveWorkflowPath(fs, p, wsRoot) {
+  const raw = String(p || '')
+  if (!raw) return raw
+  if (raw.startsWith('/') || raw.startsWith('~') || /^[a-zA-Z]:[\\/]/.test(raw)) return raw
+  const rel = raw.replace(/^\.\//, '')
+  const bases = []
+  if (wsRoot) bases.push(String(wsRoot).replace(/\/+$/, ''))
+  if (typeof detectPredefinedRoot === 'function') {
+    const pd = detectPredefinedRoot()
+    if (pd) bases.push(pd)
+  }
+  for (const b of bases) {
+    const cand = b + '/' + rel
+    try { const st = await fs.stat(await fs.resolve(cand)); if (st) return cand } catch (e) { /* 下一级 */ }
+  }
+  return bases.length ? bases[0] + '/' + rel : raw
+}
+
 // 工作流文件加载：优先 workflowPath（读文件），兜底 workflowText（直接用）。
 // Iter-24：相对引用不再以定义文件目录为基准，统一两级链（workspace 根优先）。
+// MIG7：workflowPath 相对路径经 resolveWorkflowPath 两级链解析（见上）。
 async function loadWorkflowSource(fs, args, wsRoot) {
   if (args.workflowPath) {
-    const p = String(args.workflowPath)
+    const p = await resolveWorkflowPath(fs, args.workflowPath, wsRoot)
     const text = await fs.readText(await fs.resolve(p))
     return { text, workspaceRoot: wsRoot }
   }
@@ -4197,12 +4306,13 @@ function sessionCwd(exec) {
 //   - 显式 statePath/workspaceRoot 参数或无会话上下文 → 回退单实例绑定
 //     （engine/storage 形参，保持既有行为与旧布局兼容）。
 function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
-  const fs = ctx.get('fs')
+  const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
 
   // ── Iter-24：预定义目录物化（模板+技能+骨架；幂等覆盖；失败不阻断工具注册）──
-  // 兼任探针：journalctl 搜 "[workflow-agent] materialize" 即见 Host fs 对
-  // ~/.dsh/ 的写能力与物化结果。fire-and-forget，不等待。
-  if (fs) {
+  // 兼任探针：控制台搜 "[workflow-agent] materialize" 即见物化结果。fire-and-forget。
+  // 0.2.0 / B4：物化已改 node:fs 直写（DSH fs 服务为 workspace-write 沙箱，home 目标
+  // 必拒）→ 不再以 fs 服务存在为前置，始终执行（物化自身容错，失败仅记日志）。
+  {
     try {
       materializeBuiltinAssets(fs)
         .then((r) => {
@@ -4800,6 +4910,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
         // 官方契约「absent/idle/completed 目标 = accepted no-op」→ **放弃判活，对全部 child 条目
         // 直接下发 interrupt**：活着的被打断，死的自动 no-op。单子失败不阻断 stop 主流程。
         // Iter-23(方向A)：手工停 DSH 会话路径（A1 事件 tap / A2 sync 轮询）走 applyUserStop 同语义。
+        // 0.2.0（阶段 6 / B1）：SubagentCatalogEntry 无 kind 字段——有 id 即纳入，kind 存在时才校验。
         let stoppedChildren = 0
         try {
           const sid = exec && exec.agent && exec.agent.session && exec.agent.session.header ? exec.agent.session.header.id : undefined
@@ -4807,7 +4918,7 @@ function registerWorkflowToolsPreset(ctx, engine, storage, registry) {
           if (subagents && typeof subagents.listChildren === 'function' && sid) {
             const entries = await subagents.listChildren(sid)
             const list = Array.isArray(entries) ? entries : []
-            const childIds = list.filter((ch) => ch && ch.kind === 'child' && ch.id).map((ch) => ch.id)
+            const childIds = list.filter((ch) => ch && ch.id && (!('kind' in ch) || ch.kind === 'child')).map((ch) => ch.id)
             for (const cid of childIds) {
               try {
                 await subagents.interruptByParent(cid, sid, 'continuable')
@@ -5217,7 +5328,7 @@ async function loadStateFromFile(fs, workspaceRoot, instanceId) {
 function registerWebRoutes(ctx, registry) {
   const webserver = ctx.get('webServer')
   if (!webserver) return // 可选能力：webServer 不存在时静默跳过
-  const fs = ctx.get('fs')
+  const fs = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
   // Iter-29：下载产物暂存（token → {bytes, filename, at}；一次性取走即焚 + 数量/总量上限）
   const downloadArtifacts = new Map()
 
@@ -5382,7 +5493,10 @@ function registerWebRoutes(ctx, registry) {
             let text = srcText
             if (!text && srcPath) {
               try {
-                text = await fs.readText(await fs.resolve(srcPath))
+                // MIG7 验收修复：相对路径两级链（当前工作空间 > 插件预置目录）——
+                // 替代进程 cwd 基准（隐式硬编码，验收立即问题）
+                const resolved = await resolveWorkflowPath(fs, srcPath, root)
+                text = await fs.readText(await fs.resolve(resolved))
               } catch (e) {
                 writeJson(res, 400, { error: 'cannot read workflowPath: ' + (e && e.message ? e.message : String(e)) })
                 return
@@ -5474,10 +5588,13 @@ function registerWebRoutes(ctx, registry) {
           const rel = path.replace(/^\.\//, '')
           const wsRoot36 = (query.get('workspaceRoot') || '').replace(/\\/g, '/').replace(/\/+$/, '')
           const pre36 = detectPredefinedRoot()
+          // MIG7 修复（用户复验反馈 2026-10-04）：候选全 miss 后不再「相对路径原样直解」——
+          // fs-host 的 fs.resolve 以 dsh web 进程 cwd（默认工作空间）为基准，报错路径误导
+          //（验收复验：normal_ws/output/analysis.md）。相对路径仅两级链（工作空间/预置目录），
+          // miss 即明确报错；「未绑定实例的相对 outputs」由 absolutize 基准问题单独立项（O-12）。
           const candidates = isAbs ? [path] : [].concat(
             wsRoot36 ? [wsRoot36 + '/' + rel] : [],
-            pre36 ? [pre36.replace(/\/+$/, '') + '/' + rel] : [],
-            [path]
+            pre36 ? [pre36.replace(/\/+$/, '') + '/' + rel] : []
           )
           let text = null
           let lastErr36 = null
@@ -5488,7 +5605,10 @@ function registerWebRoutes(ctx, registry) {
               break
             } catch (e36) { lastErr36 = e36 }
           }
-          if (text === null) throw (lastErr36 || new Error('not found: ' + path))
+          if (text === null) {
+            const scope = isAbs ? '' : (candidates.length ? '（两级链：工作空间/预置目录均未命中）' : '（无工作空间上下文，相对路径无法定位——请先绑定实例或指定工作空间）')
+            throw (lastErr36 || new Error('not found: ' + path + scope))
+          }
           writeJson(res, 200, { text, error: null })
         } catch (e) {
           writeJson(res, 200, { text: null, error: e && e.message ? e.message : String(e) })
@@ -5947,17 +6067,20 @@ function registerWebRoutes(ctx, registry) {
             // Iter-21：面板控制统一经 session 注入指令（与 Start 一致——此前 Stop/Resume 只改实例态而 session 不感知，导致按钮"无效"）
             // 0.1.5 迁移：apiProxy 退役 → sessionController.prompt（普通会话）/ subagents.prompt（continuable 子代理，
             // queue/steer 语义由 delivery 字段承担）；requestId 拍平进请求体，返回直接量 {accepted:true} / {messageId}。
-            async function injectSessionCmd(args, root, instanceId, verb, extraText) {
-              const sessionId = args.sessionId
-              if (!sessionId) return { messageInjected: false, reason: 'no sessionId' }
+            async function injectSessionCmd(args, root, instanceId, verb, extraText, boundSessionId) {
+              // Iter-46-2（F-1）：目标会话以实例 metadata.sessionId（创建/采纳时登记的权威绑定）为准；
+              // 客户端上送 sessionId 仅在无绑定时兜底——杜绝面板把控制指令投进会话内任意活动子代理
+              //（F-1 实证：Mnemon idle checkpoint review 子代理抢收 reset 指令，流程误入其中）。
+              const sessionId = boundSessionId || args.sessionId
+              if (!sessionId) return { messageInjected: false, reason: 'no sessionId (meta & args)' }
               const sessionController = ctx.get('sessionController')
               if (!sessionController) return { messageInjected: false, reason: 'sessionController unavailable' }
               const subagents = ctx.get('subagents')
               const text = verb === 'start' ? `请启动工作流实例 ${instanceId}，工作区：${root}`
                 : verb === 'stop' ? `请停止工作流实例 ${instanceId}，工作区：${root}`
-                // Iter-31（用户 D2 拍板）：reset 后停留 PENDING 等用户手动 Start——通知不得指示续跑；
-                // extraText（清理契约）仍需会话执行清理命令，清理完毕即待命。
-                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置至 PENDING（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准。请勿自行 begin 或启动工作流；清理契约（如有）执行完毕后即待命，等待用户发出启动指令。${extraText ? '\n\n' + extraText : ''}`
+                // Iter-31（用户 D2 拍板）：reset 后停留 PENDING 等用户手动 Start——通知不得指示续跑。
+                // Iter-46-2：清理已由引擎直执行（node:fs），注入退化为纯告知，不再携带清理契约 extraText。
+                : verb === 'reset' ? `工作流实例 ${instanceId} 已重置至 PENDING（工作区：${root}）。此前对话中的阶段与任务状态已作废，请忽略旧进度，勿回溯对比；以 workflow_status / workflow_list 返回为准。请勿自行 begin 或启动工作流，等待用户发出启动指令。${extraText ? '\n\n' + extraText : ''}`
                 : `请继续工作流实例 ${instanceId}，工作区：${root}`
               // 停止是紧急指令：agent 正在执行任务，队列消息会等本轮结束——用 steer 打断当前轮让 LLM 尽快响应；
               // start/resume 在 agent 空闲/暂停时投递，用 queue。
@@ -5999,7 +6122,8 @@ function registerWebRoutes(ctx, registry) {
               snap.instanceId = entry.instanceId
               
               // Iter-15：向当前 session 发送启动消息（0.1.5 迁移：sessionController/subagents 新签名）
-              const sessionId = args.sessionId
+              // Iter-46-2（F-1）：与 injectSessionCmd 同规——目标会话以实例权威绑定（meta.sessionId）为准
+              const sessionId = (entry.meta && entry.meta.sessionId) || args.sessionId
               if (sessionId) {
                 const sessionController = ctx.get('sessionController')
                 const subagents = ctx.get('subagents')
@@ -6045,7 +6169,7 @@ function registerWebRoutes(ctx, registry) {
               // 与 instance-store.recoverOrphan 同款模式；无 state.json（CREATED）维持 400。
               if (!entry.hasState) {
                 try {
-                  const fsSvc = ctx.get('fs')
+                  const fsSvc = (typeof hostFs !== 'undefined' && hostFs) || ctx.get('fs')
                   const state = JSON.parse(await fsSvc.readText(await fsSvc.resolve(entry.dir + '/state.json')))
                   if (state && state.workflow) { entry.engine.hydrate(state); entry.hasState = true }
                 } catch (e0) { /* 无 state.json（CREATED）→ 保持 hasState=false */ }
@@ -6077,12 +6201,13 @@ function registerWebRoutes(ctx, registry) {
                   try { await sessionController.cancel({ sessionId: sid }); cancelled = true } catch (e2) { /* 主会话未挂载等 → 走 ②③ */ }
                 }
                 // ② 枚举全部子会话（durable 条目，含已结束者——对结束目标 interrupt/drain 均为 no-op）
+                //    0.2.0（B1）：SubagentCatalogEntry 无 kind 字段——有 id 即纳入，kind 存在时才校验（兼容 0.1.5 形状）
                 let childIds = []
                 if (sid && subagents && typeof subagents.listChildren === 'function') {
                   try {
                     const entries = await subagents.listChildren(sid)
                     childIds = (Array.isArray(entries) ? entries : [])
-                      .filter(c => c && c.kind === 'child' && c.id).map(c => c.id)
+                      .filter(c => c && c.id && (!('kind' in c) || c.kind === 'child')).map(c => c.id)
                   } catch (e2) { /* 枚举失败不阻断 */ }
                 }
                 // ③ 硬释放：drain 主会话名下的 resident continuable 激活（不依赖判活；
@@ -6110,12 +6235,13 @@ function registerWebRoutes(ctx, registry) {
                     ' children=' + childIds.length + ' (' + childIds.slice(-3).join(',') + ')' + '\n')
                 } catch (e4) { /* 留痕失败不阻断 */ }
               }
-              const inj = await injectSessionCmd(args, root, instanceId, 'stop')
+              const inj = await injectSessionCmd(args, root, instanceId, 'stop', null, entry.meta && entry.meta.sessionId)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               snap.messageInjected = inj.messageInjected
               snap.stoppedChildren = stoppedChildren
               if (inj.error) snap.messageInjectionError = inj.error
+              if (inj.reason) snap.messageInjectionReason = inj.reason
               writeJson(res, 200, snap)
               return
             }
@@ -6140,30 +6266,37 @@ function registerWebRoutes(ctx, registry) {
               // Iter-33（用户拍板「reset 语义=从模板全新建立」）：清空范围扩展到 inputs/——
               // 运行期物化残留（上游产物副本）一并清除；有模板来源（defDir 锚点 + 模板子目录
               // 存在 inputs/）时用 cp -r 恢复模板初始 inputs；inline/手工实例退化为仅清 output/logs。
-              const q21 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
-              const nfz33 = require('node:fs')
-              const defDir33 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
-              const tplInputs33 = defDir33 ? defDir33 + '/inputs' : null
-              const hasTplInputs33 = !!(tplInputs33 && nfz33.existsSync(tplInputs33))
-              let cmd33 = 'rm -rf ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
-                + ' && mkdir -p ' + q21(entry.dir + '/output') + ' ' + q21(entry.dir + '/logs') + ' ' + q21(entry.dir + '/inputs')
-              if (hasTplInputs33) cmd33 += ' && cp -R ' + q21(tplInputs33 + '/.') + ' ' + q21(entry.dir + '/inputs/')
-              snap.pendingCleanup = {
-                outputDir: entry.dir + '/output',
-                logsDir: entry.dir + '/logs',
-                inputsDir: entry.dir + '/inputs',
-                inputsRestoredFrom: hasTplInputs33 ? tplInputs33 : null,
-                cmd: cmd33,
+              // Iter-26（重置重来拍板）：备份后清空 output/logs。旧实现因「fs 服务无删除 API」返回
+              // pendingCleanup 由编排会话代执行——F-1 实证注入静默失败即无人清理。
+              // Iter-46-2：改引擎直执行——node:fs 在路由作用域可用（先例 existsSync）；
+              // pendingCleanup 会话契约退役。模板子目录存在 inputs/ 时恢复初始内容。
+              const nfz462 = require('node:fs')
+              const defDir462 = E_presetTemplateDirOf(entry.meta && entry.meta.sourcePath, detectPredefinedRootSafe())
+              const tplInputs462 = defDir462 ? defDir462 + '/inputs' : null
+              const hasTplInputs462 = !!(tplInputs462 && nfz462.existsSync(tplInputs462))
+              let cleanupError462 = null
+              try {
+                if (!entry.dir || entry.dir === '/' || String(entry.dir).length < 4) throw new Error('instance dir 异常，拒绝清理')
+                for (const sub of ['output', 'logs', 'inputs']) nfz462.rmSync(entry.dir + '/' + sub, { recursive: true, force: true })
+                for (const sub of ['output', 'logs', 'inputs']) nfz462.mkdirSync(entry.dir + '/' + sub, { recursive: true })
+                if (hasTplInputs462) nfz462.cpSync(tplInputs462, entry.dir + '/inputs', { recursive: true })
+              } catch (e462) {
+                // 引擎清理失败（不应发生）→ 保留 legacy pendingCleanup 作为面板可见的手动兜底
+                cleanupError462 = (e462 && e462.message) || String(e462)
+                const q462 = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+                let cmd462 = 'rm -rf ' + q462(entry.dir + '/output') + ' ' + q462(entry.dir + '/logs') + ' ' + q462(entry.dir + '/inputs')
+                  + ' && mkdir -p ' + q462(entry.dir + '/output') + ' ' + q462(entry.dir + '/logs') + ' ' + q462(entry.dir + '/inputs')
+                if (hasTplInputs462) cmd462 += ' && cp -R ' + q462(tplInputs462 + '/.') + ' ' + q462(entry.dir + '/inputs/')
+                snap.pendingCleanup = { outputDir: entry.dir + '/output', logsDir: entry.dir + '/logs', inputsDir: entry.dir + '/inputs', inputsRestoredFrom: hasTplInputs462 ? tplInputs462 : null, cmd: cmd462 }
               }
-              snap.resetNote = 'state reset; instance dir (output/logs/inputs) backed up to ' + backupDir + ', run pendingCleanup.cmd now'
-              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递，reset 时 agent 通常空闲）。
-              // Iter-31（用户 D2 拍板）：通知改纯告知——reset 停留 PENDING 等用户手动 Start，不再指示
-              // "按全新工作流继续执行"；pendingCleanup 清理契约仍随行（Iter-26：fs 无删除 API，清空由
-              // 会话 bash 执行），但明确"仅清理、不含启动指令"。
-              const injReset = await injectSessionCmd(args, root, instanceId, 'reset',
-                '[清理契约] 实例 output/logs/inputs 已归档备份至 ' + backupDir + (hasTplInputs33 ? '，inputs 将从模板初始内容恢复' : '') + '，请立即用 bash 执行以下命令（仅清理与恢复，不含启动指令）：\n' + snap.pendingCleanup.cmd)
+              snap.resetNote = 'state reset; prior output/logs/inputs archived to ' + backupDir + (cleanupError462 ? '; ENGINE CLEANUP FAILED: ' + cleanupError462 + '（见 pendingCleanup 手动兜底）' : '; cleaned by engine')
+              // Iter-22(S4)：面板 reset 后向 session 注入"已重置"通知（queue 投递）。
+              // Iter-31：通知为纯告知——reset 停留 PENDING 等用户手动 Start，不含续跑指示。
+              // Iter-46-2：清理已引擎直执行，注入不再承载清理契约；目标会话=权威绑定（见 injectSessionCmd）。
+              const injReset = await injectSessionCmd(args, root, instanceId, 'reset', null, entry.meta && entry.meta.sessionId)
               snap.messageInjected = injReset.messageInjected
               if (injReset.error) snap.messageInjectionError = injReset.error
+              if (injReset.reason) snap.messageInjectionReason = injReset.reason
               writeJson(res, 200, snap)
               return
             }
@@ -6173,11 +6306,12 @@ function registerWebRoutes(ctx, registry) {
               const st = entry.engine.snapshot().stage
               if (st !== 'STOPPED') { writeJson(res, 400, { error: 'resume 仅 STOPPED（当前 ' + st + '）' }); return }
               // Iter-21：继续只经 session 注入指令，由 agent 调 workflow_resume 置 RUNNING（避免双写导致的 UI 提前回弹/状态冲突）
-              const inj = await injectSessionCmd(args, root, instanceId, 'resume')
+              const inj = await injectSessionCmd(args, root, instanceId, 'resume', null, entry.meta && entry.meta.sessionId)
               const snap = entry.engine.snapshot()
               snap.instanceId = entry.instanceId
               snap.messageInjected = inj.messageInjected
               if (inj.error) snap.messageInjectionError = inj.error
+              if (inj.reason) snap.messageInjectionReason = inj.reason
               writeJson(res, 200, snap)
               return
             }

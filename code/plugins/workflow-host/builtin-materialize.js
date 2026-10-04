@@ -6,8 +6,8 @@
 //     builtin-assets/（随 npm 包分发；唯一源，勿在本文件内嵌资产内容）。
 //   - materializeBuiltinAssets(fs, options)：启动时把包内 builtin-assets/ 递归复制到
 //     ${DSH_HOME:-$HOME/.dsh}/workflow-agent/（**幂等覆盖**——用户拍板 2026-09-15；
-//     任一文件失败不阻断其余）。读取走 node:fs（CJS 形态可用）；写入走 DSH fs
-//     服务（目标作用域，Iter-24 探针实证）。兼任探针：journalctl 搜
+//     任一文件失败不阻断其余）。读写均走 node:fs（0.2.0 起 DSH fs 服务为 workspace-write
+//     沙箱，home 目标改 Host 进程直写——B4，2026-10-03）。兼任探针：控制台搜
 //     '[workflow-agent] materialize' 即见物化结果。
 //   - detectPredefinedRoot：预定义目录根解析（${DSH_HOME:-$HOME/.dsh}/workflow-agent）。
 // 历史：本文件原名 builtin-skills.js，曾以 JS 字符串内嵌全部资产（Iter-24~29）；
@@ -53,10 +53,11 @@ function resolveBuiltinAssetsDir() {
 // options.assetsDir：覆盖默认资产目录（单测注入虚拟目录用）。
 // 返回：{ ok, root, written[], failed[] } 或 { ok:false, reason }
 async function materializeBuiltinAssets(fs, options) {
-  if (!fs) return { ok: false, reason: 'fs service unavailable' }
-  const root = detectPredefinedRoot()
-  if (!root) return { ok: false, reason: 'cannot locate home directory' }
+  // 0.2.0 / B4：不再依赖 DSH fs 服务（node:fs 直写），fs 参数仅为兼容签名保留；
+  // options.root 可覆盖物化根（单测注入临时目录用）
   const opts = options || {}
+  const root = opts.root || detectPredefinedRoot()
+  if (!root) return { ok: false, reason: 'cannot locate home directory' }
   const assetsDir = opts.assetsDir || resolveBuiltinAssetsDir()
   if (!assetsDir) return { ok: false, reason: 'builtin-assets dir unavailable (esm form)' }
   const nodePath = typeof require !== 'undefined' ? require('path') : null
@@ -79,11 +80,16 @@ async function materializeBuiltinAssets(fs, options) {
 
   const written = []
   const failed = []
+  // 0.2.0（阶段 6 / B4，真机实证 2026-10-03）：DSH fs 服务引入 workspace-write 沙箱，
+  // 对 home 物化目标（插件自有配置目录）一律拒绝（全部文件 file access denied under
+  // workspace-write mode）。物化语义是 Host 进程启动时装配自有目录（与 dsh 自身写
+  // ~/.dsh-dev/profiles 同一信任层级），改用 node:fs 直写，不再经 fs 服务。
   for (const rel of files) {
     const target = root + '/' + rel
     try {
       const content = nodeFs.readFileSync(nodePath.join(assetsDir, rel), 'utf8')
-      await fs.writeText(await fs.resolve(target), content)
+      nodeFs.mkdirSync(nodePath.dirname(target), { recursive: true })
+      nodeFs.writeFileSync(target, content)
       written.push(rel)
     } catch (e) {
       failed.push(rel + ': ' + (e && e.message ? e.message : String(e)))

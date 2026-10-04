@@ -4,7 +4,11 @@
 // 文件：code/packages/workflow-host/build.js
 //
 // 输入：code/scripts/module-manifest.js（有序源模块清单）
+//       code/agent-presets/workflow-orchestrator/{persona-file.mjs,system-prompt.md}
+//         （阶段 6 / B2：persona 随包资产 → lib/ 复制；preset 声明见
+//          presets/workflow-orchestrator.patch.yml，为静态文件不参与本生成器）
 // 输出：lib/index.js                    （CJS 交付物，运行时由 profile 加载，入库）
+//       lib/persona-file.mjs + lib/system-prompt.md（persona 插件 + 单一源，随包分发）
 //       dist/workflow-host.mjs          （ESM 形态，**仅本地测试按需输出**：--format=esm/both；
 //                                        不入库、不进发行包。开关见 CLI。）
 //
@@ -33,6 +37,11 @@ const LIB_PATH = path.join(PKG_DIR, 'lib', 'index.js')
 const DIST_DIR = path.join(PKG_DIR, 'dist')
 const DIST_ESM_PATH = path.join(DIST_DIR, 'workflow-host.mjs')
 
+// 阶段 6 / B2：persona 随包资产（源 → lib/ 原名复制；persona-file.mjs 运行时读同目录 system-prompt.md）
+const PRESET_SRC_DIR = path.join(CODE_DIR, 'agent-presets', 'workflow-orchestrator')
+const PERSONA_ASSETS = ['persona-file.mjs', 'system-prompt.md']
+const PERSONA_OUT = PERSONA_ASSETS.map((f) => path.join(PKG_DIR, 'lib', f))
+
 const manifest = require(MANIFEST_PATH)
 
 // ── 源读取 ──────────────────────────────────────────────────────────────────
@@ -50,13 +59,19 @@ function readSources() {
 
 // ── 产物新鲜度：清单或任一源模块 mtime 晚于产物 → 陈旧 ─────────────────────
 function inputPaths() {
-  return [MANIFEST_PATH, ...manifest.modules.map((m) => path.join(CODE_DIR, m.path))]
+  return [
+    MANIFEST_PATH,
+    ...manifest.modules.map((m) => path.join(CODE_DIR, m.path)),
+    ...PERSONA_ASSETS.map((f) => path.join(PRESET_SRC_DIR, f)),
+  ]
 }
 function needsBuild() {
   // 交付物只有 CJS lib；dist ESM 是 --format 按需的本地测试输出，不参与新鲜度判定
   if (!fs.existsSync(LIB_PATH)) return true
+  for (const out of PERSONA_OUT) if (!fs.existsSync(out)) return true
   const newestInput = Math.max(...inputPaths().map((p) => fs.statSync(p).mtimeMs))
-  return fs.statSync(LIB_PATH).mtimeMs < newestInput
+  const newestOutput = Math.min(...[LIB_PATH, ...PERSONA_OUT].map((p) => fs.statSync(p).mtimeMs))
+  return newestOutput < newestInput
 }
 
 // ── 拼接 ────────────────────────────────────────────────────────────────────
@@ -116,6 +131,11 @@ function build(options = {}) {
     fs.mkdirSync(path.dirname(LIB_PATH), { recursive: true })
     fs.writeFileSync(LIB_PATH, assemble('cjs'), 'utf8')
     written.push(LIB_PATH)
+    for (const f of PERSONA_ASSETS) {
+      const out = path.join(PKG_DIR, 'lib', f)
+      fs.copyFileSync(path.join(PRESET_SRC_DIR, f), out)
+      written.push(out)
+    }
   }
   if (format === 'esm' || format === 'both') {
     fs.mkdirSync(DIST_DIR, { recursive: true })

@@ -1504,9 +1504,15 @@ if (!WfComponent) {
       let next = null
       if (typeof sessionCwd === 'string' && sessionCwd) {
         next = String(sessionCwd).replace(/\\/g, '/')
-        // 如果是相对路径，转换为绝对路径
-        if (!next.startsWith('/')) {
-          next = '/home/zhaokai/Projects/dsh_projects/' + next
+        // 相对路径：以当前工作区首项为基解析；无工作区可解析则原样透传（阶段 6 / B3：不硬编码用户目录）
+        if (!next.startsWith('/') && workspaceHook) {
+          try {
+            const wsList = workspaceHook()
+            const wsRoot = wsList && wsList.data && Array.isArray(wsList.data.items) && wsList.data.items[0]
+              ? String(wsList.data.items[0].path).replace(/\\/g, '/').replace(/\/$/, '')
+              : null
+            if (wsRoot) next = wsRoot + '/' + next
+          } catch (e) {}
         }
       }
       if (!next && workspaceHook) {
@@ -2337,7 +2343,10 @@ if (!WfComponent) {
         wfSessionActive = isWorkflowSession
         React.useEffect(() => {
           if (sessionId !== undefined && sessionId !== null) sessionGateMap.set(String(sessionId), isWorkflowSession)
-          // 仅在「明确非编排」（preset 已加载且错误 / 子会话）时注销；加载中保持注册等待
+          // MIG5 终版（事件驱动）：恢复组件即时注销（切换到非编排会话 → 页签立即消失）。
+          // 复活由 applyGate 的事件链承担（list.subscribe 驱动，retainedBy.mainView 解析
+          // 主视图会话——见 applyGate 注释；哨兵 5s 兜底）。B6 时代的「注销=自杀」死锁
+          // 已由主视图会话解析机制解除。
           const definitiveNonWf = sessionOrigin === 'subagent' ||
             (sessionPreset !== undefined && sessionPreset !== 'workflow-orchestrator')
           if (definitiveNonWf) disposeEntry()
@@ -2368,21 +2377,31 @@ if (!WfComponent) {
     const applyGate = () => {
       if (gateBusy) return
       gateBusy = true
+      const bail = (why, extra) => { try { console.debug('[wf-gate] applyGate 早退: ' + why + (extra !== undefined ? ' | ' + extra : '')) } catch (eB) {} gateBusy = false }
       try {
         const svc = sessionsSvcGet()
-        if (!svc || !svc.list) return
-        const snap = svc.list.getSnapshot()
-        const sid = snap && snap.current
-        if (sid === undefined || sid === null) return
-        const entry = snap.byId ? snap.byId[sid] : undefined
-        if (!entry) return
-        const preset = entry.projectionValues && entry.projectionValues.agentPreset != null
-          ? entry.projectionValues.agentPreset
-          : entry.agentPreset
-        const origin = entry.origin
-        if (preset === undefined) return // 投影未就绪：维持现状，等下一次订阅通知
-        const isWf = preset === 'workflow-orchestrator' && origin !== 'subagent'
-        sessionGateMap.set(String(sid), isWf)
+        if (!svc || !svc.list) { bail('svc/list 缺失'); return }
+        let snap
+        try { snap = svc.list.getSnapshot() } catch (eSnap) { bail('getSnapshot 抛错', eSnap && eSnap.message); return }
+        // MIG5 终版（事件驱动，2026-10-03 实包考据）：0.2.0 快照无 current 字段，但主视图
+        // 会话可从 byId 条目的 retainedBy.mainView 保留计数解析——镜像宿主 ui-session
+        // Controller.publishMain() 的推导逻辑（retain 变化走 list mutation，subscribe 通知）。
+        // 判定语义恢复 0.1.5 精确形态：主视图会话是编排 → 注册；否则 → 注销（页签隐藏）。
+        // 事件链：①组件 effect 即时注销（切换瞬间）②list.subscribe 驱动复活（切换回来）
+        // ③哨兵仅兜底（订阅覆盖不到的 retention 变化，5s 低频）。
+        const ids = Array.isArray(snap.ids) ? snap.ids : Object.keys(snap.byId || {})
+        const mainSid = ids.find((cid) => {
+          const ent = snap.byId ? snap.byId[cid] : undefined
+          return !!(ent && ent.retainedBy && (ent.retainedBy.mainView ?? 0) > 0)
+        })
+        if (mainSid === undefined) return // 无主视图会话（hero/空台）：维持现状
+        const mainEnt = snap.byId[mainSid]
+        const preset = mainEnt.projectionValues && mainEnt.projectionValues.agentPreset != null
+          ? mainEnt.projectionValues.agentPreset
+          : mainEnt.agentPreset
+        if (preset === undefined) return // 投影未就绪：维持现状，等下一次通知
+        const isWf = preset === 'workflow-orchestrator' && mainEnt.origin !== 'subagent'
+        sessionGateMap.set(String(mainSid), isWf)
         if (isWf) registerEntry()
         else disposeEntry()
       } catch (e36) { /* 判定失败维持现状 */ }
@@ -2392,11 +2411,12 @@ if (!WfComponent) {
     let subTimer = null
     const trySubscribe = () => {
       const svc = sessionsSvcGet()
-      if (!svc || !svc.list) return false
+      if (!svc || !svc.list) return false // 启动时序正常重试（500ms 内成功），不打日志
       try {
         svc.list.subscribe(() => { try { applyGate() } catch (e37) { /* 单次判定失败忽略 */ } })
+        applyGate() // MIG5：订阅成功立即首评（覆盖启动时序，页签初始态即刻就位）
         return true
-      } catch (e38) { return false }
+      } catch (e38) { try { console.debug('[wf-gate] trySubscribe: subscribe 抛错 ' + (e38 && e38.message)) } catch (eT3) {} return false }
     }
     if (!trySubscribe()) {
       subTimer = setInterval(() => {
@@ -2404,5 +2424,14 @@ if (!WfComponent) {
         if (trySubscribe() || subTries > 40) { if (subTimer) clearInterval(subTimer) }
       }, 500)
     }
+    // MIG5 终版：哨兵降级为**兜底**（5s 低频，仅订阅未覆盖的 retention 变化场景）——
+    // 主通道为事件链：组件 effect 即时注销 + list.subscribe 驱动 applyGate 复活
+    //（retainedBy.mainView 走 list mutation，宿主 ui-session publishMain 同源）。
+    // B6 时代 1.5s 高频哨兵退役。仅页签未挂时干活；unref 防 Node 门禁环境吊进程。
+    const gateSentinel = setInterval(() => {
+      if (disposeRef) return
+      try { applyGate() } catch (eS2) { /* 单次失败忽略，下轮再试 */ }
+    }, 5000)
+    if (gateSentinel && typeof gateSentinel === 'object' && typeof gateSentinel.unref === 'function') gateSentinel.unref()
   }
 }

@@ -19,6 +19,9 @@ module.exports = {
     // apply 前言（applyInternal 定义：探针 + 注册表装配 + A1 tap）——必须在最前
     { id: 'apply-prologue', path: 'plugins/workflow-host/apply-prologue.js' },
     // 共享模块
+    // Host 侧 fs 适配层（B5：0.2.0 fs 服务 workspace-write 沙箱 → 插件私有装配直写）——
+    // 必须先于一切消费 fs 的模块（storage/instance-store/tools/webserver）
+    { id: 'fs-host', path: 'shared/fs-host.js' },
     { id: 'workflow-schema', path: 'shared/workflow-schema.js' },
     { id: 'workflow-parser', path: 'shared/workflow-parser.js' },
     { id: 'workflow-paths', path: 'shared/workflow-paths.js' },

@@ -38,9 +38,11 @@ const slotsStub = {
   inject(name, factory) { try { return factory(undefined) } catch { return () => {} } },
   register(o, c) { gate = c; return () => {} },
 }
+// 冒烟 fixture 工作区：默认取进程 cwd（阶段 6 / B3：不硬编码用户目录；可用 WF_SMOKE_WS 覆盖）
+const SMOKE_WS = process.env.WF_SMOKE_WS || process.cwd().replace(/\\/g, '/')
 const snap = {
   current: 'sess-wf', instanceId: 'demo-00000001',
-  byId: { 'sess-wf': { cwd: '/home/zhaokai/Projects/dsh_wf_ws', projectionValues: { agentPreset: 'workflow-orchestrator' } } },
+  byId: { 'sess-wf': { cwd: SMOKE_WS, projectionValues: { agentPreset: 'workflow-orchestrator' } } },
 }
 const mockResp = (u) => {
   if (u.includes('/wf/list')) return { instances: [{ instanceId: 'demo-00000001', sessionId: 'sess-wf', phase: 'STOPPED', stage: 'STOPPED', workflowName: 'demo' }], sessionState: { state: 'BOUND' } }
@@ -66,7 +68,7 @@ mod.apply({
 if (!gate) { console.error('FAIL: gate 未注册'); process.exit(1) }
 
 const useSessions = (sel) => sel(snap)
-const useWorkspaces = () => ({ data: { items: [{ path: '/home/zhaokai/Projects/dsh_wf_ws' }] } })
+const useWorkspaces = () => ({ data: { items: [{ path: SMOKE_WS }] } })
 
 function walk(el, depth, out) {
   if (err || el === null || el === undefined || el === false || el === true || depth > 30) return
@@ -113,3 +115,6 @@ const el = gate({ sessionId: 'sess-c', useSessions: (sel) => sel({ current: 'ses
 if (el !== null && el !== undefined) { console.error('FAIL: 非编排会话应为 null'); process.exit(1) }
 console.log('非编排会话门控通过')
 console.log('RENDER SMOKE PASS')
+// 阶段 6 修缮（Mac/Node 26）：client 轮询的裸 setInterval 会吊住事件循环——
+// 断言全过后显式退出（0.1.5 期在 WSL 旧 Node 上为静默兼容行为，本处不改变断言语义）
+process.exit(0)
